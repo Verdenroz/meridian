@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from meridian_train import cli
-from meridian_train.dataset_ingestion import ingest_feature_jsonl
+import cli
+from market_data.dataset_ingestion import ingest_feature_jsonl
 
 
 def _sample_row(timestamp: str) -> dict[str, object]:
@@ -108,7 +108,7 @@ class DatasetIngestionTest(unittest.TestCase):
             root = Path(temp_dir)
             mocked_rows = [_sample_row("2024-06-30T10:00:00")]
             output_capture = io.StringIO()
-            with patch("meridian_train.cli.collect_feature_rows", return_value=mocked_rows):
+            with patch("cli.collect_feature_rows", return_value=mocked_rows):
                 with redirect_stdout(output_capture):
                     exit_code = cli.main(
                         argv=[

@@ -28,10 +28,11 @@ dev = [
 ]
 
 [project.scripts]
-meridian = "meridian_train.cli:main"
+meridian = "cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "python"}
+py-modules = ["cli"]
 
 [tool.setuptools.packages.find]
 where = ["python"]

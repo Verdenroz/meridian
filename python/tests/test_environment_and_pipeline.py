@@ -7,9 +7,9 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from meridian_train import cli
-from meridian_train.environment import build_environment_report, validate_phase0_environment
-from meridian_train.pipeline import PipelineConfig, build_pipeline_plan, write_pipeline_manifest
+import cli
+from market_data.environment import build_environment_report, validate_training_environment
+from market_data.pipeline import PipelineConfig, build_pipeline_plan, write_pipeline_manifest
 
 
 class _FakeCuda:
@@ -30,7 +30,7 @@ class _FakeTorch:
         self.cuda = _FakeCuda(cuda_available, device_name)
 
 
-class Phase0SetupTest(unittest.TestCase):
+class EnvironmentAndPipelineTest(unittest.TestCase):
     def test_environment_report_detects_h100(self) -> None:
         fake_torch = _FakeTorch("2.3.1", True, "NVIDIA H100 80GB HBM3")
         report = build_environment_report(torch_module=fake_torch, fla_available=True)
@@ -42,7 +42,7 @@ class Phase0SetupTest(unittest.TestCase):
     def test_environment_validation_fails_without_h100(self) -> None:
         fake_torch = _FakeTorch("2.3.1", True, "NVIDIA A10")
         with self.assertRaises(RuntimeError):
-            validate_phase0_environment(
+            validate_training_environment(
                 require_h100=True, torch_module=fake_torch, fla_available=True
             )
 
@@ -90,8 +90,8 @@ class Phase0SetupTest(unittest.TestCase):
 
     def test_cli_env_check_success_path(self) -> None:
         argv = ["meridian", "env-check", "--allow-non-h100"]
-        with patch("meridian_train.cli.build_environment_report") as mock_report:
-            with patch("meridian_train.cli.validate_phase0_environment") as mock_validate:
+        with patch("cli.build_environment_report") as mock_report:
+            with patch("cli.validate_training_environment") as mock_validate:
                 mock_report.return_value = {"ready_for_training": True}
                 mock_validate.return_value = {"ready_for_training": True}
                 captured = io.StringIO()

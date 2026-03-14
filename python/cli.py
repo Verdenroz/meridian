@@ -8,7 +8,7 @@ from datetime import datetime
 from datetime import date as date_type
 from pathlib import Path
 
-from .train.feature_schema import (
+from train.feature_schema import (
     CALENDAR_FEATURE_DIM,
     MARKET_FEATURE_DIM,
     PER_ASSET_BLOCKS,
@@ -16,29 +16,36 @@ from .train.feature_schema import (
     PORTFOLIO_STATE_DIM,
     validate_feature_schema,
 )
-from .train.spec import DEFAULT_ARCHITECTURE, TRAINING_PHASES
-from .train.splits import resolve_split
-from .data.dataset_ingestion import ingest_feature_jsonl, ingest_feature_rows
-from .data.environment import build_environment_report, validate_phase0_environment
-from .data.feature_assembly import AssetMinuteInput, FeatureAssembler
-from .data.finance_query_collector import (
+from train.spec import DEFAULT_ARCHITECTURE, TRAINING_STAGES
+from train.splits import resolve_split
+from market_data.dataset_ingestion import ingest_feature_jsonl, ingest_feature_rows
+from market_data.environment import build_environment_report, validate_training_environment
+from market_data.feature_assembly import AssetMinuteInput, FeatureAssembler
+from market_data.finance_query_collector import (
     FinanceQueryCollectorConfig,
     collect_feature_rows,
 )
-from .data.marketreader import (
+from market_data.marketreader import (
     MarketReaderConfig,
     build_marketreader_training_plan,
     run_marketreader_training,
 )
-from .data.pipeline import PipelineConfig, write_pipeline_manifest
-from .data.regime_hmm import (
+from market_data.pipeline import PipelineConfig, write_pipeline_manifest
+from market_data.regime_hmm import (
     RegimeHMMConfig,
     build_hmm_training_spec,
     run_hmm_training_pipeline,
 )
-from .data.workspace import initialize_workspace
-from .core.regime_aware_backbone import run_phase1_backbone_smoke_check, run_phase1_smoke_check
-from .core.self_supervised_pretraining import Phase1TrainingConfig, run_phase1_training_smoke
+from market_data.workspace import initialize_workspace
+from core.regime_aware_backbone import (
+    run_core_block_smoke_check,
+    run_stacked_backbone_smoke_check,
+)
+from core.self_supervised_pretraining import (
+    BackboneTrainingConfig,
+    run_backbone_pretraining_smoke,
+    run_split_shard_evaluation,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -47,11 +54,11 @@ def _build_parser() -> argparse.ArgumentParser:
 
     subparsers.add_parser("spec-check", help="Validate Meridian setup contracts")
 
-    phase_plan = subparsers.add_parser(
-        "phase-plan", help="Print training phase defaults as JSON"
+    stage_plan = subparsers.add_parser(
+        "stage-plan", help="Print training stage defaults as JSON"
     )
-    phase_plan.add_argument(
-        "--phase", choices=sorted(TRAINING_PHASES.keys()), required=True
+    stage_plan.add_argument(
+        "--stage", choices=sorted(TRAINING_STAGES.keys()), required=True
     )
 
     split_check = subparsers.add_parser(
@@ -73,7 +80,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
 
     env_check = subparsers.add_parser(
-        "env-check", help="Validate Phase 0 H100/PyTorch/FLA environment readiness"
+        "env-check", help="Validate H100/PyTorch/FLA environment readiness"
     )
     env_check.add_argument(
         "--allow-non-h100",
@@ -300,88 +307,174 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    phase1_smoke = subparsers.add_parser(
-        "phase1-smoke", help="Run synthetic forward-pass check for Phase 1 core modules"
+    core_smoke_cmd = subparsers.add_parser(
+        "core-smoke", help="Run synthetic forward-pass check for backbone core modules"
     )
-    phase1_smoke.add_argument(
+    core_smoke_cmd.add_argument(
         "--batch-size",
         type=int,
         default=2,
         help="Synthetic batch size",
     )
-    phase1_smoke.add_argument(
+    core_smoke_cmd.add_argument(
         "--seq-len",
         type=int,
         default=16,
         help="Synthetic sequence length",
     )
-    phase1_smoke.add_argument(
+    core_smoke_cmd.add_argument(
         "--device",
         default=None,
         help="Optional torch device override (e.g. cuda, cpu)",
     )
 
-    phase1_backbone = subparsers.add_parser(
-        "phase1-backbone-smoke",
-        help="Run synthetic forward-pass check for stacked Phase 1 backbone (RA-GDN + FMoE)",
+    backbone_smoke_cmd = subparsers.add_parser(
+        "backbone-smoke",
+        help="Run synthetic forward-pass check for stacked backbone (RA-GDN + FMoE)",
     )
-    phase1_backbone.add_argument(
+    backbone_smoke_cmd.add_argument(
         "--batch-size",
         type=int,
         default=2,
         help="Synthetic batch size",
     )
-    phase1_backbone.add_argument(
+    backbone_smoke_cmd.add_argument(
         "--seq-len",
         type=int,
         default=16,
         help="Synthetic sequence length",
     )
-    phase1_backbone.add_argument(
+    backbone_smoke_cmd.add_argument(
         "--device",
         default=None,
         help="Optional torch device override (e.g. cuda, cpu)",
     )
 
-    phase1_train_smoke = subparsers.add_parser(
-        "phase1-train-smoke",
-        help="Run short synthetic Phase 1 self-supervised training scaffold and save checkpoint",
+    backbone_train_smoke_cmd = subparsers.add_parser(
+        "backbone-train-smoke",
+        help="Run short synthetic backbone self-supervised training scaffold and save checkpoint",
     )
-    phase1_train_smoke.add_argument(
+    backbone_train_smoke_cmd.add_argument(
         "--steps",
         type=int,
         default=5,
         help="Number of synthetic optimization steps",
     )
-    phase1_train_smoke.add_argument(
+    backbone_train_smoke_cmd.add_argument(
         "--batch-size",
         type=int,
         default=2,
         help="Synthetic batch size",
     )
-    phase1_train_smoke.add_argument(
+    backbone_train_smoke_cmd.add_argument(
         "--seq-len",
         type=int,
         default=16,
         help="Synthetic sequence length",
     )
-    phase1_train_smoke.add_argument(
+    backbone_train_smoke_cmd.add_argument(
         "--learning-rate",
         type=float,
         default=3e-4,
         help="Optimizer learning rate",
     )
-    phase1_train_smoke.add_argument(
+    backbone_train_smoke_cmd.add_argument(
         "--checkpoint-output",
-        default="checkpoints/phase1_backbone.pt",
+        default="checkpoints/backbone_pretrain.pt",
         help="Output checkpoint path",
     )
-    phase1_train_smoke.add_argument(
+    backbone_train_smoke_cmd.add_argument(
         "--metrics-output",
         default=None,
         help="Optional metrics JSON output path",
     )
-    phase1_train_smoke.add_argument(
+    backbone_train_smoke_cmd.add_argument(
+        "--device",
+        default=None,
+        help="Optional torch device override (e.g. cuda, cpu)",
+    )
+    backbone_train_smoke_cmd.add_argument(
+        "--input-shard",
+        default=None,
+        help="Optional path to .f32bin feature shard for real-data training batches",
+    )
+    backbone_train_smoke_cmd.add_argument(
+        "--input-shards",
+        default=None,
+        help="Optional comma-separated .f32bin shard paths for multi-shard training batches",
+    )
+    backbone_train_smoke_cmd.add_argument(
+        "--max-sequences",
+        type=int,
+        default=None,
+        help="Optional limit on sequence windows loaded from shard",
+    )
+    backbone_train_smoke_cmd.add_argument(
+        "--resume-checkpoint",
+        default=None,
+        help="Optional checkpoint path to resume model/head/optimizer states",
+    )
+    backbone_train_smoke_cmd.add_argument(
+        "--eval-only",
+        action="store_true",
+        help="Run forward/loss evaluation only (no optimizer updates, no checkpoint write)",
+    )
+
+    backbone_eval_shards_cmd = subparsers.add_parser(
+        "backbone-eval-shards",
+        help="Run split-aware backbone evaluation over shard groups (train/validation/test)",
+    )
+    backbone_eval_shards_cmd.add_argument(
+        "--shards-root",
+        default="data/mmaps",
+        help="Root directory containing split shard folders (e.g. data/mmaps)",
+    )
+    backbone_eval_shards_cmd.add_argument(
+        "--splits",
+        default="train,validation,test",
+        help="Comma-separated split names to evaluate",
+    )
+    backbone_eval_shards_cmd.add_argument(
+        "--steps",
+        type=int,
+        default=5,
+        help="Evaluation loop steps",
+    )
+    backbone_eval_shards_cmd.add_argument(
+        "--batch-size",
+        type=int,
+        default=2,
+        help="Evaluation batch size",
+    )
+    backbone_eval_shards_cmd.add_argument(
+        "--seq-len",
+        type=int,
+        default=16,
+        help="Evaluation sequence length",
+    )
+    backbone_eval_shards_cmd.add_argument(
+        "--learning-rate",
+        type=float,
+        default=3e-4,
+        help="Config learning rate (kept for compatibility with training config)",
+    )
+    backbone_eval_shards_cmd.add_argument(
+        "--checkpoint-output",
+        default="checkpoints/backbone_eval_placeholder.pt",
+        help="Placeholder checkpoint path used by eval runner (not written in eval mode)",
+    )
+    backbone_eval_shards_cmd.add_argument(
+        "--resume-checkpoint",
+        default=None,
+        help="Optional checkpoint path to evaluate from",
+    )
+    backbone_eval_shards_cmd.add_argument(
+        "--max-sequences",
+        type=int,
+        default=None,
+        help="Optional per-shard sequence window cap",
+    )
+    backbone_eval_shards_cmd.add_argument(
         "--device",
         default=None,
         help="Optional torch device override (e.g. cuda, cpu)",
@@ -406,9 +499,9 @@ def _run_spec_check() -> int:
     return 0
 
 
-def _run_phase_plan(phase_key: str) -> int:
-    phase = TRAINING_PHASES[phase_key]
-    print(json.dumps(phase.to_dict(), indent=2, sort_keys=True))
+def _run_training_schedule_plan(stage_key: str) -> int:
+    stage = TRAINING_STAGES[stage_key]
+    print(json.dumps(stage.to_dict(), indent=2, sort_keys=True))
     return 0
 
 
@@ -428,7 +521,7 @@ def _run_init_workspace(root: str) -> int:
 def _run_env_check(allow_non_h100: bool) -> int:
     report = build_environment_report()
     print(json.dumps(report, indent=2, sort_keys=True))
-    validate_phase0_environment(require_h100=not allow_non_h100)
+    validate_training_environment(require_h100=not allow_non_h100)
     return 0
 
 
@@ -574,8 +667,8 @@ def _run_collect_ingest(
     return 0
 
 
-def _run_phase1_smoke(batch_size: int, seq_len: int, device: str | None) -> int:
-    summary = run_phase1_smoke_check(
+def _run_core_block_smoke(batch_size: int, seq_len: int, device: str | None) -> int:
+    summary = run_core_block_smoke_check(
         batch_size=batch_size,
         seq_len=seq_len,
         device=device,
@@ -584,8 +677,8 @@ def _run_phase1_smoke(batch_size: int, seq_len: int, device: str | None) -> int:
     return 0
 
 
-def _run_phase1_backbone_smoke(batch_size: int, seq_len: int, device: str | None) -> int:
-    summary = run_phase1_backbone_smoke_check(
+def _run_stacked_backbone_smoke(batch_size: int, seq_len: int, device: str | None) -> int:
+    summary = run_stacked_backbone_smoke_check(
         batch_size=batch_size,
         seq_len=seq_len,
         device=device,
@@ -594,7 +687,7 @@ def _run_phase1_backbone_smoke(batch_size: int, seq_len: int, device: str | None
     return 0
 
 
-def _run_phase1_train_smoke(
+def _run_backbone_pretraining_smoke(
     steps: int,
     batch_size: int,
     seq_len: int,
@@ -602,20 +695,75 @@ def _run_phase1_train_smoke(
     checkpoint_output: str,
     metrics_output: str | None,
     device: str | None,
+    input_shard: str | None,
+    input_shards: str | None,
+    max_sequences: int | None,
+    resume_checkpoint: str | None,
+    eval_only: bool,
 ) -> int:
-    config = Phase1TrainingConfig(
+    if input_shard is not None and input_shards is not None:
+        raise ValueError("Use either --input-shard or --input-shards, not both")
+    shard_paths = (
+        [Path(raw.strip()) for raw in input_shards.split(",") if raw.strip()]
+        if input_shards is not None
+        else None
+    )
+    config = BackboneTrainingConfig(
         steps=steps,
         batch_size=batch_size,
         seq_len=seq_len,
         learning_rate=learning_rate,
     )
-    summary = run_phase1_training_smoke(
+    summary = run_backbone_pretraining_smoke(
         config=config,
         checkpoint_output_path=Path(checkpoint_output),
         metrics_output_path=Path(metrics_output) if metrics_output else None,
         device=device,
+        input_shard_path=Path(input_shard) if input_shard else None,
+        input_shard_paths=shard_paths,
+        max_sequences=max_sequences,
+        resume_from_checkpoint_path=Path(resume_checkpoint)
+        if resume_checkpoint
+        else None,
+        eval_only=eval_only,
     )
     print(json.dumps(summary, indent=2, sort_keys=True))
+    return 0
+
+
+def _run_split_shard_evaluation(
+    shards_root: str,
+    splits: str,
+    steps: int,
+    batch_size: int,
+    seq_len: int,
+    learning_rate: float,
+    checkpoint_output: str,
+    resume_checkpoint: str | None,
+    max_sequences: int | None,
+    device: str | None,
+) -> int:
+    split_values = [split.strip() for split in splits.split(",") if split.strip()]
+    if not split_values:
+        raise ValueError("At least one split must be provided")
+    config = BackboneTrainingConfig(
+        steps=steps,
+        batch_size=batch_size,
+        seq_len=seq_len,
+        learning_rate=learning_rate,
+    )
+    report = run_split_shard_evaluation(
+        config=config,
+        shards_root=Path(shards_root),
+        splits=split_values,
+        checkpoint_output_path=Path(checkpoint_output),
+        resume_from_checkpoint_path=Path(resume_checkpoint)
+        if resume_checkpoint
+        else None,
+        max_sequences=max_sequences,
+        device=device,
+    )
+    print(json.dumps(report, indent=2, sort_keys=True))
     return 0
 
 
@@ -626,8 +774,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "spec-check":
         return _run_spec_check()
-    if args.command == "phase-plan":
-        return _run_phase_plan(args.phase)
+    if args.command == "stage-plan":
+        return _run_training_schedule_plan(args.stage)
     if args.command == "split-check":
         return _run_split_check(args.timestamp)
     if args.command == "init-workspace":
@@ -691,23 +839,23 @@ def main(argv: list[str] | None = None) -> int:
             args.output_root,
             args.command_template,
         )
-    if args.command == "phase1-smoke":
+    if args.command == "core-smoke":
         try:
-            return _run_phase1_smoke(args.batch_size, args.seq_len, args.device)
+            return _run_core_block_smoke(args.batch_size, args.seq_len, args.device)
         except RuntimeError as error:
             print(str(error), file=sys.stderr)
             return 1
-    if args.command == "phase1-backbone-smoke":
+    if args.command == "backbone-smoke":
         try:
-            return _run_phase1_backbone_smoke(
+            return _run_stacked_backbone_smoke(
                 args.batch_size, args.seq_len, args.device
             )
         except RuntimeError as error:
             print(str(error), file=sys.stderr)
             return 1
-    if args.command == "phase1-train-smoke":
+    if args.command == "backbone-train-smoke":
         try:
-            return _run_phase1_train_smoke(
+            return _run_backbone_pretraining_smoke(
                 args.steps,
                 args.batch_size,
                 args.seq_len,
@@ -715,8 +863,30 @@ def main(argv: list[str] | None = None) -> int:
                 args.checkpoint_output,
                 args.metrics_output,
                 args.device,
+                args.input_shard,
+                args.input_shards,
+                args.max_sequences,
+                args.resume_checkpoint,
+                args.eval_only,
             )
-        except (RuntimeError, ValueError) as error:
+        except (RuntimeError, ValueError, FileNotFoundError) as error:
+            print(str(error), file=sys.stderr)
+            return 1
+    if args.command == "backbone-eval-shards":
+        try:
+            return _run_split_shard_evaluation(
+                args.shards_root,
+                args.splits,
+                args.steps,
+                args.batch_size,
+                args.seq_len,
+                args.learning_rate,
+                args.checkpoint_output,
+                args.resume_checkpoint,
+                args.max_sequences,
+                args.device,
+            )
+        except (RuntimeError, ValueError, FileNotFoundError) as error:
             print(str(error), file=sys.stderr)
             return 1
 

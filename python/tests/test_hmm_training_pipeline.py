@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from meridian_train import cli
-from meridian_train.regime_hmm import (
+import cli
+from market_data.regime_hmm import (
     RegimeHMMConfig,
     load_regime_feature_rows,
     run_hmm_training_pipeline,
@@ -58,7 +58,7 @@ class HMMTrainingPipelineTest(unittest.TestCase):
             ]
             input_path.write_text("\n".join(json.dumps(row) for row in rows) + "\n", encoding="utf-8")
             model_output = root / "checkpoints" / "regime_hmm.pkl"
-            with patch("meridian_train.regime_hmm.fit_regime_hmm", return_value=DummyHMM()):
+            with patch("market_data.regime_hmm.fit_regime_hmm", return_value=DummyHMM()):
                 summary = run_hmm_training_pipeline(
                     config=RegimeHMMConfig(),
                     input_path=input_path,
@@ -77,7 +77,7 @@ class HMMTrainingPipelineTest(unittest.TestCase):
                 encoding="utf-8",
             )
             captured = io.StringIO()
-            with patch("meridian_train.cli.run_hmm_training_pipeline") as mocked:
+            with patch("cli.run_hmm_training_pipeline") as mocked:
                 mocked.return_value = {"rows_used": 1, "meta_output_path": str(Path(temp_dir) / "meta.json")}
                 with redirect_stdout(captured):
                     exit_code = cli.main(

@@ -3,27 +3,27 @@ import unittest
 from contextlib import redirect_stdout
 from unittest.mock import patch
 
-from meridian_train import cli
-from meridian_train.phase1_core import (
-    run_phase1_backbone_smoke_check,
-    run_phase1_smoke_check,
+import cli
+from core.regime_aware_backbone import (
+    run_core_block_smoke_check,
+    run_stacked_backbone_smoke_check,
 )
 
 
-class Phase1CoreTest(unittest.TestCase):
-    def test_phase1_smoke_raises_when_torch_missing(self) -> None:
-        with patch("meridian_train.phase1_core.TORCH_AVAILABLE", False):
+class BackboneModulesTest(unittest.TestCase):
+    def test_core_smoke_raises_when_torch_missing(self) -> None:
+        with patch("core.regime_aware_backbone.TORCH_AVAILABLE", False):
             with self.assertRaises(RuntimeError):
-                run_phase1_smoke_check()
+                run_core_block_smoke_check()
 
-    def test_phase1_backbone_smoke_raises_when_torch_missing(self) -> None:
-        with patch("meridian_train.phase1_core.TORCH_AVAILABLE", False):
+    def test_stacked_backbone_smoke_raises_when_torch_missing(self) -> None:
+        with patch("core.regime_aware_backbone.TORCH_AVAILABLE", False):
             with self.assertRaises(RuntimeError):
-                run_phase1_backbone_smoke_check()
+                run_stacked_backbone_smoke_check()
 
-    def test_cli_phase1_smoke_wiring(self) -> None:
+    def test_cli_core_smoke_wiring(self) -> None:
         captured = io.StringIO()
-        with patch("meridian_train.cli.run_phase1_smoke_check") as mocked:
+        with patch("cli.run_core_block_smoke_check") as mocked:
             mocked.return_value = {
                 "block_output_shape": [2, 16, 768],
                 "state_shape": [2, 4, 64, 192],
@@ -34,15 +34,15 @@ class Phase1CoreTest(unittest.TestCase):
             }
             with redirect_stdout(captured):
                 exit_code = cli.main(
-                    argv=["meridian", "phase1-smoke", "--batch-size", "2", "--seq-len", "16"]
+                    argv=["meridian", "core-smoke", "--batch-size", "2", "--seq-len", "16"]
                 )
         self.assertEqual(exit_code, 0)
         mocked.assert_called_once()
         self.assertIn("block_output_shape", captured.getvalue())
 
-    def test_cli_phase1_backbone_smoke_wiring(self) -> None:
+    def test_cli_stacked_backbone_smoke_wiring(self) -> None:
         captured = io.StringIO()
-        with patch("meridian_train.cli.run_phase1_backbone_smoke_check") as mocked:
+        with patch("cli.run_stacked_backbone_smoke_check") as mocked:
             mocked.return_value = {
                 "backbone_output_shape": [2, 16, 768],
                 "num_blocks": 8,
@@ -53,7 +53,7 @@ class Phase1CoreTest(unittest.TestCase):
                 exit_code = cli.main(
                     argv=[
                         "meridian",
-                        "phase1-backbone-smoke",
+                        "backbone-smoke",
                         "--batch-size",
                         "2",
                         "--seq-len",

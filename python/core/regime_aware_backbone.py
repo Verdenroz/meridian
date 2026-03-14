@@ -20,12 +20,12 @@ except ImportError:  # pragma: no cover - exercised in envs without torch
 def _ensure_torch() -> None:
     if not TORCH_AVAILABLE:
         raise RuntimeError(
-            "Phase 1 core requires torch. Install with: pip install -e '.[train]'"
+            "Backbone core requires torch. Install with: pip install -e '.[train]'"
         )
 
 
 @dataclass(frozen=True)
-class Phase1CoreConfig:
+class BackboneCoreConfig:
     model_dim: int = 768
     regime_input_dim: int = 91
     regime_dim: int = 64
@@ -97,7 +97,7 @@ if TORCH_AVAILABLE:
 
 
     class RAGDNBlock(nn.Module):
-        def __init__(self, config: Phase1CoreConfig = Phase1CoreConfig()) -> None:
+        def __init__(self, config: BackboneCoreConfig = BackboneCoreConfig()) -> None:
             super().__init__()
             if config.n_heads * config.d_v != config.model_dim:
                 raise ValueError("n_heads * d_v must equal model_dim for concat projection")
@@ -291,10 +291,10 @@ if TORCH_AVAILABLE:
             return output, aux
 
 
-    class MeridianPhase1Backbone(nn.Module):
+    class MeridianBackbone(nn.Module):
         def __init__(
             self,
-            config: Phase1CoreConfig = Phase1CoreConfig(),
+            config: BackboneCoreConfig = BackboneCoreConfig(),
             n_blocks: int = 8,
             moe_positions: tuple[int, ...] = (2, 5, 7),
         ) -> None:
@@ -382,15 +382,15 @@ else:
             _ensure_torch()
 
 
-    class MeridianPhase1Backbone:  # pragma: no cover - import guard path
+    class MeridianBackbone:  # pragma: no cover - import guard path
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             _ensure_torch()
 
 
-def run_phase1_smoke_check(
+def run_core_block_smoke_check(
     batch_size: int = 2,
     seq_len: int = 16,
-    config: Phase1CoreConfig = Phase1CoreConfig(),
+    config: BackboneCoreConfig = BackboneCoreConfig(),
     device: str | None = None,
 ) -> dict[str, object]:
     _ensure_torch()
@@ -425,17 +425,17 @@ def run_phase1_smoke_check(
     return summary
 
 
-def run_phase1_backbone_smoke_check(
+def run_stacked_backbone_smoke_check(
     batch_size: int = 2,
     seq_len: int = 16,
-    config: Phase1CoreConfig = Phase1CoreConfig(),
+    config: BackboneCoreConfig = BackboneCoreConfig(),
     device: str | None = None,
 ) -> dict[str, object]:
     _ensure_torch()
     assert torch is not None
 
     run_device = device or ("cuda" if torch.cuda.is_available() else "cpu")
-    model = MeridianPhase1Backbone(config).to(run_device)
+    model = MeridianBackbone(config).to(run_device)
 
     x = torch.randn(batch_size, seq_len, config.model_dim, device=run_device)
     regime_input = torch.randn(batch_size, seq_len, config.regime_input_dim, device=run_device)

@@ -4,7 +4,7 @@ Meridian is a regime-adaptive portfolio model targeting CPU-native inference (Ra
 
 This repository now includes a **pre-training setup foundation** aligned to `meridian-spec.md` and `research.md`:
 
-- canonical architecture/training constants (RA-GDN, FMoE, adaptation phases)
+- canonical architecture/training constants (RA-GDN, FMoE, adaptation stages)
 - feature schema contracts for the 112 per-asset input dimensions
 - deterministic train/validation/test split definitions
 - a CLI to validate setup contracts before expensive training runs
@@ -23,39 +23,37 @@ This repository now includes a **pre-training setup foundation** aligned to `mer
 │   └── runtime/
 │       └── inference_runtime.c                    # TODO: Section 11 runtime glue
 ├── python/
-│   ├── meridian_train/
-│   │   ├── cli.py                                 # `meridian` CLI
-│   │   ├── train/                                 # spec/train contracts and schedules
-│   │   │   ├── feature_schema.py
-│   │   │   ├── spec.py
-│   │   │   ├── splits.py
-│   │   │   └── qat.py                             # TODO: Section 8 + 9.5
-│   │   ├── data/                                  # Historical/live data foundation
-│   │   │   ├── environment.py
-│   │   │   ├── workspace.py
-│   │   │   ├── pipeline.py
-│   │   │   ├── feature_assembly.py
-│   │   │   ├── dataset_ingestion.py
-│   │   │   ├── finance_query_collector.py
-│   │   │   ├── marketreader.py
-│   │   │   └── regime_hmm.py
-│   │   ├── core/                                  # RA-GDN + regime-routed backbone
-│   │   │   ├── regime_aware_backbone.py
-│   │   │   ├── self_supervised_pretraining.py
-│   │   │   ├── temporal_cascade.py                # TODO: Section 6.7
-│   │   │   ├── cross_asset_fusion.py              # TODO: Section 6.8
-│   │   │   └── episodic_memory.py                 # TODO: Section 6.9
-│   │   ├── optimization/
-│   │   │   ├── portfolio_heads.py                 # TODO: Section 6.10/10
-│   │   │   └── losses.py                          # TODO: Section 9.3 losses
-│   │   ├── adaptation/
-│   │   │   └── adaptation.py                      # TODO: Section 7
-│   │   ├── runtime/
-│   │   │   ├── inference_pipeline.py              # TODO: Section 11
-│   │   │   └── memory_store.py                    # TODO
-│   │   ├── quantization/
-│   │   │   └── ternary_kernels.py                 # TODO: C kernel bindings
-│   │   └── *.py                                   # compatibility module aliases
+│   ├── cli.py                                     # `meridian` CLI entrypoint
+│   ├── train/                                     # contracts + schedules
+│   │   ├── feature_schema.py
+│   │   ├── spec.py
+│   │   ├── splits.py
+│   │   └── qat.py                                 # TODO: Section 8 + 9.5
+│   ├── market_data/                               # historical/live data foundation
+│   │   ├── environment.py
+│   │   ├── workspace.py
+│   │   ├── pipeline.py
+│   │   ├── feature_assembly.py
+│   │   ├── dataset_ingestion.py
+│   │   ├── finance_query_collector.py
+│   │   ├── marketreader.py
+│   │   └── regime_hmm.py
+│   ├── core/                                      # RA-GDN + regime-routed backbone
+│   │   ├── regime_aware_backbone.py
+│   │   ├── self_supervised_pretraining.py
+│   │   ├── temporal_cascade.py                    # TODO: Section 6.7
+│   │   ├── cross_asset_fusion.py                  # TODO: Section 6.8
+│   │   └── episodic_memory.py                     # TODO: Section 6.9
+│   ├── optimization/
+│   │   ├── portfolio_heads.py                     # TODO: Section 6.10/10
+│   │   └── losses.py                              # TODO: Section 9.3 losses
+│   ├── adaptation/
+│   │   └── adaptation.py                          # TODO: Section 7
+│   ├── runtime/
+│   │   ├── inference_pipeline.py                  # TODO: Section 11
+│   │   └── memory_store.py                        # TODO
+│   ├── quantization/
+│   │   └── ternary_kernels.py                     # TODO: C kernel bindings
 │   └── tests/
 │       └── test_*.py
 ├── scripts/
@@ -79,16 +77,20 @@ Run setup checks:
 ```bash
 meridian spec-check
 meridian feature-vector-check --asset-class equity
-meridian phase-plan --phase phase1
+meridian stage-plan --stage foundation
 meridian split-check --timestamp 2024-08-15T13:30:00
 meridian data-plan --assets AAPL,SPY,BTC-USD --output reports/data_pipeline_manifest.json
 meridian marketreader-plan --corpus data/raw/news_corpus.jsonl
 meridian marketreader-train --corpus data/raw/news_corpus.jsonl --epochs 1 --max-documents 5000
 meridian hmm-spec --features vix_level,adx14,corr_dispersion,drawdown
 meridian hmm-train --input data/processed/regime_features.jsonl --features vix_level,adx14,corr_dispersion,drawdown
-meridian phase1-smoke --batch-size 2 --seq-len 16
-meridian phase1-backbone-smoke --batch-size 2 --seq-len 16
-meridian phase1-train-smoke --steps 5 --batch-size 2 --seq-len 16
+meridian core-smoke --batch-size 2 --seq-len 16
+meridian backbone-smoke --batch-size 2 --seq-len 16
+meridian backbone-train-smoke --steps 5 --batch-size 2 --seq-len 16
+meridian backbone-train-smoke --steps 20 --seq-len 16 --batch-size 4 --input-shard data/mmaps/train/AAPL.f32bin --max-sequences 512
+meridian backbone-train-smoke --steps 20 --seq-len 16 --input-shards data/mmaps/train/AAPL.f32bin,data/mmaps/train/SPY.f32bin --max-sequences 256
+meridian backbone-train-smoke --steps 10 --resume-checkpoint checkpoints/backbone_pretrain.pt --eval-only
+meridian backbone-eval-shards --shards-root data/mmaps --splits train,validation,test --steps 5 --resume-checkpoint checkpoints/backbone_pretrain.pt
 meridian env-check --allow-non-h100
 meridian ingest-jsonl --input data/raw/AAPL_features.jsonl --asset AAPL --output-root .
 meridian collect-ingest --asset AAPL --start 2020-01-01 --end 2025-06-30
@@ -127,11 +129,17 @@ indicator primitives, options chain, fundamentals, profile metadata, and news he
 
 `hmm-train` writes a pickled model checkpoint plus JSON metadata with state counts and transition stats.
 
-`phase1-smoke` runs a synthetic forward-pass check for the Phase 1 Regime Detector + RA-GDN core.
+`core-smoke` runs a synthetic forward-pass check for the Regime Detector + RA-GDN core.
 
-`phase1-backbone-smoke` runs a synthetic check for the stacked Phase 1 backbone (8 RA-GDN blocks with regime-routed FMoE insertion points).
+`backbone-smoke` runs a synthetic check for the stacked backbone (8 RA-GDN blocks with regime-routed FMoE insertion points).
 
-`phase1-train-smoke` runs a short synthetic self-supervised Phase 1 training loop and writes checkpoint/metrics artifacts, useful for validating end-to-end optimizer/checkpoint wiring before real shard-based training.
+`backbone-train-smoke` runs a short self-supervised backbone training loop and writes checkpoint/metrics artifacts.  
+By default it uses synthetic batches; with `--input-shard` or `--input-shards` it loads real `*.f32bin` feature shards from `data/mmaps/*/` and trains over sequence windows from real data.
+The training scaffold now includes spec-aligned predictive objectives with default weights: return (0.5), volatility (0.3), and correlation proxy (0.2), in addition to reconstruction/smoothness/MoE-balance terms.
+Use `--resume-checkpoint` to restore model/head/optimizer states from a prior run, and `--eval-only` to run loss evaluation without optimizer updates or checkpoint overwrite.  
+Resume runs now include a checkpoint compatibility report; incompatible core configuration mismatches fail fast with explicit errors.
+
+`backbone-eval-shards` runs split-aware evaluation across shard groups and reports per-split objective diagnostics (reconstruction, smoothness, MoE balance, return, volatility, correlation).
 
 For H100 nodes, use the bootstrap script:
 

@@ -2,7 +2,7 @@ import sys
 import unittest
 from datetime import date
 
-from meridian_train.finance_query_collector import (
+from market_data.finance_query_collector import (
     FinanceQueryCollectorConfig,
     build_collect_command,
     collect_feature_rows,

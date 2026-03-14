@@ -6,8 +6,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from meridian_train import cli
-from meridian_train.marketreader import load_corpus_texts
+import cli
+from market_data.marketreader import load_corpus_texts
 
 
 class MarketReaderTrainingTest(unittest.TestCase):
@@ -29,7 +29,7 @@ class MarketReaderTrainingTest(unittest.TestCase):
             corpus_path = Path(temp_dir) / "news.jsonl"
             corpus_path.write_text(json.dumps({"text": "sample"}) + "\n", encoding="utf-8")
             output_capture = io.StringIO()
-            with patch("meridian_train.cli.run_marketreader_training") as mocked:
+            with patch("cli.run_marketreader_training") as mocked:
                 mocked.return_value = {
                     "documents_used": 1,
                     "model_output_path": str(Path(temp_dir) / "model.pt"),

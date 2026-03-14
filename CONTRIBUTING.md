@@ -22,9 +22,9 @@ Baseline checks:
 ```bash
 cargo test --quiet
 cargo build --quiet
-PYTHONPATH=python python -m meridian_train.cli spec-check >/dev/null
-PYTHONPATH=python python -m meridian_train.cli feature-vector-check >/dev/null
-PYTHONPATH=python python -m meridian_train.cli data-plan --assets AAPL,SPY --output /tmp/meridian_data_plan.json >/dev/null
+PYTHONPATH=python python -m cli spec-check >/dev/null
+PYTHONPATH=python python -m cli feature-vector-check >/dev/null
+PYTHONPATH=python python -m cli data-plan --assets AAPL,SPY --output /tmp/meridian_data_plan.json >/dev/null
 PYTHONPATH=python python -m unittest discover -s python/tests -q
 ```
 

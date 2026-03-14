@@ -3,16 +3,16 @@ import unittest
 from pathlib import Path
 from contextlib import redirect_stdout
 
-from meridian_train import cli
-from meridian_train.feature_assembly import AssetMinuteInput, FeatureAssembler
-from meridian_train.marketreader import (
+import cli
+from market_data.feature_assembly import AssetMinuteInput, FeatureAssembler
+from market_data.marketreader import (
     MarketReaderConfig,
     build_marketreader_training_plan,
 )
-from meridian_train.regime_hmm import RegimeHMMConfig, build_hmm_training_spec
+from market_data.regime_hmm import RegimeHMMConfig, build_hmm_training_spec
 
 
-class Phase0ComponentsTest(unittest.TestCase):
+class FeatureAssemblyAndSpecsTest(unittest.TestCase):
     def test_feature_assembler_handles_missing_options_block(self) -> None:
         assembler = FeatureAssembler()
         asset_input = AssetMinuteInput(

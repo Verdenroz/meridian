@@ -41,7 +41,7 @@ class ArchitectureSpec:
 
 
 @dataclass(frozen=True)
-class TrainingPhase:
+class TrainingStage:
     name: str
     optimizer: str
     learning_rate: float
@@ -60,8 +60,8 @@ class TrainingPhase:
 
 DEFAULT_ARCHITECTURE = ArchitectureSpec()
 
-TRAINING_PHASES: dict[str, TrainingPhase] = {
-    "phase1": TrainingPhase(
+TRAINING_STAGES: dict[str, TrainingStage] = {
+    "foundation": TrainingStage(
         name="self_supervised_pretraining",
         optimizer="AdamW",
         learning_rate=3e-4,
@@ -74,7 +74,7 @@ TRAINING_PHASES: dict[str, TrainingPhase] = {
         gradient_clip=1.0,
         precision="BF16",
     ),
-    "phase2": TrainingPhase(
+    "optimization": TrainingStage(
         name="portfolio_optimization",
         optimizer="AdamW",
         learning_rate=1e-4,
@@ -87,7 +87,7 @@ TRAINING_PHASES: dict[str, TrainingPhase] = {
         gradient_clip=1.0,
         precision="BF16",
     ),
-    "phase3": TrainingPhase(
+    "adaptation": TrainingStage(
         name="meta_learning_plasticity",
         optimizer="Adam",
         learning_rate=1e-5,
@@ -100,7 +100,7 @@ TRAINING_PHASES: dict[str, TrainingPhase] = {
         gradient_clip=0.5,
         precision="BF16",
     ),
-    "phase4": TrainingPhase(
+    "compression": TrainingStage(
         name="quantization_aware_training",
         optimizer="AdamW",
         learning_rate=1e-5,
