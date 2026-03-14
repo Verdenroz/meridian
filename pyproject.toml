@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "meridian-training"
+version = "0.1.0"
+description = "Pre-training and data setup foundation for the Meridian architecture."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+train = [
+  "torch>=2.3",
+  "fla>=0.0.5",
+  "numpy>=2.1",
+  "pandas>=2.2",
+  "pyyaml>=6.0",
+  "hmmlearn>=0.3",
+  "faiss-cpu>=1.8",
+  "tokenizers>=0.20",
+]
+dev = [
+  "pytest>=8.2",
+  "ruff>=0.6",
+  "mypy>=1.10",
+]
+
+[project.scripts]
+meridian = "meridian_train.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "python"}
+
+[tool.setuptools.packages.find]
+where = ["python"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
