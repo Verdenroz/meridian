@@ -1,1 +1,1 @@
-"""Portfolio optimization package."""
+"""Portfolio optimization — output heads and loss functions."""

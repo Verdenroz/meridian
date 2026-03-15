@@ -37,5 +37,3 @@ py-modules = ["cli"]
 [tool.setuptools.packages.find]
 where = ["python"]
 
-[tool.pytest.ini_options]
-testpaths = ["python/tests"]

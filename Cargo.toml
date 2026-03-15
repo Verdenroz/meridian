@@ -3,7 +3,26 @@ name = "meridian"
 version = "0.1.0"
 edition = "2024"
 
+# DataBus dependencies (Section 6.1 of meridian-spec.md)
+#
+# All finance-query feature flags enabled:
+#   dataframe   — polars integration for batch data processing
+#   indicators  — full 42-indicator suite used in Block 2 (Section 6.2)
+#   backtesting — rayon-parallel backtesting engine (Section 12)
+#   fred        — treasury_yields() + series() for yield curve and macro (Section 6.3)
+#   crypto      — crypto::coin() / coins() for BTC, ETH, market cap (Section 6.3)
+#   rss         — feeds::fetch_all() across 31 RSS sources (Section 6.5)
+#   risk        — ticker.risk() for Block 5 risk analytics (Section 6.2)
+
 [dependencies]
-finance-query = { version = "2.0", features = ["indicators"] }
-tokio = { version = "1", features = ["full"] }
-serde_json = "1.0"
+finance-query = { version = "2.0", features = [
+    "dataframe",
+    "indicators",
+    "backtesting",
+    "fred",
+    "crypto",
+    "rss",
+    "risk",
+] }
+tokio        = { version = "1", features = ["full"] }
+serde_json   = "1.0"

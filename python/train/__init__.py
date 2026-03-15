@@ -1,1 +1,1 @@
-"""Training contracts and schedules package."""
+"""Training pipeline — feature schema, hyperparameter contracts, splits, QAT."""

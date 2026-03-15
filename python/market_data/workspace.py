@@ -1,24 +1,24 @@
+"""Data workspace management.
+
+Workspace directory layout (meridian data init):
+  <root>/
+    data/
+      raw/          — raw JSONL rows from DataBus or manual collection
+      processed/    — regime feature files, normalized statistics
+      mmaps/
+        train/      — memory-mapped f32 shards (*.f32bin)
+        validation/
+        test/
+    artifacts/
+      tokenizer.json   — BPE tokenizer for MarketReader
+      hmm.pkl          — fitted 4-state HMM
+    checkpoints/       — model checkpoints (backbone_pretrain.pt, etc.)
+    reports/
+      ingestion/    — per-asset ingestion manifests
+      backtests/    — backtest result JSON files
+    logs/           — paper trading SQLite database
+"""
+
 from __future__ import annotations
 
-from pathlib import Path
-
-
-WORKSPACE_DIRS: tuple[str, ...] = (
-    "data/raw",
-    "data/processed",
-    "data/mmaps",
-    "checkpoints",
-    "logs",
-    "reports",
-    "experiments",
-)
-
-
-def initialize_workspace(root: Path) -> list[Path]:
-    created: list[Path] = []
-    for relative_dir in WORKSPACE_DIRS:
-        directory = root / relative_dir
-        directory.mkdir(parents=True, exist_ok=True)
-        created.append(directory)
-    return created
-
+# TODO: implement workspace initialization and path resolution

@@ -1,66 +1,28 @@
+"""Feature assembler for Meridian v3.0 — full data integration.
+
+Assembles the full 288-dim per-asset feature vector and 96-dim market-wide vector
+from raw data provided by the DataBus (src/main.rs).
+
+Per-asset input (224 continuous + 64 text = 288 dims):
+  Block 1: price_volume        (10)  — OHLCV + multi-horizon returns
+  Block 2: technical           (42)  — full indicator suite
+  Block 3: options             (12)  — IV, skew, flow, OI signals
+  Block 4: fundamental         (30)  — financials, earnings, analyst, ownership
+  Block 5: risk_analytics      ( 8)  — VaR, Sharpe, Sortino, Beta, drawdown
+  Block 6: event_state         (10)  — decayed signals from recent discrete events
+  Block 7: cross_asset_context ( 8)  — relative strength, sector, trending, recommendations
+  Block 8: text                (64)  — MarketReader embedding
+
+Market-wide input (96 dims):
+  volatility_sentiment         (12)
+  yield_curve                  (12)
+  fred_macro                   (12)
+  sector_industry              (16)
+  world_indices_cross_asset    (20)
+  breadth_flow                 (12)
+  rss_news_aggregate           (12)
+"""
+
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
-
-from train.feature_schema import PER_ASSET_FEATURE_DIM
-
-
-@dataclass(frozen=True)
-class AssetMinuteInput:
-    price_volume: list[float]
-    technical: list[float]
-    options: list[float] | None
-    fundamental: list[float]
-    text: list[float]
-    asset_calendar: list[float]
-    asset_class: str
-
-
-class FeatureAssembler:
-    def __init__(self) -> None:
-        self.options_defaults: dict[str, list[float]] = {
-            "equity": [0.0, 1.0, 0.0, 1.0, 0.0],
-            "etf": [0.0, 1.0, 0.0, 1.0, 0.0],
-            "crypto": [0.0, 1.0, 0.0, 1.0, 0.0],
-        }
-
-    @staticmethod
-    def _validate_block(name: str, values: list[float], expected_dim: int) -> None:
-        if len(values) != expected_dim:
-            raise ValueError(f"{name} dimension mismatch: {len(values)} != {expected_dim}")
-        for value in values:
-            if not math.isfinite(value):
-                raise ValueError(f"{name} contains non-finite values")
-
-    def assemble_asset(self, sample: AssetMinuteInput) -> list[float]:
-        self._validate_block("price_volume", sample.price_volume, 10)
-        self._validate_block("technical", sample.technical, 20)
-        self._validate_block("fundamental", sample.fundamental, 10)
-        self._validate_block("text", sample.text, 64)
-        self._validate_block("asset_calendar", sample.asset_calendar, 3)
-
-        options = sample.options
-        if options is None:
-            options = self.options_defaults.get(sample.asset_class)
-            if options is None:
-                raise ValueError(
-                    f"Unknown asset_class={sample.asset_class!r}; expected one of "
-                    f"{sorted(self.options_defaults.keys())}"
-                )
-        self._validate_block("options", options, 5)
-
-        vector = (
-            sample.price_volume
-            + sample.technical
-            + options
-            + sample.fundamental
-            + sample.text
-            + sample.asset_calendar
-        )
-        if len(vector) != PER_ASSET_FEATURE_DIM:
-            raise ValueError(
-                f"assembled feature dim mismatch: {len(vector)} != {PER_ASSET_FEATURE_DIM}"
-            )
-        return vector
-
+# TODO: implement v3.0 feature assembler (Section 6.2 and 6.3 of meridian-spec.md)
