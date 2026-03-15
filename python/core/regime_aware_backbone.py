@@ -323,7 +323,13 @@ if TORCH_AVAILABLE:
             x: Tensor,
             regime_input: Tensor,
             hmm_posteriors: Tensor | None = None,
+            cascade_contexts: dict[int, Tensor] | None = None,
         ) -> tuple[Tensor, dict[str, Any]]:
+            """
+            cascade_contexts: optional {block_idx: [B, T, D]} tensors added to the
+              block output after the specified block index. Produced by TemporalCascade
+              for surprise-gated downward injection (spec §6.7).
+            """
             detector_out = self.regime_detector(regime_input, hmm_posteriors=hmm_posteriors)
             out = x
             state_history: list[Tensor] = []
@@ -347,6 +353,10 @@ if TORCH_AVAILABLE:
                         float(aux["beta"].max().detach().cpu().item()),
                     )
                 )
+
+                # Cascade injection: add temporal context at specified block positions
+                if cascade_contexts is not None and block_idx in cascade_contexts:
+                    out = out + cascade_contexts[block_idx]
 
                 moe = (
                     self.moe_by_position[str(block_idx)]

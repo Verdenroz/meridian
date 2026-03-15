@@ -91,7 +91,8 @@ class DatasetIngestionTest(unittest.TestCase):
                 exit_code = cli.main(
                     argv=[
                         "meridian",
-                        "ingest-jsonl",
+                        "data",
+                        "ingest",
                         "--input",
                         str(input_path),
                         "--asset",
@@ -113,7 +114,8 @@ class DatasetIngestionTest(unittest.TestCase):
                     exit_code = cli.main(
                         argv=[
                             "meridian",
-                            "collect-ingest",
+                            "data",
+                            "collect",
                             "--asset",
                             "AAPL",
                             "--start",

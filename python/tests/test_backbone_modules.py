@@ -34,7 +34,7 @@ class BackboneModulesTest(unittest.TestCase):
             }
             with redirect_stdout(captured):
                 exit_code = cli.main(
-                    argv=["meridian", "core-smoke", "--batch-size", "2", "--seq-len", "16"]
+                    argv=["meridian", "smoke", "core", "--batch-size", "2", "--seq-len", "16"]
                 )
         self.assertEqual(exit_code, 0)
         mocked.assert_called_once()
@@ -53,7 +53,8 @@ class BackboneModulesTest(unittest.TestCase):
                 exit_code = cli.main(
                     argv=[
                         "meridian",
-                        "backbone-smoke",
+                        "smoke",
+                        "backbone",
                         "--batch-size",
                         "2",
                         "--seq-len",

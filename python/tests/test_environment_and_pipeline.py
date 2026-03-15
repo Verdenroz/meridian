@@ -76,7 +76,8 @@ class EnvironmentAndPipelineTest(unittest.TestCase):
             output_path = Path(temp_dir) / "manifest.json"
             argv = [
                 "meridian",
-                "data-plan",
+                "data",
+                "plan",
                 "--assets",
                 "AAPL,SPY,QQQ",
                 "--output",
@@ -89,7 +90,7 @@ class EnvironmentAndPipelineTest(unittest.TestCase):
             self.assertTrue(output_path.exists())
 
     def test_cli_env_check_success_path(self) -> None:
-        argv = ["meridian", "env-check", "--allow-non-h100"]
+        argv = ["meridian", "check", "env", "--allow-non-h100"]
         with patch("cli.build_environment_report") as mock_report:
             with patch("cli.validate_training_environment") as mock_validate:
                 mock_report.return_value = {"ready_for_training": True}

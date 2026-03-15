@@ -39,7 +39,8 @@ class MarketReaderTrainingTest(unittest.TestCase):
                     exit_code = cli.main(
                         argv=[
                             "meridian",
-                            "marketreader-train",
+                            "train",
+                            "marketreader",
                             "--corpus",
                             str(corpus_path),
                             "--model-output",

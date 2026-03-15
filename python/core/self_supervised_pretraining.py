@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import struct
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,10 @@ def _ensure_torch() -> None:
         )
 
 
+CHECKPOINT_FORMAT_VERSION = 1
+CHECKPOINT_TRACK = "backbone_pretraining"
+
+
 @dataclass(frozen=True)
 class BackboneTrainingConfig:
     steps: int = 20
@@ -43,6 +48,7 @@ class BackboneTrainingConfig:
     return_prediction_weight: float = 0.5
     volatility_prediction_weight: float = 0.3
     correlation_prediction_weight: float = 0.2
+    prediction_ramp_steps: int = 0
     grad_clip_norm: float = 1.0
     core: BackboneCoreConfig = BackboneCoreConfig()
 
@@ -65,6 +71,8 @@ class BackboneTrainingConfig:
             or self.correlation_prediction_weight < 0
         ):
             raise ValueError("prediction weights must be >= 0")
+        if self.prediction_ramp_steps < 0:
+            raise ValueError("prediction_ramp_steps must be >= 0")
 
 
 def build_backbone_pretraining_spec(
@@ -88,6 +96,32 @@ def validate_checkpoint_compatibility(
 ) -> dict[str, object]:
     errors: list[str] = []
     warnings: list[str] = []
+
+    checkpoint_version = checkpoint_payload.get("checkpoint_format_version")
+    if checkpoint_version is None:
+        warnings.append("checkpoint missing checkpoint_format_version; assuming legacy format")
+    elif not isinstance(checkpoint_version, int):
+        errors.append(
+            "checkpoint_format_version must be an integer for compatibility validation"
+        )
+    elif checkpoint_version > CHECKPOINT_FORMAT_VERSION:
+        errors.append(
+            "checkpoint_format_version "
+            f"{checkpoint_version} is newer than supported {CHECKPOINT_FORMAT_VERSION}"
+        )
+    elif checkpoint_version < CHECKPOINT_FORMAT_VERSION:
+        warnings.append(
+            "checkpoint_format_version "
+            f"{checkpoint_version} is older than current {CHECKPOINT_FORMAT_VERSION}"
+        )
+
+    checkpoint_track = checkpoint_payload.get("checkpoint_track")
+    if checkpoint_track is None:
+        warnings.append("checkpoint missing checkpoint_track; assuming legacy backbone artifact")
+    elif checkpoint_track != CHECKPOINT_TRACK:
+        errors.append(
+            f"checkpoint_track mismatch: checkpoint={checkpoint_track} expected={CHECKPOINT_TRACK}"
+        )
 
     required_keys = (
         "backbone_state_dict",
@@ -141,6 +175,12 @@ def validate_checkpoint_compatibility(
         "compatible": len(errors) == 0,
         "errors": errors,
         "warnings": warnings,
+        "checkpoint_format_version": (
+            checkpoint_version if isinstance(checkpoint_version, int) else None
+        ),
+        "supported_checkpoint_format_version": CHECKPOINT_FORMAT_VERSION,
+        "checkpoint_track": checkpoint_track if isinstance(checkpoint_track, str) else None,
+        "supported_checkpoint_track": CHECKPOINT_TRACK,
     }
 
 
@@ -150,6 +190,30 @@ def _extract_moe_balance_loss(moe_aux: dict[str, dict[str, Tensor]], device: str
         return torch.tensor(0.0, device=device)
     values = [aux["load_balance_loss"] for aux in moe_aux.values()]
     return torch.stack(values).mean()
+
+
+def resolve_objective_weights(
+    config: BackboneTrainingConfig, step_index: int
+) -> dict[str, float]:
+    if step_index < 0:
+        raise ValueError("step_index must be >= 0")
+
+    prediction_scale = 1.0
+    if config.prediction_ramp_steps > 0:
+        prediction_scale = min((step_index + 1) / config.prediction_ramp_steps, 1.0)
+
+    return {
+        "reconstruction_weight": config.reconstruction_weight,
+        "regime_smoothness_weight": config.regime_smoothness_weight,
+        "moe_balance_weight": config.moe_balance_weight,
+        "return_prediction_weight": config.return_prediction_weight * prediction_scale,
+        "volatility_prediction_weight": (
+            config.volatility_prediction_weight * prediction_scale
+        ),
+        "correlation_prediction_weight": (
+            config.correlation_prediction_weight * prediction_scale
+        ),
+    }
 
 
 def load_f32_feature_shard_rows(
@@ -272,17 +336,34 @@ def run_split_shard_evaluation(
     resume_from_checkpoint_path: Path | None = None,
     max_sequences: int | None = None,
     device: str | None = None,
+    include_per_shard: bool = False,
+    max_shards_per_split: int | None = None,
 ) -> dict[str, object]:
+    if max_shards_per_split is not None and max_shards_per_split < 1:
+        raise ValueError("max_shards_per_split must be >= 1 when provided")
+
     discovered = discover_split_shards(shards_root=shards_root, splits=splits)
-    total_shards = sum(len(paths) for paths in discovered.values())
+    selected_by_split = {
+        split: (
+            discovered[split][:max_shards_per_split]
+            if max_shards_per_split is not None
+            else discovered[split]
+        )
+        for split in splits
+    }
+    total_shards = sum(len(paths) for paths in selected_by_split.values())
     if total_shards == 0:
         raise ValueError(f"No shards found under {shards_root} for splits {splits}")
 
     split_metrics: dict[str, dict[str, object]] = {}
     for split in splits:
-        shard_paths = discovered[split]
+        shard_paths = selected_by_split[split]
+        discovered_count = len(discovered[split])
         if not shard_paths:
-            split_metrics[split] = {"shard_count": 0}
+            split_metrics[split] = {
+                "shard_count": 0,
+                "discovered_shard_count": discovered_count,
+            }
             continue
         summary = run_backbone_pretraining_smoke(
             config=config,
@@ -295,6 +376,7 @@ def run_split_shard_evaluation(
         )
         split_metrics[split] = {
             "shard_count": len(shard_paths),
+            "discovered_shard_count": discovered_count,
             "avg_total_loss": summary["avg_total_loss"],
             "avg_reconstruction_loss": summary["avg_reconstruction_loss"],
             "avg_regime_smoothness_loss": summary["avg_regime_smoothness_loss"],
@@ -303,6 +385,39 @@ def run_split_shard_evaluation(
             "avg_volatility_prediction_loss": summary["avg_volatility_prediction_loss"],
             "avg_correlation_prediction_loss": summary["avg_correlation_prediction_loss"],
         }
+        if include_per_shard:
+            per_shard_metrics: list[dict[str, object]] = []
+            for shard_path in shard_paths:
+                shard_summary = run_backbone_pretraining_smoke(
+                    config=config,
+                    checkpoint_output_path=checkpoint_output_path,
+                    device=device,
+                    input_shard_path=shard_path,
+                    max_sequences=max_sequences,
+                    resume_from_checkpoint_path=resume_from_checkpoint_path,
+                    eval_only=True,
+                )
+                per_shard_metrics.append(
+                    {
+                        "shard_path": str(shard_path),
+                        "avg_total_loss": shard_summary["avg_total_loss"],
+                        "avg_reconstruction_loss": shard_summary["avg_reconstruction_loss"],
+                        "avg_regime_smoothness_loss": shard_summary[
+                            "avg_regime_smoothness_loss"
+                        ],
+                        "avg_moe_balance_loss": shard_summary["avg_moe_balance_loss"],
+                        "avg_return_prediction_loss": shard_summary[
+                            "avg_return_prediction_loss"
+                        ],
+                        "avg_volatility_prediction_loss": shard_summary[
+                            "avg_volatility_prediction_loss"
+                        ],
+                        "avg_correlation_prediction_loss": shard_summary[
+                            "avg_correlation_prediction_loss"
+                        ],
+                    }
+                )
+            split_metrics[split]["per_shard"] = per_shard_metrics
 
     available_losses = [
         metrics["avg_total_loss"]
@@ -312,6 +427,8 @@ def run_split_shard_evaluation(
     return {
         "shards_root": str(shards_root),
         "splits": split_metrics,
+        "include_per_shard": include_per_shard,
+        "max_shards_per_split": max_shards_per_split,
         "overall_avg_total_loss": (
             sum(float(loss) for loss in available_losses) / len(available_losses)
             if available_losses
@@ -446,6 +563,9 @@ def run_backbone_pretraining_smoke(
     return_prediction_loss_history: list[float] = []
     volatility_prediction_loss_history: list[float] = []
     correlation_prediction_loss_history: list[float] = []
+    effective_return_weight_history: list[float] = []
+    effective_volatility_weight_history: list[float] = []
+    effective_correlation_weight_history: list[float] = []
 
     backbone.train()
     reconstruction_head.train()
@@ -531,14 +651,15 @@ def run_backbone_pretraining_smoke(
         moe_balance_loss = _extract_moe_balance_loss(
             diagnostics["moe_aux"], device=run_device
         )
+        weights = resolve_objective_weights(config=config, step_index=step)
 
         total_loss = (
-            config.reconstruction_weight * reconstruction_loss
-            + config.regime_smoothness_weight * regime_smoothness_loss
-            + config.moe_balance_weight * moe_balance_loss
-            + config.return_prediction_weight * return_prediction_loss
-            + config.volatility_prediction_weight * volatility_prediction_loss
-            + config.correlation_prediction_weight * correlation_prediction_loss
+            weights["reconstruction_weight"] * reconstruction_loss
+            + weights["regime_smoothness_weight"] * regime_smoothness_loss
+            + weights["moe_balance_weight"] * moe_balance_loss
+            + weights["return_prediction_weight"] * return_prediction_loss
+            + weights["volatility_prediction_weight"] * volatility_prediction_loss
+            + weights["correlation_prediction_weight"] * correlation_prediction_loss
         )
         if not eval_only:
             total_loss.backward()
@@ -560,6 +681,13 @@ def run_backbone_pretraining_smoke(
         correlation_prediction_loss_history.append(
             float(correlation_prediction_loss.detach().cpu().item())
         )
+        effective_return_weight_history.append(weights["return_prediction_weight"])
+        effective_volatility_weight_history.append(
+            weights["volatility_prediction_weight"]
+        )
+        effective_correlation_weight_history.append(
+            weights["correlation_prediction_weight"]
+        )
 
     if not eval_only:
         checkpoint_output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -572,6 +700,9 @@ def run_backbone_pretraining_smoke(
                 "correlation_head_state_dict": correlation_head.state_dict(),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "config": asdict(config),
+                "checkpoint_format_version": CHECKPOINT_FORMAT_VERSION,
+                "checkpoint_track": CHECKPOINT_TRACK,
+                "checkpoint_created_at_utc": datetime.now(timezone.utc).isoformat(),
                 "input_projection_state_dict": input_projection.state_dict()
                 if input_projection is not None
                 else None,
@@ -598,6 +729,9 @@ def run_backbone_pretraining_smoke(
         "return_prediction_loss_history": return_prediction_loss_history,
         "volatility_prediction_loss_history": volatility_prediction_loss_history,
         "correlation_prediction_loss_history": correlation_prediction_loss_history,
+        "effective_return_prediction_weight_history": effective_return_weight_history,
+        "effective_volatility_prediction_weight_history": effective_volatility_weight_history,
+        "effective_correlation_prediction_weight_history": effective_correlation_weight_history,
         "avg_total_loss": sum(total_loss_history) / len(total_loss_history),
         "avg_reconstruction_loss": sum(reconstruction_loss_history)
         / len(reconstruction_loss_history),
@@ -626,6 +760,9 @@ def run_backbone_pretraining_smoke(
         else None,
         "checkpoint_compatibility": compatibility_report,
         "eval_only": eval_only,
+        "prediction_ramp_steps": config.prediction_ramp_steps,
+        "checkpoint_format_version": CHECKPOINT_FORMAT_VERSION,
+        "checkpoint_track": CHECKPOINT_TRACK,
     }
     target_metrics_path.write_text(
         json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8"

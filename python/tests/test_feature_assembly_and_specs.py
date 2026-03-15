@@ -66,12 +66,12 @@ class FeatureAssemblyAndSpecsTest(unittest.TestCase):
     def test_cli_marketreader_and_hmm_commands(self) -> None:
         captured = io.StringIO()
         with redirect_stdout(captured):
-            marketreader_exit = cli.main(argv=["meridian", "marketreader-plan"])
+            marketreader_exit = cli.main(argv=["meridian", "train", "marketreader", "--plan"])
             hmm_exit = cli.main(
-                argv=["meridian", "hmm-spec", "--features", "vix_level,adx14,drawdown"]
+                argv=["meridian", "train", "hmm", "--plan", "--features", "vix_level,adx14,drawdown"]
             )
             vector_exit = cli.main(
-                argv=["meridian", "feature-vector-check", "--asset-class", "equity"]
+                argv=["meridian", "check", "features", "--asset-class", "equity"]
             )
         self.assertEqual(marketreader_exit, 0)
         self.assertEqual(hmm_exit, 0)

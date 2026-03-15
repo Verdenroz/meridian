@@ -83,7 +83,8 @@ class HMMTrainingPipelineTest(unittest.TestCase):
                     exit_code = cli.main(
                         argv=[
                             "meridian",
-                            "hmm-train",
+                            "train",
+                            "hmm",
                             "--input",
                             str(input_path),
                             "--features",
