@@ -11,7 +11,7 @@
 //! every  1s:  PriceStream tick → price_buffer (100 tickers)
 //! every  1m:  assemble_features() → emit feature vectors to Python bridge
 //! every  5m:  poll_rss_feeds()       — 31 sources via feeds::fetch_all()
-//! every 15m:  poll_options_chains()  — ticker.options(date) × 100
+//! every 15m:  poll_options_chains()  — ticker.options() × 100
 //! every  1h:  poll_world_indices()   — finance::indices(Americas|Europe|AsiaPacific)
 //! every  1h:  poll_crypto_market()   — crypto::coins() + crypto::coin()
 //! every  6h:  poll_insider_tx()      — ticker.insider_transactions()
@@ -25,70 +25,130 @@
 //! quarterly:  poll_earnings_tx()     — finance::earnings_transcript()
 //! quarterly:  poll_institution_own() — ticker.institution_ownership()
 //! ```
-//!
-//! ## Event Detector (continuous)
-//! Diffs each polled snapshot against the previous one to detect discrete events:
-//! ```text
-//! RSS diff              → NEWS_HIGH_IMPACT event
-//! insider_tx diff       → INSIDER_BUY / INSIDER_SELL event
-//! grading diff          → ANALYST_UPGRADE / ANALYST_DOWNGRADE event
-//! sec_filings diff      → SEC_FILING_10K / 10Q / 8K / OTHER event
-//! earnings actual/est   → EARNINGS_BEAT / EARNINGS_MISS event
-//! FRED release          → MACRO_RELEASE / FOMC_DECISION event
-//! options anomaly       → OPTIONS_UNUSUAL_ACTIVITY event
-//! trending diff         → TRENDING_ENTRY event
-//! recommendation diff   → RATING_CHANGE event
-//! calendar diff         → DIVIDEND_ANNOUNCED / SPLIT_ANNOUNCED event
-//! ```
-//!
-//! ## Feature Assembly (per-minute)
-//! Produces two vectors every minute:
-//! - Per-asset: 224 continuous + 64 text = 288 dims × 100 assets
-//! - Market-wide: 96 dims
-//!
-//! ## Historical Mode (batch)
-//! When invoked with `--symbol <SYM> --start <DATE> --end <DATE>`, collects
-//! historical data and emits JSONL rows to stdout matching the v3.0 schema:
-//! ```text
-//! cargo run -- --symbol AAPL --start 2020-01-01 --end 2025-06-30
-//! ```
-//!
-//! # Feature Blocks (per-asset, 224 continuous dims)
-//!
-//! | Block                 | Dims | Source                                    |
-//! |-----------------------|------|-------------------------------------------|
-//! | price_volume          |  10  | PriceStream / chart()                     |
-//! | technical             |  42  | indicators::* (full suite)                |
-//! | options               |  12  | ticker.options(date)   every 15m          |
-//! | fundamental           |  30  | financial_data/key_stats/earnings/analyst |
-//! | risk_analytics        |   8  | ticker.risk()          daily              |
-//! | event_state           |  10  | decayed signals from event detector       |
-//! | cross_asset_context   |   8  | relative strength / sector / trending     |
-//! | text (MarketReader)   |  64  | feeds + ticker.news() + transcripts       |
-//!
-//! # Market-Wide Feature Blocks (96 dims)
-//!
-//! | Block                    | Dims | Source                                 |
-//! |--------------------------|------|----------------------------------------|
-//! | volatility_sentiment     |  12  | VIX, Fear&Greed, HY spread             |
-//! | yield_curve              |  12  | fred::treasury_yields() — all 12 mats  |
-//! | fred_macro               |  12  | fred::series() × 12 FRED series        |
-//! | sector_industry          |  16  | finance::sector(Sector::*) × 11        |
-//! | world_indices_cross_asset|  20  | finance::indices(*) + crypto + FX      |
-//! | breadth_flow             |  12  | market_summary + screener + hours      |
-//! | rss_news_aggregate       |  12  | feeds::fetch_all() → MarketReader      |
-//!
-//! # Rolling Statistics
-//! All z-scored features maintain per-asset 252-day rolling mean and variance.
-//! Normalization state is persisted to disk and restored on startup.
-//!
-//! # Staleness & Graceful Degradation
-//! Every cached value carries a `last_updated` timestamp. If an API is
-//! temporarily unavailable, the DataBus serves the last known value so the
-//! model always receives a complete feature vector.
 
-// TODO: implement DataBus (Section 6.1 of meridian-spec.md)
+mod args;
+mod events;
+mod features;
+mod historical;
+mod output;
+mod poller;
+mod scheduler;
+mod store;
 
-fn main() {
-    todo!("DataBus — see module-level doc and Section 6.1 of meridian-spec.md")
+use anyhow::Context;
+use args::{Args, Mode};
+use clap::Parser;
+use std::sync::Arc;
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    install_tracing();
+
+    // Initialize FRED client if API key is available (required for macro series polls)
+    match std::env::var("FRED_API_KEY") {
+        Ok(key) if !key.is_empty() => {
+            if let Err(e) = finance_query::fred::init(key) {
+                tracing::warn!(err = %e, "FRED init failed (macro series will be unavailable)");
+            } else {
+                tracing::info!("FRED client initialized");
+            }
+        }
+        _ => {
+            tracing::warn!("FRED_API_KEY not set — macro series (FEDFUNDS, CPI, etc.) will be skipped");
+        }
+    }
+
+    let args = Args::parse();
+
+    match args.mode {
+        Mode::Live(live) => live_mode(live).await,
+        Mode::Historical(hist) => historical::batch::run(hist).await,
+    }
+}
+
+async fn live_mode(args: args::LiveArgs) -> anyhow::Result<()> {
+    // Load symbol list
+    let symbols = load_symbols(&args.symbols_file)?;
+    tracing::info!(count = symbols.len(), "symbols loaded");
+
+    // Load (or initialize) rolling statistics from disk
+    let rolling_stats = store::RollingStatsStore::load(&args.stats_path);
+
+    // Build the shared DataStore
+    let store = store::DataStore::new(symbols, rolling_stats);
+
+    // Register SIGINT / SIGTERM handler to persist rolling stats on exit
+    let store_for_signal = store.clone();
+    let stats_path_for_signal = args.stats_path.clone();
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        tracing::info!("shutdown signal received — saving rolling stats");
+        if let Err(e) = store_for_signal.rolling_stats.save(&stats_path_for_signal) {
+            tracing::error!(err = %e, "failed to save rolling stats on shutdown");
+        }
+        std::process::exit(0);
+    });
+
+    // Warm up: run a first-pass poll of all long-cycle data before the scheduler starts
+    tracing::info!("running initial data warm-up");
+    tokio::join!(
+        log_err(poller::market::poll_world_indices(&store), "world_indices"),
+        log_err(poller::market::poll_crypto_market(&store), "crypto"),
+        log_err(poller::market::poll_fear_greed(&store), "fear_greed"),
+        log_err(poller::macro_fred::poll_yield_curve(&store), "yield_curve"),
+        log_err(poller::rss::poll_rss_feeds(&store), "rss"),
+    );
+
+    // Spawn all scheduler tasks (they run indefinitely)
+    scheduler::spawn_all(store, args.stats_path);
+
+    // Block forever — the process runs until SIGINT/SIGTERM
+    std::future::pending::<()>().await;
+    Ok(())
+}
+
+fn load_symbols(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
+    if !path.exists() {
+        // Fallback: a small default set for testing
+        tracing::warn!(path = %path.display(), "symbols file not found, using defaults");
+        return Ok(default_symbols());
+    }
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("reading symbols file {}", path.display()))?;
+    let symbols: Vec<String> = content
+        .lines()
+        .map(str::trim)
+        .filter(|s| !s.is_empty() && !s.starts_with('#'))
+        .take(100) // cap at 100
+        .map(String::from)
+        .collect();
+    if symbols.is_empty() {
+        anyhow::bail!("symbols file {} is empty", path.display());
+    }
+    Ok(symbols)
+}
+
+fn default_symbols() -> Vec<String> {
+    [
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "JPM", "UNH",
+        "XOM", "LLY", "V", "AVGO", "JNJ", "PG", "MA", "HD", "CVX", "MRK",
+        "SPY", "QQQ", "IWM",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect()
+}
+
+fn install_tracing() {
+    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+    tracing_subscriber::registry()
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+        .with(fmt::layer().with_writer(std::io::stderr)) // logs to stderr; JSONL goes to stdout
+        .init();
+}
+
+async fn log_err<F: std::future::Future<Output = anyhow::Result<()>>>(f: F, label: &str) {
+    if let Err(e) = f.await {
+        tracing::warn!(task = %label, err = %e, "warm-up task failed (will retry on schedule)");
+    }
 }
