@@ -15,7 +15,7 @@ edition = "2024"
 #   risk        — ticker.risk() for Block 5 risk analytics (Section 6.2)
 
 [dependencies]
-finance-query = { version = "2.0", features = [
+finance-query = { version = "2.4", features = [
     "dataframe",
     "indicators",
     "backtesting",
@@ -24,5 +24,15 @@ finance-query = { version = "2.0", features = [
     "rss",
     "risk",
 ] }
-tokio        = { version = "1", features = ["full"] }
-serde_json   = "1.0"
+tokio         = { version = "1",    features = ["full"] }
+serde         = { version = "1",    features = ["derive"] }
+serde_json    = "1.0"
+anyhow        = "1.0"
+chrono        = { version = "0.4",  features = ["serde"] }
+clap          = { version = "4",    features = ["derive"] }
+tracing       = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+dashmap       = "6"
+bincode       = "1"
+parking_lot   = "0.12"
+tokio-stream  = "0.1"
