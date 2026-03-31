@@ -5,7 +5,7 @@ Per-minute timing budget (60,000 ms available, ~510 ms used):
   t=0ms    New minute tick from PriceStream
   ├─ [Core 3, async] Data pipeline (200–500 ms):
   │    Fetch 100 prices → compute 42 indicators → process RSS headlines
-  │    Check new events → update rolling stats → assemble 100 × 288 features
+  │    Check new events → update rolling stats → assemble 100 × 184 features
   │    Assemble 96 market-wide features + 201 portfolio state + 20 calendar
   │
   ├─ [Cores 0-2] Model inference (~7 ms):

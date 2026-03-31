@@ -15,8 +15,8 @@ Input JSONL schema (one row per asset-minute):
   }
 
 Output: binary shard files at data/mmaps/{split}/{asset}.f32bin
-  Format: raw little-endian f32 values, 288 floats per row, no header.
-  Struct: struct.Struct("<288f")
+  Format: raw little-endian f32 values, 184 per-asset + 96 market = 280 floats per row, no header.
+  Struct: struct.Struct("<{PER_ASSET_FEATURE_DIM + MARKET_FEATURE_DIM}f")
 
 Split assignment delegated to train.splits.
 Ingestion manifest written to reports/ingestion/{asset}.json.

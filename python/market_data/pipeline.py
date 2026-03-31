@@ -4,7 +4,7 @@ meridian data plan output (per-asset manifest):
   {
     "asset": "AAPL",
     "asset_class": "equity",
-    "per_asset_feature_dim": 288,          # 224 continuous + 64 text
+    "per_asset_feature_dim": 184,          # 120 continuous + 64 text
     "market_feature_dim": 96,
     "portfolio_state_dim": 201,
     "calendar_feature_dim": 20,

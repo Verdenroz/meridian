@@ -1,9 +1,9 @@
 """Feature assembler for Meridian v3.0 — full data integration.
 
-Assembles the full 288-dim per-asset feature vector and 96-dim market-wide vector
+Assembles the full 184-dim per-asset feature vector and 96-dim market-wide vector
 from raw data provided by the DataBus (src/main.rs).
 
-Per-asset input (224 continuous + 64 text = 288 dims):
+Per-asset input (120 continuous + 64 text = 184 dims):
   Block 1: price_volume        (10)  — OHLCV + multi-horizon returns
   Block 2: technical           (42)  — full indicator suite
   Block 3: options             (12)  — IV, skew, flow, OI signals

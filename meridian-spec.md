@@ -13,7 +13,7 @@
 5. [High-Level Architecture](#5-high-level-architecture)
 6. [Data Ingestion Architecture](#6-data-ingestion-architecture)
    - 6.1 [Data Bus Design](#61-data-bus-design)
-   - 6.2 [Per-Asset Feature Assembly (224 dims)](#62-per-asset-feature-assembly-224-dims)
+   - 6.2 [Per-Asset Feature Assembly (120 dims)](#62-per-asset-feature-assembly-120-dims)
    - 6.3 [Market-Wide Feature Assembly (96 dims)](#63-market-wide-feature-assembly-96-dims)
    - 6.4 [Event Stream Architecture](#64-event-stream-architecture)
    - 6.5 [Text Corpus Pipeline](#65-text-corpus-pipeline)
@@ -76,7 +76,7 @@ Key metrics:
 | Metric | Value |
 |---|---|
 | Total parameters | ~95M (35M active per forward pass) |
-| Input features per asset | 224 scalar + 64 text embedding = 288 |
+| Input features per asset | 120 scalar + 64 text embedding = 184 |
 | Market-wide features | 96 scalar |
 | Event types tracked | 18 discrete event categories |
 | Text sources ingested | 30+ RSS feeds + per-ticker news + transcripts |
@@ -164,7 +164,7 @@ PERIODIC UPDATES                                     ├── Institutional Own
 ┌─────────────────────────────────────────────────────────────────┐
 │                       DATA BUS                                  │
 │  Normalizes, aligns, and routes all data to model components    │
-│  Per-asset: 224 continuous features + 64 text embedding = 288   │
+│  Per-asset: 120 continuous features + 64 text embedding = 184   │
 │  Market-wide: 96 features                                       │
 │  Events: typed event tokens with embeddings                     │
 │  Portfolio: 201 features                                        │
@@ -178,7 +178,7 @@ PERIODIC UPDATES                                     ├── Institutional Own
 
 ┌───────────────────────────────────────────────────────┐
 │  INPUT PROJECTION LAYER                               │
-│  Per-asset: VSN-Gated Linear(288 → D) + RMSNorm      │
+│  Per-asset: VSN-Gated Linear(184 → D) + RMSNorm      │
 │  Market:    Linear(96 → D) + RMSNorm                  │
 │  Portfolio: Linear(201 → D) + RMSNorm                 │
 │  Calendar:  Linear(20 → D)                            │
@@ -282,9 +282,9 @@ DataBus Architecture:
 └─────────────────────────────────────────────┘
 ```
 
-### 6.2 Per-Asset Feature Assembly (224 dims)
+### 6.2 Per-Asset Feature Assembly (120 dims)
 
-Every minute, each of 100 assets gets a 224-dimensional continuous feature vector plus a 64-dimensional text embedding. This is a 2× expansion from v2.0's 112 dims, incorporating the previously underutilized data.
+Every minute, each of 100 assets gets a 120-dimensional continuous feature vector plus a 64-dimensional text embedding, for 184 effective dims total.
 
 #### Block 1: Price & Volume (10 features)
 
@@ -514,9 +514,9 @@ For assets without listed options (some ETFs, crypto): filled with a **learned 1
 
 From MarketReader (Section 7.10) processing the full text corpus pipeline (Section 6.5).
 
-**Total per-asset features: 10 + 42 + 12 + 30 + 8 + 10 + 8 + 64 = 224 continuous + 64 text = 288 effective dims.**
+**Total per-asset features: 10 + 42 + 12 + 30 + 8 + 10 + 8 = 120 continuous + 64 text = 184 effective dims.**
 
-At inference, the 224 continuous features are concatenated with the 64-dim text embedding to form the full 288-dim per-asset input.
+At inference, the 120 continuous features are concatenated with the 64-dim text embedding to form the full 184-dim per-asset input.
 
 ---
 
@@ -780,13 +780,13 @@ Unchanged from v2.0. Encodes minute of session, day of week, month, market-open 
 The input projection now handles the expanded feature space:
 
 ```
-Per-Asset (288 dims → D):
+Per-Asset (184 dims → D):
   Step 1: Variable Selection Network
-    Per-feature importance: gates = softmax(Linear(regime_emb, 288)) ∈ ℝ^288
-    x_selected = gates ⊙ features_288
+    Per-feature importance: gates = softmax(Linear(regime_emb, 184)) ∈ ℝ^184
+    x_selected = gates ⊙ features_184
     
   Step 2: Projection
-    x_asset = Linear(288 → 768) → RMSNorm
+    x_asset = Linear(184 → 768) → RMSNorm
 
 Market (96 dims → D):
   x_market = Linear(96 → 768) → RMSNorm
@@ -805,9 +805,9 @@ Per-asset token:
   (event tokens are additional tokens, not summed)
 ```
 
-The **VSN** is critical with 288 input features — it ensures the model can dynamically ignore irrelevant signals. For example, during a crisis regime, the VSN might upweight VaR, correlation, and insider activity while downweighting valuation metrics. The regime embedding conditions the gating, so different regimes produce different feature weightings.
+The **VSN** is critical with 184 input features — it ensures the model can dynamically ignore irrelevant signals. For example, during a crisis regime, the VSN might upweight VaR, correlation, and insider activity while downweighting valuation metrics. The regime embedding conditions the gating, so different regimes produce different feature weightings.
 
-**Parameters:** ~285K (288×768 + 96×768 + 201×768 + 20×768 + VSN).
+**Parameters:** ~245K (184×768 + 96×768 + 201×768 + 20×768 + VSN).
 
 ### 7.2 Regime Detector
 
@@ -837,7 +837,7 @@ The expanded input (full yield curve, world indices, sector performance, credit 
 
 These are architecturally identical to v2.0 Sections 6.5–6.11, with two adjustments:
 
-1. **Input dimension to backbone:** D=768, but the per-asset projection now maps from 288 instead of 112. This only changes the input projection weights, not the backbone itself.
+1. **Input dimension to backbone:** D=768, the per-asset projection maps from 184 dims. This only affects the input projection weights, not the backbone itself.
 
 2. **Event token processing:** When event tokens are present for an asset at a given timestep, they are processed by the backbone as additional tokens in that asset's sequence. Since the RA-GDN operates in single-step recurrent mode at inference, event tokens are simply additional inputs that update the state S before the regular feature token is processed:
 
@@ -976,7 +976,7 @@ Unchanged from v2.0. Mixed precision: ternary weights, FP16 hidden states, INT8 
 
 ### 10.2–10.5: Training Phases
 
-**Phase 1 — Self-supervised pre-training:** Now uses the expanded 288-dim per-asset features and 96-dim market features. Training tasks unchanged (next-step return, volatility, correlation prediction). Estimated: ~100 H100-hours.
+**Phase 1 — Self-supervised pre-training:** Uses 184-dim per-asset features and 96-dim market features (280 dims total per shard row). Training tasks unchanged (next-step return, volatility, correlation prediction). Estimated: ~100 H100-hours.
 
 **Phase 2 — Portfolio optimization:** Unchanged (DSR + return loss + volatility auxiliary). Estimated: ~80 H100-hours.
 
@@ -1330,7 +1330,7 @@ Time 0ms: New minute tick (PriceStream)
   │   ├── Process any new RSS headlines (batch, ~20 articles/5min avg)
   │   ├── Check for new events (insider tx, filings, ratings)
   │   ├── Update rolling statistics (z-scores, EMAs, correlations)
-  │   ├── Assemble 100 × 288 per-asset features
+  │   ├── Assemble 100 × 184 per-asset features
   │   ├── Assemble 96 market-wide features
   │   ├── Assemble 201 portfolio state features
   │   └── Duration: 200–500ms (indicator computation + normalization)
@@ -1385,7 +1385,7 @@ Time 0ms: New minute tick (PriceStream)
 |---|---|
 | Activation buffers | ~3.0 MB |
 | Cross-asset attention KV | 0.2 MB |
-| Feature assembly buffer | 0.3 MB (100 × 288 × 4 bytes) |
+| Feature assembly buffer | 0.19 MB (100 × 184 × 4 bytes) |
 | RSS/news processing queue | 2.0 MB |
 | **Total dynamic** | **~5.5 MB** |
 
@@ -1431,7 +1431,7 @@ Time 0ms: New minute tick (PriceStream)
 - [ ] Implement event detection (diff-based) for insider tx, ratings, filings
 - [ ] Build historical data download pipeline for training corpus
 - [ ] Implement SQLite logging schema
-- [ ] Build feature assembly pipeline (288 per-asset + 96 market-wide)
+- [ ] Build feature assembly pipeline (184 per-asset + 96 market-wide)
 - [ ] Verify all finance-query API integrations end-to-end
 - [ ] Train BPE tokenizer on financial text corpus
 - [ ] Pre-fit 4-state HMM on historical regime data
@@ -1501,13 +1501,13 @@ All risks from v2.0 (state drift, catastrophic forgetting, regime miscalibration
 
 ### Risk #7: Feature Bloat / Noise Injection
 
-**Risk:** With 288 per-asset features, some features may be pure noise that degrades the signal-to-noise ratio.
+**Risk:** With 184 per-asset features, some features may be pure noise that degrades the signal-to-noise ratio.
 
 **Mitigation:**
 1. The VSN dynamically gates features to zero — noisy features will receive near-zero gate weights
 2. During training, monitor VSN gate distributions. Features with consistently near-zero gates across all regimes can be removed to simplify the pipeline.
 3. L1 regularization on VSN gate logits encourages sparsity
-4. Ablation study: train with reduced feature sets and compare. If 288 dims doesn't outperform 112, use the smaller set.
+4. Ablation study: train with reduced feature sets and compare. If 184 dims doesn't improve over a smaller set, prune accordingly.
 
 ### Risk #8: RSS Feed Reliability
 
@@ -1705,7 +1705,7 @@ All risks from v2.0 (state drift, catastrophic forgetting, regime miscalibration
 | Parameter | Value | Notes |
 |---|---|---|
 | D (model dim) | 768 | Main backbone hidden size |
-| Per-asset input dim | 288 | 224 continuous + 64 text |
+| Per-asset input dim | 184 | 120 continuous + 64 text |
 | Market-wide input dim | 96 | Expanded from 24 |
 | RA-GDN blocks | 8 | Core temporal layers |
 | FMoE blocks | 3 | After blocks 2, 5, 8 |
