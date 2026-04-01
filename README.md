@@ -11,7 +11,7 @@ For the full architectural specification, see [`meridian-spec.md`](meridian-spec
 | Metric | Value |
 |---|---|
 | Total parameters | ~80.6M (~35M active per forward pass) |
-| Per-asset features | 224 continuous + 64 text = 288 |
+| Per-asset features | 120 continuous + 64 text = 184 |
 | Market-wide features | 96 |
 | Portfolio state features | 201 |
 | Event types tracked | 18 discrete categories |
@@ -171,20 +171,20 @@ Override with `--command-template` for a custom collector command.
 - [x] Implement SQLite logging schema
 - [x] Train BPE tokenizer on financial text corpus
 - [x] Pre-fit 4-state HMM on historical regime data
-- [ ] Verify all finance-query API integrations end-to-end
+- [x] Verify all finance-query API integrations end-to-end
 
 ### Phase 1: Core Model (Weeks 5–10)
 
-- [ ] RA-GDN block in PyTorch with regime conditioning (α bias, β scaling)
-- [ ] FMoE with external regime-posterior routing
-- [ ] VSN input gating
-- [ ] Self-supervised pre-training scaffold with return/volatility/correlation objectives
-- [ ] Checkpoint save/resume with format version and compatibility checks
-- [ ] Split-aware shard evaluation
-- [ ] Temporal cascade: hourly/daily/weekly GDN stacks with surprise-gated context injection
-- [ ] Cross-asset fusion: 2-layer MHA with sector bias prior (110+ tokens)
-- [ ] EventEncoder: 18 event types → D-dim tokens with time decay
-- [ ] MarketReader text encoder (3-tier: headline / summary / deep)
+- [x] RA-GDN block in PyTorch with regime conditioning (α bias, β scaling)
+- [x] FMoE with external regime-posterior routing
+- [x] VSN input gating
+- [x] Self-supervised pre-training scaffold with return/volatility/correlation objectives
+- [x] Checkpoint save/resume with format version and compatibility checks
+- [x] Split-aware shard evaluation
+- [x] Temporal cascade: hourly/daily/weekly GDN stacks with surprise-gated context injection
+- [x] Cross-asset fusion: 2-layer MHA with sector bias prior (110+ tokens)
+- [x] EventEncoder: 18 event types → D-dim tokens with time decay
+- [x] MarketReader text encoder (3-tier: headline / summary / deep)
 - [ ] Run Phase 1 self-supervised pre-training on H100 (~80 GPU-hours)
 - [ ] Validate: prediction accuracy, recurrent state stability, regime detection quality
 
