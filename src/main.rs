@@ -26,14 +26,7 @@
 //! quarterly:  poll_institution_own() — ticker.institution_ownership()
 //! ```
 
-mod args;
-mod events;
-mod features;
-mod historical;
-mod output;
-mod poller;
-mod scheduler;
-mod store;
+use meridian::{args, historical, poller, scheduler, store};
 
 use anyhow::Context;
 use args::{Args, Mode};
