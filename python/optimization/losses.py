@@ -1,6 +1,6 @@
 """Loss functions — Section 10.3 of meridian-spec.md.
 
-Phase 2a — Return head training:
+Return head training:
   L = -DSR(w, r) + λ_turn · TurnoverPenalty(w) + λ_vol · VolatilityAux(w, r)
 
   DSR (Differential Sharpe Ratio):
@@ -15,7 +15,7 @@ Phase 2a — Return head training:
     MSE between predicted portfolio volatility and realized volatility.
     Auxiliary task that improves risk-awareness of the backbone.
 
-Phase 2b — Sharpe head training (frozen backbone):
+Sharpe head training (frozen backbone):
   L = -SharpeRatio(w, r)_{60d_rolling}
 
   Backbone frozen; only Meridian-S head parameters updated.

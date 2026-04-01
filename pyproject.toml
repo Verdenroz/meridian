@@ -13,7 +13,6 @@ dependencies = []
 [project.optional-dependencies]
 train = [
   "torch>=2.3",
-  "fla>=0.0.5",
   "numpy>=2.1",
   "pandas>=2.2",
   "pyyaml>=6.0",

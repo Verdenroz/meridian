@@ -1,0 +1,255 @@
+"""Self-supervised pre-training entry point.
+
+Trains the RA-GDN backbone + cross-asset fusion on three joint objectives:
+next-step return prediction, realised volatility prediction, and correlation
+matrix prediction. Uses split-aware f32bin shards produced by the data pipeline.
+
+Usage (production — H100):
+
+    python -m train.pretrain \\
+        --data-dir  data/mmaps \\
+        --steps     200000 \\
+        --batch-size 8 \\
+        --seq-len   64 \\
+        --lr        1e-4 \\
+        --workers   4 \\
+        --checkpoint-dir checkpoints/pretrain
+
+Usage (smoke test — CPU, synthetic data):
+
+    python -m train.pretrain --smoke --steps 5 --batch-size 2 --seq-len 8
+
+Resume from checkpoint:
+
+    python -m train.pretrain \\
+        --data-dir  data/mmaps \\
+        --resume-from checkpoints/pretrain/backbone_pretrain.pt \\
+        --steps     200000
+"""
+
+from __future__ import annotations
+
+import argparse
+import struct
+import tempfile
+from pathlib import Path
+
+import numpy as np
+import torch
+
+from core.cross_asset_fusion import CrossAssetFusion
+from core.regime_aware_backbone import InputProjection, RAGDNBackbone, RegimeDetector
+from core.self_supervised_pretraining import (
+    SelfSupervisedPretrainer,
+    TrainConfig,
+    build_dataloader,
+    build_split_loaders,
+)
+from train.spec import DEFAULT_SPEC, MeridianSpec
+
+
+# ── Model factory ─────────────────────────────────────────────────────────────
+
+def build_model(
+    spec: MeridianSpec,
+    device: torch.device,
+) -> tuple[RAGDNBackbone, CrossAssetFusion, RegimeDetector, InputProjection]:
+    """Instantiate all model components from spec."""
+    backbone = RAGDNBackbone(
+        d_model        = spec.d_model,
+        n_heads        = spec.n_heads,
+        d_head         = spec.d_head,
+        d_v            = spec.d_v,
+        n_gdn_blocks   = spec.n_gdn_blocks,
+        n_experts      = spec.n_experts,
+        top_k_experts  = spec.top_k_experts,
+        expert_ffn_dim = spec.expert_ffn_dim,
+        regime_emb_dim = spec.regime_emb_dim,
+        n_regimes      = spec.n_regimes,
+    ).to(device)
+
+    fusion = CrossAssetFusion(
+        d_model  = spec.d_model,
+        n_layers = spec.n_fusion_layers,
+        n_heads  = spec.n_fusion_heads,
+    ).to(device)
+
+    regime_detector = RegimeDetector(
+        input_dim      = spec.regime_detector_input_dim,
+        regime_emb_dim = spec.regime_emb_dim,
+        n_regimes      = spec.n_regimes,
+    ).to(device)
+
+    input_projection = InputProjection(
+        d_model       = spec.d_model,
+        per_asset_dim = spec.per_asset_feature_dim,
+        market_dim    = spec.market_feature_dim,
+        portfolio_dim = spec.portfolio_state_dim,
+        calendar_dim  = spec.calendar_dim,
+        regime_emb_dim = spec.regime_emb_dim,
+    ).to(device)
+
+    return backbone, fusion, regime_detector, input_projection
+
+
+def count_parameters(modules: list[torch.nn.Module]) -> int:
+    return sum(p.numel() for m in modules for p in m.parameters())
+
+
+# ── Synthetic shard helpers ───────────────────────────────────────────────────
+
+def _write_synthetic_shard(path: Path, n_rows: int, feature_dim: int = 280) -> None:
+    """Write a shard of random float32 rows for smoke testing."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    row_struct = struct.Struct(f"<{feature_dim}f")
+    rng = np.random.default_rng(seed=42)
+    with open(path, "wb") as f:
+        for _ in range(n_rows):
+            row = rng.standard_normal(feature_dim).astype(np.float32)
+            f.write(row_struct.pack(*row))
+
+
+def _make_smoke_shards(tmp_dir: Path, seq_len: int) -> tuple[Path, Path]:
+    """Create minimal synthetic shards (train + val) for smoke testing."""
+    n_rows = seq_len + 10  # enough rows for a few sequences
+    for split in ("train", "validation"):
+        shard_path = tmp_dir / split / "SMOKE.f32bin"
+        _write_synthetic_shard(shard_path, n_rows)
+    return tmp_dir / "train", tmp_dir / "validation"
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Self-supervised backbone pre-training")
+    parser.add_argument("--data-dir",       type=Path, default=Path("data/mmaps"))
+    parser.add_argument("--steps",          type=int,  default=200_000)
+    parser.add_argument("--batch-size",     type=int,  default=8)
+    parser.add_argument("--seq-len",        type=int,  default=64)
+    parser.add_argument("--lr",             type=float, default=1e-4)
+    parser.add_argument("--warmup-steps",   type=int,  default=2_000)
+    parser.add_argument("--grad-clip",      type=float, default=1.0)
+    parser.add_argument("--log-every",      type=int,  default=100)
+    parser.add_argument("--eval-every",     type=int,  default=1_000)
+    parser.add_argument("--save-every",     type=int,  default=5_000)
+    parser.add_argument("--workers",        type=int,  default=4)
+    parser.add_argument("--checkpoint-dir", type=Path, default=Path("checkpoints/pretrain"))
+    parser.add_argument("--resume-from",    type=Path, default=None)
+    parser.add_argument("--smoke",          action="store_true",
+                        help="Smoke test: use synthetic data, 2-step run on CPU")
+    args = parser.parse_args()
+
+    # ── Override for smoke test ──
+    if args.smoke:
+        args.steps        = args.steps if args.steps < 200_000 else 3
+        args.batch_size   = 2
+        args.seq_len      = max(args.seq_len, 8)
+        args.log_every    = 1
+        args.eval_every   = 2
+        args.save_every   = 10_000
+        args.warmup_steps = 0
+        args.workers      = 0  # no multiprocessing in smoke mode
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    spec   = DEFAULT_SPEC
+    spec.validate()
+
+    print(f"Device:      {device}")
+    print(f"Steps:       {args.steps}")
+    print(f"Batch size:  {args.batch_size}")
+    print(f"Seq len:     {args.seq_len}")
+
+    # ── Build model ──
+    backbone, fusion, regime_detector, input_projection = build_model(spec, device)
+    n_params = count_parameters([backbone, fusion, regime_detector, input_projection])
+    print(f"Parameters:  {n_params:,}  ({n_params / 1e6:.1f}M)")
+
+    pretrainer = SelfSupervisedPretrainer(
+        backbone         = backbone,
+        fusion           = fusion,
+        regime_detector  = regime_detector,
+        input_projection = input_projection,
+        d_model          = spec.d_model,
+        n_assets         = spec.n_assets,
+        device           = device,
+    )
+
+    # ── Build data loaders ──
+    if args.smoke:
+        with tempfile.TemporaryDirectory() as td:
+            _run_with_smoke_data(pretrainer, args, spec, device, Path(td))
+    else:
+        train_loader, val_loader = build_split_loaders(
+            args.data_dir,
+            seq_len    = args.seq_len,
+            batch_size = args.batch_size,
+            num_workers = args.workers,
+        )
+        cfg = TrainConfig(
+            total_steps     = args.steps,
+            batch_size      = args.batch_size,
+            seq_len         = args.seq_len,
+            lr              = args.lr,
+            warmup_steps    = args.warmup_steps,
+            grad_clip       = args.grad_clip,
+            log_every       = args.log_every,
+            eval_every      = args.eval_every,
+            save_every      = args.save_every,
+            checkpoint_dir  = args.checkpoint_dir,
+        )
+        pretrainer.train(
+            train_loader = train_loader,
+            cfg          = cfg,
+            val_loader   = val_loader,
+            resume_from  = args.resume_from,
+        )
+
+
+def _run_with_smoke_data(
+    pretrainer: SelfSupervisedPretrainer,
+    args: argparse.Namespace,
+    spec: MeridianSpec,
+    device: torch.device,
+    tmp_dir: Path,
+) -> None:
+    """Run smoke training inside a temporary directory."""
+    _make_smoke_shards(tmp_dir, args.seq_len)
+
+    from market_data.dataset_ingestion import enumerate_shards
+
+    train_paths = enumerate_shards(tmp_dir, "train")
+    val_paths   = enumerate_shards(tmp_dir, "validation")
+
+    train_loader = build_dataloader(
+        train_paths, seq_len=args.seq_len, batch_size=args.batch_size,
+        shuffle=True, num_workers=args.workers,
+    )
+    val_loader = build_dataloader(
+        val_paths, seq_len=args.seq_len, batch_size=args.batch_size,
+        shuffle=False, num_workers=args.workers,
+    )
+
+    cfg = TrainConfig(
+        total_steps     = args.steps,
+        batch_size      = args.batch_size,
+        seq_len         = args.seq_len,
+        lr              = args.lr,
+        warmup_steps    = args.warmup_steps,
+        grad_clip       = args.grad_clip,
+        log_every       = args.log_every,
+        eval_every      = args.eval_every,
+        save_every      = args.save_every,
+        checkpoint_dir  = tmp_dir / "checkpoints",
+    )
+
+    pretrainer.train(
+        train_loader = train_loader,
+        cfg          = cfg,
+        val_loader   = val_loader,
+        resume_from  = args.resume_from,
+    )
+    print("Smoke test passed.")
+
+
+if __name__ == "__main__":
+    main()

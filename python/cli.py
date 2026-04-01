@@ -17,7 +17,7 @@ Commands (Section 16 of meridian-spec.md):
                                                           — collect historical data via Rust DataBus
 
   train:
-    meridian train plan --stage <stage>                   — print training plan for a phase
+    meridian train plan --stage <stage>                   — print training plan for a stage
     meridian train marketreader [--plan] --corpus <jsonl> [--epochs N] [--max-documents N]
                                                           — train MarketReader text encoder
     meridian train hmm [--plan] --input <jsonl> --features <list>

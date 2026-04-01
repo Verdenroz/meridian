@@ -1,4 +1,4 @@
-"""Quantization-Aware Training (QAT) — Phase 4 (Section 10.5 of meridian-spec.md).
+"""Quantization-Aware Training (QAT) — Section 10.5 of meridian-spec.md.
 
 Strategy: BitNet b1.58 — absmean ternary weights {-1, 0, +1} with FP16 scaling factors.
 
@@ -15,8 +15,8 @@ Strategy: BitNet b1.58 — absmean ternary weights {-1, 0, +1} with FP16 scaling
     MarketReader, episodic memory projections.
 
   Schedule:
-    - Start from Phase 3 checkpoint
-    - ~50K steps on combined Phase 1+2 data
+    - Start from the meta-learning checkpoint
+    - ~50K steps on combined pre-training + portfolio data
     - Validate: quantized Sharpe within 5% of full-precision Sharpe on test set
 """
 

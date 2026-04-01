@@ -70,11 +70,11 @@ class MeridianSpec:
     deep_out_dim: int = 64
 
     # ── Training ────────────────────────────────────────────────────────────
-    phase1_steps: int = 200_000
-    phase2a_steps: int = 50_000
-    phase2b_steps: int = 30_000
-    phase3_steps: int = 100_000
-    phase4_steps: int = 50_000
+    pretrain_steps: int = 200_000
+    portfolio_steps_return: int = 50_000
+    portfolio_steps_sharpe: int = 30_000
+    metalearning_steps: int = 100_000
+    qat_steps: int = 50_000
     train_batch_size: int = 8
     train_seq_len: int = 64
     learning_rate: float = 1e-4

@@ -345,7 +345,7 @@ class SelfSupervisedPretrainer:
         asset_feats = asset_feats.unsqueeze(2)   # (B, T, 1, 184)
         N = 1
 
-        # Bootstrap regime with zeros for Phase 1
+        # Bootstrap regime with zeros (no HMM prior available during pre-training)
         regime_emb   = torch.zeros(B, 64, device=self.device)
         posteriors   = torch.full((B, 4), 0.25, device=self.device)
         portfolio_s  = torch.zeros(B, 201, device=self.device)
