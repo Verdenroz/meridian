@@ -162,16 +162,16 @@ Override with `--command-template` for a custom collector command.
 
 ### Phase 0: Data Infrastructure (Weeks 1–4)
 
-- [ ] Build DataBus in Rust using finance-query as library dependency
-- [ ] Implement all 42 indicator computations with rolling z-score normalization
-- [ ] Implement RSS feed polling across all 31 sources with deduplication
-- [ ] Implement event detection (diff-based) for insider tx, ratings, filings, macro
-- [ ] Build historical data download pipeline for training corpus
-- [ ] Implement SQLite logging schema
-- [ ] Build feature assembly pipeline (288 per-asset + 96 market-wide)
+- [x] Build DataBus in Rust using finance-query as library dependency
+- [x] Implement all 42 indicator computations with rolling z-score normalization
+- [x] Implement RSS feed polling across all 31 sources with deduplication
+- [x] Implement event detection (diff-based) for insider tx, ratings, filings, macro
+- [x] Build historical data download pipeline for training corpus
+- [x] Build feature assembly pipeline (184 per-asset + 96 market-wide)
+- [x] Implement SQLite logging schema
+- [x] Train BPE tokenizer on financial text corpus
+- [x] Pre-fit 4-state HMM on historical regime data
 - [ ] Verify all finance-query API integrations end-to-end
-- [ ] Train BPE tokenizer on financial text corpus
-- [ ] Pre-fit 4-state HMM on historical regime data
 
 ### Phase 1: Core Model (Weeks 5–10)
 
