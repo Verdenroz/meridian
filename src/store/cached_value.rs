@@ -8,9 +8,11 @@ use chrono::{DateTime, Duration, Utc};
 #[derive(Clone)]
 pub struct CachedValue<T: Clone> {
     pub value: T,
+    #[allow(dead_code)]
     pub last_updated: DateTime<Utc>,
 }
 
+#[allow(dead_code)]
 impl<T: Clone> CachedValue<T> {
     pub fn new(value: T) -> Self {
         Self { value, last_updated: Utc::now() }

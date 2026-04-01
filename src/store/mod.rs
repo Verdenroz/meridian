@@ -49,6 +49,7 @@ pub struct OurRecoPeriod {
 
 /// Extracted SEC filing record.
 #[derive(Clone, Default)]
+#[allow(dead_code)]
 pub struct OurSecFiling {
     pub filing_type: Option<String>,
     pub date: Option<String>,
@@ -56,6 +57,7 @@ pub struct OurSecFiling {
 
 /// Extracted calendar events.
 #[derive(Clone, Default)]
+#[allow(dead_code)]
 pub struct OurCalendar {
     /// Unix timestamp of next earnings date
     pub next_earnings_ts: Option<i64>,
@@ -212,6 +214,7 @@ pub struct RssArticle {
     pub url: String,
     pub source: String,
     pub fetched_at: chrono::DateTime<chrono::Utc>,
+    #[allow(dead_code)]
     pub sentiment: f64,
 }
 
@@ -227,7 +230,9 @@ pub struct MarketSummaryData {
     pub trending_portfolio_overlap: f64,
     pub gainers_momentum: f64,
     pub actives_vol_ratio: f64,
+    #[allow(dead_code)]
     pub market_hours_state: f64,
+    #[allow(dead_code)]
     pub minutes_since_event: f64,
 }
 
@@ -242,8 +247,11 @@ pub struct DataStore {
     pub risk: Arc<DashMap<String, CachedValue<RiskData>>>,
     pub insider_tx: Arc<DashMap<String, CachedValue<Vec<OurInsiderTx>>>>,
     pub analyst: Arc<DashMap<String, CachedValue<AnalystData>>>,
+    #[allow(dead_code)]
     pub sec_filings: Arc<DashMap<String, CachedValue<Vec<OurSecFiling>>>>,
+    #[allow(dead_code)]
     pub splits: Arc<DashMap<String, CachedValue<Vec<Split>>>>,
+    #[allow(dead_code)]
     pub calendar: Arc<DashMap<String, CachedValue<OurCalendar>>>,
     pub event_state: Arc<DashMap<String, EventState>>,
 

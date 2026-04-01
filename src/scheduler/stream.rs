@@ -1,4 +1,4 @@
-use crate::store::{DataStore, FormingBar};
+use crate::store::DataStore;
 use finance_query::streaming::PriceStream;
 use std::sync::Arc;
 use tokio_stream::StreamExt;
@@ -13,7 +13,7 @@ use tokio_stream::StreamExt;
 /// Reconnects with exponential backoff on stream failure.
 pub async fn run_price_stream(store: Arc<DataStore>) {
     let symbols: Vec<&str> = store.symbols.iter().map(|s| s.as_str()).collect();
-    let symbol_strings: Vec<String> = store.symbols.clone();
+    let _symbol_strings: Vec<String> = store.symbols.clone();
 
     let mut backoff_secs = 1u64;
 

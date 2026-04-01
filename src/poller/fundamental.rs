@@ -3,6 +3,7 @@ use finance_query::Ticker;
 use std::sync::Arc;
 
 /// Poll fundamentals for all symbols (runs quarterly; triggered manually or at startup).
+#[allow(dead_code)]
 pub async fn poll_fundamentals(store: &Arc<DataStore>) -> anyhow::Result<()> {
     let symbols = store.symbols.clone();
 
@@ -24,6 +25,7 @@ pub async fn poll_fundamentals(store: &Arc<DataStore>) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(dead_code)]
 async fn poll_one_fundamental(symbol: &str, store: &Arc<DataStore>) {
     let ticker = match Ticker::new(symbol).await {
         Ok(t) => t,

@@ -8,6 +8,7 @@ use serde::Serialize;
 
 /// The 18 discrete financial event categories tracked by the DataBus.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[allow(dead_code)]
 pub enum EventKind {
     InsiderBuy,
     InsiderSell,

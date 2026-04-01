@@ -15,7 +15,7 @@ use serde::Serialize;
 /// One JSONL row: a complete feature vector for one asset at one minute.
 ///
 /// Dimensions match the Python pipeline constants in `python/train/feature_schema.py`:
-///   PER_ASSET_FEATURE_DIM = 288  (224 continuous + 64 text)
+///   PER_ASSET_FEATURE_DIM = 184  (120 continuous + 64 text)
 ///   MARKET_FEATURE_DIM    = 96
 pub struct FeatureRow {
     pub timestamp: DateTime<Utc>,

@@ -1,5 +1,5 @@
 use crate::events::detector::detect_options_unusual;
-use crate::store::{CachedValue, DataStore, OptionsData, RollingStatsStore};
+use crate::store::{CachedValue, DataStore, OptionsData};
 use finance_query::Ticker;
 use std::sync::Arc;
 

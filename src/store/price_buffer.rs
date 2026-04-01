@@ -92,10 +92,12 @@ impl PriceBuffer {
         self.bars.len()
     }
 
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.bars.is_empty()
     }
 
+    #[allow(dead_code)]
     pub fn last(&self) -> Option<&Bar> {
         self.bars.back()
     }
@@ -131,6 +133,7 @@ impl PriceBuffer {
     }
 
     /// Build from a slice of `finance_query::models::Candle` (for historical mode).
+    #[allow(dead_code)]
     pub fn from_candles<C>(candles: &[C]) -> Self
     where
         C: HasOhlcv,
@@ -162,6 +165,7 @@ impl PriceBuffer {
 }
 
 /// Trait implemented for any OHLCV source (used to abstract over finance-query's Candle).
+#[allow(dead_code)]
 pub trait HasOhlcv {
     fn open(&self) -> f64;
     fn high(&self) -> f64;

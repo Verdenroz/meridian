@@ -99,6 +99,7 @@ fn grade_key(g: &OurGradeChange) -> String {
 
 // ── SEC filings ───────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn detect_sec_filing_events(
     symbol: &str,
     old: &[OurSecFiling],
@@ -131,6 +132,7 @@ pub fn detect_sec_filing_events(
         .collect()
 }
 
+#[allow(dead_code)]
 fn filing_key(f: &OurSecFiling) -> String {
     format!(
         "{}{}",
@@ -141,6 +143,7 @@ fn filing_key(f: &OurSecFiling) -> String {
 
 // ── Stock splits ──────────────────────────────────────────────────────────────
 
+#[allow(dead_code)]
 pub fn detect_split_events(symbol: &str, old: &[Split], new: &[Split]) -> Vec<EventRecord> {
     let old_ts: HashSet<i64> = old.iter().map(|s| s.timestamp).collect();
 

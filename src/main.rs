@@ -38,7 +38,6 @@ mod store;
 use anyhow::Context;
 use args::{Args, Mode};
 use clap::Parser;
-use std::sync::Arc;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {

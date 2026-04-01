@@ -1,12 +1,11 @@
-use crate::store::{DataStore, RssFeedState};
+use crate::store::DataStore;
 use chrono::{DateTime, Utc};
-use dashmap::DashMap;
 use std::sync::Arc;
 
 /// Block 7: Cross-Asset Context — 8 features.
 ///
 /// Per-asset features derived from the asset's relationship to the broader market.
-pub fn assemble(symbol: &str, store: &Arc<DataStore>, now: DateTime<Utc>) -> [f32; 8] {
+pub fn assemble(symbol: &str, store: &Arc<DataStore>, _now: DateTime<Utc>) -> [f32; 8] {
     // ── Relative strength (20d) vs SPY ───────────────────────────────────────
     let asset_ret_20d = compute_return_nd(&store.prices, symbol, 20 * 390);
     let spy_ret_20d = compute_return_nd(&store.prices, "SPY", 20 * 390);
