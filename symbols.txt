@@ -1,0 +1,163 @@
+# Meridian trading universe — 100 US-listed assets
+#
+# Composition:
+#   70 large-cap equities  — all optionable, EDGAR-filed, across all 11 GICS sectors
+#   30 ETFs                — broad market, sector, factor, bond, commodity, volatility
+#
+# Selection criteria (equities):
+#   - S&P 500 constituent or equivalent market cap (>$10B)
+#   - Liquid options chain (> 500 OI on front-month ATM)
+#   - EDGAR filer (10-K/10-Q available)
+#   - At least 5 years of 1-minute OHLCV history
+#
+# Sector distribution (70 equities across 11 GICS sectors):
+#   Information Technology  (12)
+#   Financials              (9)
+#   Health Care             (9)
+#   Industrials             (8)
+#   Consumer Discretionary  (7)
+#   Communication Services  (6)
+#   Consumer Staples        (5)
+#   Energy                  (4)
+#   Materials               (4)
+#   Real Estate             (3)
+#   Utilities               (3)
+
+# ── Information Technology (12) ──────────────────────────────────────────────
+AAPL    # Apple — largest US equity by market cap
+MSFT    # Microsoft — cloud, AI infrastructure
+NVDA    # NVIDIA — GPU / AI accelerators
+AVGO    # Broadcom — semiconductors, networking
+ORCL    # Oracle — cloud databases, ERP
+CRM     # Salesforce — enterprise SaaS
+AMD     # AMD — CPUs, GPUs (NVIDIA competitor)
+INTC    # Intel — legacy semiconductor bellwether
+QCOM    # Qualcomm — mobile chips, 5G
+TXN     # Texas Instruments — analog/embedded semiconductors
+NOW     # ServiceNow — IT workflow automation
+AMAT    # Applied Materials — semiconductor equipment
+
+# ── Health Care (9) ──────────────────────────────────────────────────────────
+LLY     # Eli Lilly — GLP-1 drugs, oncology
+UNH     # UnitedHealth — largest US health insurer
+JNJ     # Johnson & Johnson — diversified pharma/medtech
+ABBV    # AbbVie — immunology (Humira successor pipeline)
+MRK     # Merck — oncology (Keytruda), vaccines
+TMO     # Thermo Fisher — lab instruments, life sciences tools
+ABT     # Abbott Labs — diagnostics, medical devices
+ISRG    # Intuitive Surgical — robotic surgery
+AMGN    # Amgen — large-cap biotech, biosimilars
+
+# ── Financials (9) ───────────────────────────────────────────────────────────
+BRK-B   # Berkshire Hathaway — diversified conglomerate/insurer
+JPM     # JPMorgan Chase — largest US bank
+V       # Visa — global payment network
+MA      # Mastercard — global payment network
+BAC     # Bank of America — major money-center bank
+GS      # Goldman Sachs — investment banking, trading
+MS      # Morgan Stanley — wealth management, IB
+BLK     # BlackRock — largest asset manager
+SPGI    # S&P Global — financial data, ratings, indices
+
+# ── Consumer Discretionary (7) ───────────────────────────────────────────────
+AMZN    # Amazon — e-commerce, AWS
+TSLA    # Tesla — EVs, energy storage
+HD      # Home Depot — home improvement retail
+MCD     # McDonald's — global QSR franchisor
+NKE     # Nike — athletic footwear/apparel
+LOW     # Lowe's — home improvement (HD comp)
+BKNG    # Booking Holdings — online travel
+
+# ── Communication Services (6) ───────────────────────────────────────────────
+META    # Meta — social media, AR/VR
+GOOGL   # Alphabet — search, cloud, YouTube
+NFLX    # Netflix — streaming, ad-supported tier
+DIS     # Disney — media, streaming, theme parks
+T       # AT&T — telecom, fiber
+CMCSA   # Comcast — cable, NBCUniversal
+
+# ── Industrials (8) ──────────────────────────────────────────────────────────
+CAT     # Caterpillar — heavy equipment, mining
+HON     # Honeywell — aerospace, building automation
+UPS     # UPS — parcel delivery logistics
+BA      # Boeing — commercial/defense aerospace
+GE      # GE Aerospace — jet engines, defense
+RTX     # RTX (Raytheon) — defense, aerospace systems
+DE      # Deere & Company — agriculture/construction equipment
+LMT     # Lockheed Martin — defense prime contractor
+
+# ── Consumer Staples (5) ─────────────────────────────────────────────────────
+PG      # Procter & Gamble — household/personal care
+KO      # Coca-Cola — global beverage
+PEP     # PepsiCo — beverages + snacks (Frito-Lay)
+WMT     # Walmart — largest US retailer
+COST    # Costco — membership warehouse, high-frequency shopper data
+
+# ── Energy (4) ───────────────────────────────────────────────────────────────
+XOM     # ExxonMobil — integrated oil & gas
+CVX     # Chevron — integrated oil & gas
+COP     # ConocoPhillips — E&P pure-play
+OXY     # Occidental Petroleum — E&P, Berkshire-backed, active options
+
+# ── Materials (4) ────────────────────────────────────────────────────────────
+LIN     # Linde — industrial gases (global leader)
+FCX     # Freeport-McMoRan — copper, gold mining
+NEM     # Newmont — largest gold miner
+SHW     # Sherwin-Williams — paints, coatings
+
+# ── Real Estate (3) ──────────────────────────────────────────────────────────
+PLD     # Prologis — industrial/logistics REITs
+AMT     # American Tower — cell tower REIT
+WELL    # Welltower — healthcare/senior housing REIT
+
+# ── Utilities (3) ────────────────────────────────────────────────────────────
+NEE     # NextEra Energy — largest US utility + wind/solar
+SO      # Southern Company — regulated electric utility
+DUK     # Duke Energy — regulated electric, Carolinas/Midwest
+
+# ── ETFs (30) ────────────────────────────────────────────────────────────────
+
+# Broad market
+SPY     # S&P 500 (SPDR) — primary benchmark
+QQQ     # Nasdaq-100 (Invesco) — mega-cap tech
+IWM     # Russell 2000 (iShares) — small-cap exposure
+VTI     # Total US market (Vanguard)
+MDY     # S&P 400 Mid-Cap (SPDR)
+
+# Sector ETFs (SPDR Select Sector suite — 11 sectors)
+XLK     # Technology
+XLV     # Health Care
+XLF     # Financials
+XLY     # Consumer Discretionary
+XLC     # Communication Services
+XLI     # Industrials
+XLP     # Consumer Staples
+XLE     # Energy
+XLB     # Materials
+XLRE    # Real Estate
+XLU     # Utilities
+
+# Factor / style
+VTV     # Value (Vanguard)
+VUG     # Growth (Vanguard)
+QUAL    # Quality factor (iShares MSCI USA Quality)
+MTUM    # Momentum factor (iShares MSCI USA Momentum)
+USMV    # Min volatility (iShares MSCI USA Min Vol)
+
+# Fixed income
+TLT     # 20+ Year Treasury (iShares)
+IEF     # 7-10 Year Treasury (iShares)
+HYG     # High-yield corporate bonds (iShares)
+LQD     # Investment-grade corporate bonds (iShares)
+
+# Commodities & alternatives
+GLD     # Gold (SPDR)
+USO     # Crude oil (United States Oil Fund)
+
+# Volatility
+VXX     # Short-term VIX futures (iPath)
+
+# International
+EFA     # Developed markets ex-US (iShares MSCI EAFE)
+EEM     # Emerging markets (iShares MSCI EM)
+
