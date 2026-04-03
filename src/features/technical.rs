@@ -7,11 +7,18 @@ use std::sync::Arc;
 /// Each indicator is normalized to a consistent range. Bounded oscillators
 /// ([0,100] or [-100,0]) use fixed affine transforms. Unbounded indicators
 /// (MACD, ROC, OBV slope, etc.) use rolling z-scores via `RollingStatsStore`.
-pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbol: &str) -> [f32; 42] {
+pub fn assemble(
+    buf: Option<&PriceBuffer>,
+    stats: &Arc<RollingStatsStore>,
+    symbol: &str,
+) -> [f32; 42] {
     let Some(buf) = buf else { return [0.0f32; 42] };
 
-    // Need at least 200 bars for SMA(200); shorter histories produce partial results.
-    let min_bars = 5;
+    // finance-query panics (does not return Err) on short histories:
+    //   stochastic(14):     needs 15 bars (period+1)
+    //   stochastic_rsi(14,14): needs 29 bars (rsi_period+stoch_period+1)
+    // Guard at 30 to cover both.
+    let min_bars = 30;
     if buf.len() < min_bars {
         return [0.0f32; 42];
     }
@@ -50,17 +57,15 @@ pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbo
         .unwrap_or(last * 0.01)
         .max(1e-8);
 
-    let ma_norm = |ma: f64| -> f32 {
-        ((last - ma) / atr14).clamp(-5.0, 5.0) as f32
-    };
+    let ma_norm = |ma: f64| -> f32 { ((last - ma) / atr14).clamp(-5.0, 5.0) as f32 };
 
     // ── Moving Averages (8 features) ─────────────────────────────────────────
-    let sma20  = last_val(indicators::sma(&closes, 20),  last);
-    let sma50  = last_val(indicators::sma(&closes, 50),  last);
+    let sma20 = last_val(indicators::sma(&closes, 20), last);
+    let sma50 = last_val(indicators::sma(&closes, 50), last);
     let sma200 = last_val(indicators::sma(&closes, 200), last);
-    let ema12  = last_val(indicators::ema(&closes, 12),  last);
+    let ema12 = last_val(indicators::ema(&closes, 12), last);
     let dema20 = last_val(indicators::dema(&closes, 20).unwrap_or_default(), last);
-    let hma20  = last_val(indicators::hma(&closes, 20).unwrap_or_default(),  last);
+    let hma20 = last_val(indicators::hma(&closes, 20).unwrap_or_default(), last);
     let alma20 = last_val(
         indicators::alma(&closes, 20, 0.85, 6.0).unwrap_or_default(),
         last,
@@ -71,10 +76,7 @@ pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbo
     );
 
     // ── Momentum (11 features) ───────────────────────────────────────────────
-    let rsi14 = last_val(
-        indicators::rsi(&closes, 14).unwrap_or_default(),
-        50.0,
-    );
+    let rsi14 = last_val(indicators::rsi(&closes, 14).unwrap_or_default(), 50.0);
 
     let macd = indicators::macd(&closes, 12, 26, 9).ok();
     let macd_hist = macd
@@ -83,11 +85,20 @@ pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbo
         .unwrap_or(0.0);
 
     let stoch = indicators::stochastic(&highs, &lows, &closes, 14, 3, 3).ok();
-    let stoch_k = stoch.as_ref().and_then(|s| s.k.last().and_then(|x| *x)).unwrap_or(50.0);
-    let stoch_d = stoch.as_ref().and_then(|s| s.d.last().and_then(|x| *x)).unwrap_or(50.0);
+    let stoch_k = stoch
+        .as_ref()
+        .and_then(|s| s.k.last().and_then(|x| *x))
+        .unwrap_or(50.0);
+    let stoch_d = stoch
+        .as_ref()
+        .and_then(|s| s.d.last().and_then(|x| *x))
+        .unwrap_or(50.0);
 
     let srsi = indicators::stochastic_rsi(&closes, 14, 14, 3, 3).ok();
-    let srsi_k = srsi.as_ref().and_then(|s| s.k.last().and_then(|x| *x)).unwrap_or(0.5);
+    let srsi_k = srsi
+        .as_ref()
+        .and_then(|s| s.k.last().and_then(|x| *x))
+        .unwrap_or(0.5);
 
     let cci20 = last_val(
         indicators::cci(&highs, &lows, &closes, 20).unwrap_or_default(),
@@ -110,8 +121,14 @@ pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbo
 
     // ── Volatility (5 features) ──────────────────────────────────────────────
     let bb = indicators::bollinger_bands(&closes, 20, 2.0).ok();
-    let bb_upper = bb.as_ref().and_then(|b| b.upper.last().and_then(|x| *x)).unwrap_or(last * 1.02);
-    let bb_lower = bb.as_ref().and_then(|b| b.lower.last().and_then(|x| *x)).unwrap_or(last * 0.98);
+    let bb_upper = bb
+        .as_ref()
+        .and_then(|b| b.upper.last().and_then(|x| *x))
+        .unwrap_or(last * 1.02);
+    let bb_lower = bb
+        .as_ref()
+        .and_then(|b| b.lower.last().and_then(|x| *x))
+        .unwrap_or(last * 0.98);
     let bb_pct_b = if bb_upper > bb_lower {
         (last - bb_lower) / (bb_upper - bb_lower)
     } else {
@@ -119,8 +136,14 @@ pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbo
     };
 
     let kc = indicators::keltner_channels(&highs, &lows, &closes, 20, 14, 1.5).ok();
-    let kc_upper = kc.as_ref().and_then(|k| k.upper.last().and_then(|x| *x)).unwrap_or(last * 1.02);
-    let kc_lower = kc.as_ref().and_then(|k| k.lower.last().and_then(|x| *x)).unwrap_or(last * 0.98);
+    let kc_upper = kc
+        .as_ref()
+        .and_then(|k| k.upper.last().and_then(|x| *x))
+        .unwrap_or(last * 1.02);
+    let kc_lower = kc
+        .as_ref()
+        .and_then(|k| k.lower.last().and_then(|x| *x))
+        .unwrap_or(last * 0.98);
     let kc_pos = if kc_upper > kc_lower {
         (last - kc_lower) / (kc_upper - kc_lower)
     } else {
@@ -128,8 +151,14 @@ pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbo
     };
 
     let dc = indicators::donchian_channels(&highs, &lows, 20).ok();
-    let dc_upper = dc.as_ref().and_then(|d| d.upper.last().and_then(|x| *x)).unwrap_or(last);
-    let dc_lower = dc.as_ref().and_then(|d| d.lower.last().and_then(|x| *x)).unwrap_or(last);
+    let dc_upper = dc
+        .as_ref()
+        .and_then(|d| d.upper.last().and_then(|x| *x))
+        .unwrap_or(last);
+    let dc_lower = dc
+        .as_ref()
+        .and_then(|d| d.lower.last().and_then(|x| *x))
+        .unwrap_or(last);
     let dc_pos = if dc_upper > dc_lower {
         (last - dc_lower) / (dc_upper - dc_lower)
     } else {
@@ -174,14 +203,26 @@ pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbo
     );
     let aroon = indicators::aroon(&highs, &lows, 25).ok();
     let aroon_osc = {
-        let up = aroon.as_ref().and_then(|a| a.aroon_up.last().and_then(|x| *x)).unwrap_or(50.0);
-        let dn = aroon.as_ref().and_then(|a| a.aroon_down.last().and_then(|x| *x)).unwrap_or(50.0);
+        let up = aroon
+            .as_ref()
+            .and_then(|a| a.aroon_up.last().and_then(|x| *x))
+            .unwrap_or(50.0);
+        let dn = aroon
+            .as_ref()
+            .and_then(|a| a.aroon_down.last().and_then(|x| *x))
+            .unwrap_or(50.0);
         up - dn
     };
 
     let ichi = indicators::ichimoku(&highs, &lows, &closes, 9, 26, 26, 26).ok();
-    let span_a = ichi.as_ref().and_then(|i| i.leading_span_a.last().and_then(|x| *x)).unwrap_or(last);
-    let span_b = ichi.as_ref().and_then(|i| i.leading_span_b.last().and_then(|x| *x)).unwrap_or(last);
+    let span_a = ichi
+        .as_ref()
+        .and_then(|i| i.leading_span_a.last().and_then(|x| *x))
+        .unwrap_or(last);
+    let span_b = ichi
+        .as_ref()
+        .and_then(|i| i.leading_span_b.last().and_then(|x| *x))
+        .unwrap_or(last);
     let cloud_top = span_a.max(span_b);
     let cloud_bot = span_a.min(span_b);
     let ichi_pos: f32 = if last > cloud_top {
@@ -213,15 +254,27 @@ pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbo
         0.0,
     );
     let bbp = indicators::bull_bear_power(&highs, &lows, &closes, 13).ok();
-    let bull_power = bbp.as_ref().and_then(|b| b.bull_power.last().and_then(|x| *x)).unwrap_or(0.0);
-    let bear_power = bbp.as_ref().and_then(|b| b.bear_power.last().and_then(|x| *x)).unwrap_or(0.0);
+    let bull_power = bbp
+        .as_ref()
+        .and_then(|b| b.bull_power.last().and_then(|x| *x))
+        .unwrap_or(0.0);
+    let bear_power = bbp
+        .as_ref()
+        .and_then(|b| b.bear_power.last().and_then(|x| *x))
+        .unwrap_or(0.0);
 
     let er = indicators::elder_ray(&highs, &lows, &closes, 13).ok();
-    let er_bull = er.as_ref().and_then(|e| e.bull_power.last().and_then(|x| *x)).unwrap_or(0.0);
-    let er_bear = er.as_ref().and_then(|e| e.bear_power.last().and_then(|x| *x)).unwrap_or(0.0);
+    let er_bull = er
+        .as_ref()
+        .and_then(|e| e.bull_power.last().and_then(|x| *x))
+        .unwrap_or(0.0);
+    let er_bear = er
+        .as_ref()
+        .and_then(|e| e.bear_power.last().and_then(|x| *x))
+        .unwrap_or(0.0);
 
-    let ad_vals = indicators::accumulation_distribution(&highs, &lows, &closes, &volumes)
-        .unwrap_or_default();
+    let ad_vals =
+        indicators::accumulation_distribution(&highs, &lows, &closes, &volumes).unwrap_or_default();
     let ad_slope = compute_slope(&ad_vals, 5);
 
     // ── Assemble [f32; 42] ───────────────────────────────────────────────────
