@@ -313,9 +313,9 @@ class InputProjection(nn.Module):
         # VSN: apply per-asset with same regime embedding
         regime_exp = regime_emb.unsqueeze(1).expand(-1, N, -1)  # (B, N, 64)
         asset_gated = self.vsn(
-            asset_features.view(B * N, -1),
-            regime_exp.contiguous().view(B * N, -1),
-        ).view(B, N, -1)                                         # (B, N, 184)
+            asset_features.reshape(B * N, -1),
+            regime_exp.reshape(B * N, -1),
+        ).reshape(B, N, -1)                                      # (B, N, 184)
 
         asset_tok     = self.asset_norm(self.asset_proj(asset_gated))          # (B, N, D)
         market_tok    = self.market_norm(self.market_proj(market_features))    # (B, D)
