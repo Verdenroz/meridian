@@ -19,10 +19,16 @@ Usage:
 
 from __future__ import annotations
 
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load .env so FRED_API_KEY and other secrets are available to subprocesses
+load_dotenv()
 
 from train.feature_schema import (
     CALENDAR_FEATURE_DIM,

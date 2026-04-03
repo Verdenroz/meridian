@@ -8,7 +8,9 @@ version = "0.1.0"
 description = "Pre-training and data setup foundation for the Meridian architecture."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "python-dotenv>=1.2.2",
+]
 
 [project.optional-dependencies]
 train = [
