@@ -1,6 +1,6 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
-build-backend = "setuptools.build_meta"
+requires = ["maturin>=1.7"]
+build-backend = "maturin"
 
 [project]
 name = "meridian-training"
@@ -31,10 +31,8 @@ dev = [
 [project.scripts]
 meridian = "cli:main"
 
-[tool.setuptools]
-package-dir = {"" = "python"}
-py-modules = ["cli"]
-
-[tool.setuptools.packages.find]
-where = ["python"]
+[tool.maturin]
+python-source = "python"
+module-name = "meridian_py"
+features = ["pyo3/extension-module"]
 
