@@ -127,7 +127,8 @@ def build_portfolio_loader(
     num_workers: int = 0,
 ) -> DataLoader:
     ds = MultiAssetShardDataset(shard_paths, seq_len=seq_len, shuffle=shuffle)
-    return DataLoader(ds, batch_size=batch_size, num_workers=num_workers, pin_memory=False)
+    return DataLoader(ds, batch_size=batch_size, num_workers=num_workers,
+                      pin_memory=torch.cuda.is_available())
 
 
 # ── Training config ───────────────────────────────────────────────────────────
@@ -144,10 +145,13 @@ class PortfolioTrainConfig:
     lambda_turn: float = 0.1
     lambda_vol: float = 0.05
     dsr_eta: float = 0.01
-    log_every: int = 100
+    log_every: int = 10
     eval_every: int = 1_000
     save_every: int = 5_000
     checkpoint_dir: Path = field(default_factory=lambda: Path("checkpoints/portfolio"))
+    bptt_chunk: int = 16           # truncated BPTT chunk length (0 = full seq)
+    gradient_checkpointing: bool = False
+    compile: bool = False          # torch.compile the backbone (2-4x faster, ~60s warmup)
 
     @property
     def best_path(self) -> Path:
@@ -195,9 +199,13 @@ class PortfolioTrainer:
         self,
         features: torch.Tensor,  # (B, N, T, F=280)
         head: str,
+        cfg: "PortfolioTrainConfig | None" = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """
         Run the full model forward pass over a T-step sequence.
+
+        Uses bf16 autocast to halve activation memory and truncated BPTT
+        (cfg.bptt_chunk > 0) to cap the gradient graph length.
 
         Returns:
             weights:  (B, T, N) — allocation weights at each step
@@ -205,6 +213,7 @@ class PortfolioTrainer:
         """
         features = features.to(self.device)
         B, N, T, Fd = features.shape
+        bptt_chunk = cfg.bptt_chunk if cfg is not None else 0
 
         # Split per-asset (184) and market (96) blocks
         asset_feats  = features[..., :184]  # (B, N, T, 184)
@@ -225,33 +234,42 @@ class PortfolioTrainer:
 
         all_weights: list[torch.Tensor] = []
 
-        for t in range(T):
-            af_t  = asset_feats[:, :, t, :]   # (B, N, 184)
-            mf_t  = mkt_mean[:, t, :]          # (B, 96)
+        use_amp = self.device.type == "cuda"
+        autocast_ctx = torch.autocast("cuda", dtype=torch.bfloat16) if use_amp else torch.autocast("cpu", enabled=False)
 
-            asset_tok, mkt_tok, port_tok, _ = self.input_projection(
-                af_t, mf_t, portfolio_s, calendar, regime_emb
-            )
-            out, states = self.backbone(asset_tok, regime_emb, posteriors, states)
-            fused, mkt_out = self.fusion(out, mkt_tok, port_tok, episodic, sector_ids)
+        with autocast_ctx:
+            for t in range(T):
+                af_t  = asset_feats[:, :, t, :]   # (B, N, 184)
+                mf_t  = mkt_mean[:, t, :]          # (B, 96)
 
-            # Portfolio head
-            if head == "return":
-                w_t = self.head_r(fused)   # (B, N)
-            else:
-                w_t = self.head_s(fused)   # (B, N)
+                asset_tok, mkt_tok, port_tok, _ = self.input_projection(
+                    af_t, mf_t, portfolio_s, calendar, regime_emb
+                )
+                out, states = self.backbone(asset_tok, regime_emb, posteriors, states)
+                fused, mkt_out = self.fusion(out, mkt_tok, port_tok, episodic, sector_ids)
 
-            all_weights.append(w_t)
+                # Portfolio head
+                if head == "return":
+                    w_t = self.head_r(fused)   # (B, N)
+                else:
+                    w_t = self.head_s(fused)   # (B, N)
 
-            # Update portfolio state: [weights (100), unrealized P&L (100), value (1)] = 201
-            # Pad weights to full 100-slot capacity when N < 100 (e.g. smoke test)
-            n_full = self.spec.n_assets  # 100
-            w_padded = F.pad(w_t.detach(), (0, n_full - N))  # (B, 100)
-            portfolio_s = torch.cat([
-                w_padded,                                       # weights (100)
-                torch.zeros(B, n_full, device=self.device),    # unrealised P&L (100)
-                torch.zeros(B, 1, device=self.device),         # portfolio value (1)
-            ], dim=-1)  # (B, 201)
+                all_weights.append(w_t)
+
+                # Update portfolio state: [weights (100), unrealized P&L (100), value (1)] = 201
+                # Pad weights to full 100-slot capacity when N < 100 (e.g. smoke test)
+                n_full = self.spec.n_assets  # 100
+                w_padded = F.pad(w_t.detach(), (0, n_full - N))  # (B, 100)
+                portfolio_s = torch.cat([
+                    w_padded,                                       # weights (100)
+                    torch.zeros(B, n_full, device=self.device),    # unrealised P&L (100)
+                    torch.zeros(B, 1, device=self.device),         # portfolio value (1)
+                ], dim=-1)  # (B, 201)
+
+                # Truncated BPTT: detach GDN state every bptt_chunk steps so the
+                # backward graph covers at most bptt_chunk timesteps at a time.
+                if bptt_chunk > 0 and (t + 1) % bptt_chunk == 0:
+                    states = [s.detach() for s in states]
 
         weights = torch.stack(all_weights, dim=1)  # (B, T, N)
 
@@ -295,7 +313,7 @@ class PortfolioTrainer:
                     break
                 # features: (B, N, T, F) after collation
                 features = features.permute(0, 2, 1, 3)  # (B, N, T, F)
-                weights, returns = self._forward(features, cfg.head)
+                weights, returns = self._forward(features, cfg.head, cfg)
                 if cfg.head == "return":
                     loss_dict = return_head_loss(weights, returns,
                                                  lambda_turn=cfg.lambda_turn,
@@ -318,6 +336,9 @@ class PortfolioTrainer:
         val_loader: DataLoader | None = None,
         resume_from: Path | None = None,
     ) -> None:
+        if cfg.gradient_checkpointing:
+            self.backbone.enable_gradient_checkpointing()
+
         params = self._all_params(cfg.head)
         optimizer = torch.optim.AdamW(params, lr=cfg.lr, weight_decay=0.01)
         scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -346,6 +367,13 @@ class PortfolioTrainer:
                 best_val_loss = ckpt.best_val_loss
             print(f"Resumed from step {start_step}  best_val={best_val_loss:.4f}")
 
+        # Compile after checkpoint loading so state dict keys match (uncompiled backbone
+        # has plain keys; torch.compile wraps them under _orig_mod.* prefix)
+        if cfg.compile:
+            print("Compiling backbone (one-time, ~60s)...")
+            self.backbone = torch.compile(self.backbone, mode="reduce-overhead")
+            print("Compiled.")
+
         if cfg.head == "sharpe":
             for p in (list(self.backbone.parameters())
                       + list(self.fusion.parameters())
@@ -369,7 +397,7 @@ class PortfolioTrainer:
             # DataLoader collates (N, T, F) items → (B, N, T, F); ready for forward
             optimizer.zero_grad(set_to_none=True)
 
-            weights, returns = self._forward(features, cfg.head)
+            weights, returns = self._forward(features, cfg.head, cfg)
 
             if cfg.head == "return":
                 loss_dict = return_head_loss(
@@ -407,8 +435,11 @@ class PortfolioTrainer:
         print(f"Training complete at step {step}. Best val: {best_val_loss:.4f}")
 
     def _model_state(self) -> dict:
+        # torch.compile wraps the backbone under _orig_mod; unwrap so checkpoints
+        # use plain key names and can be loaded by an uncompiled model.
+        backbone_mod = getattr(self.backbone, "_orig_mod", self.backbone)
         return {
-            "backbone":         self.backbone.state_dict(),
+            "backbone":         backbone_mod.state_dict(),
             "fusion":           self.fusion.state_dict(),
             "regime_detector":  self.regime_detector.state_dict(),
             "input_projection": self.input_projection.state_dict(),
@@ -476,6 +507,12 @@ def main() -> None:
     parser.add_argument("--resume-backbone",  type=Path, default=None,
                         help="Pre-trained backbone checkpoint to load")
     parser.add_argument("--workers",          type=int,  default=0)
+    parser.add_argument("--gradient-checkpointing", action="store_true",
+                        help="Recompute activations during backward to save VRAM. "
+                             "Required on 24GB GPUs.")
+    parser.add_argument("--compile",          action="store_true",
+                        help="torch.compile the backbone for faster training (~60s warmup, "
+                             "then 2-4x faster per step). Recommended on A100/H100.")
     parser.add_argument("--smoke",            action="store_true")
     args = parser.parse_args()
 
@@ -536,6 +573,8 @@ def main() -> None:
             head=args.head, total_steps=args.steps,
             batch_size=args.batch_size, seq_len=args.seq_len,
             lr=args.lr, checkpoint_dir=args.checkpoint_dir,
+            gradient_checkpointing=args.gradient_checkpointing,
+            compile=args.compile,
         )
         trainer.train(train_loader, cfg, val_loader,
                       resume_from=args.resume_backbone)

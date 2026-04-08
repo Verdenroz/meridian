@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as grad_checkpoint
 
 
 # ── Primitives ───────────────────────────────────────────────────────────────
@@ -116,12 +119,14 @@ class RAGDNLayer(nn.Module):
         d_v: int = 192,
         regime_emb_dim: int = 64,
         dropout: float = 0.1,
+        gradient_checkpointing: bool = False,
     ) -> None:
         super().__init__()
         self.n_heads  = n_heads
         self.d_head   = d_head
         self.d_v      = d_v
         self.d_model  = d_model
+        self.gradient_checkpointing = gradient_checkpointing
 
         self.q_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
         self.k_proj = nn.Linear(d_model, n_heads * d_head, bias=False)
@@ -135,6 +140,10 @@ class RAGDNLayer(nn.Module):
 
         self.norm = RMSNorm(d_model)
         self.drop = nn.Dropout(dropout)
+
+        # Optional hook for Tier 1 surprise-gated adaptation (Section 8.1).
+        # Signature: (surprise: Tensor[B], beta: Tensor[B,H,1,1]) -> Tensor[B,H,1,1]
+        self.surprise_hook: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None
 
     def init_state(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """Zero initial state (B, n_heads, d_head, d_v)."""
@@ -169,6 +178,12 @@ class RAGDNLayer(nn.Module):
 
         # Update state: S_new = α·S + β · k ⊗ (v − α·S^T k)
         correction = v - alpha.squeeze(-1) * s_q        # (B, H, Dv)
+
+        # Tier 1 adaptation: modulate β by surprise magnitude
+        if self.surprise_hook is not None:
+            surprise_t = correction.detach().pow(2).sum(dim=(-2, -1))  # (B,)
+            beta = self.surprise_hook(surprise_t, beta)
+
         outer = torch.einsum("bhd,bhc->bhdc", k, correction)  # (B, H, Dh, Dv)
         new_state = alpha * state + beta * outer         # (B, H, Dh, Dv)
 
@@ -379,16 +394,33 @@ class RAGDNBackbone(nn.Module):
         self.d_head  = d_head
         self.d_v     = d_v
 
-    def init_state(self, batch_size: int, device: torch.device) -> list[torch.Tensor]:
-        """Create zero GDN states for a new sequence."""
-        return [b.init_state(batch_size, device) for b in self.gdn_blocks]
+    def enable_gradient_checkpointing(self) -> None:
+        """Enable activation checkpointing on forward() to reduce VRAM.
 
-    def forward(
+        When enabled, intermediate activations within each backbone call are
+        discarded during the forward pass and recomputed during backprop.
+        Reduces peak VRAM from O(T*N) to O(N) at ~33% extra compute cost.
+        """
+        self._gradient_checkpointing = True
+
+    def _checkpointed_forward(
         self,
-        x: torch.Tensor,             # (B, T, D)
-        regime_emb: torch.Tensor,    # (B, regime_emb_dim)
-        posteriors: torch.Tensor,    # (B, n_regimes)
-        states: list[torch.Tensor],  # len = n_gdn_blocks, each (B, H, Dh, Dv)
+        x: torch.Tensor,
+        regime_emb: torch.Tensor,
+        posteriors: torch.Tensor,
+        *flat_states: torch.Tensor,
+    ) -> tuple[torch.Tensor, ...]:
+        """Flat-tensor wrapper for use with torch.utils.checkpoint."""
+        states = list(flat_states)
+        x_out, new_states = self._forward_impl(x, regime_emb, posteriors, states)
+        return (x_out, *new_states)
+
+    def _forward_impl(
+        self,
+        x: torch.Tensor,
+        regime_emb: torch.Tensor,
+        posteriors: torch.Tensor,
+        states: list[torch.Tensor],
     ) -> tuple[torch.Tensor, list[torch.Tensor]]:
         gdn_idx = fmoe_idx = 0
         new_states: list[torch.Tensor] = []
@@ -401,3 +433,26 @@ class RAGDNBackbone(nn.Module):
                 new_states.append(new_s)
                 gdn_idx += 1
         return x, new_states
+
+    def init_state(self, batch_size: int, device: torch.device) -> list[torch.Tensor]:
+        """Create zero GDN states for a new sequence."""
+        return [b.init_state(batch_size, device) for b in self.gdn_blocks]
+
+    def forward(
+        self,
+        x: torch.Tensor,             # (B, T, D)
+        regime_emb: torch.Tensor,    # (B, regime_emb_dim)
+        posteriors: torch.Tensor,    # (B, n_regimes)
+        states: list[torch.Tensor],  # len = n_gdn_blocks, each (B, H, Dh, Dv)
+    ) -> tuple[torch.Tensor, list[torch.Tensor]]:
+        use_ckpt = getattr(self, "_gradient_checkpointing", False) and self.training
+        if use_ckpt:
+            out = grad_checkpoint(
+                self._checkpointed_forward,
+                x, regime_emb, posteriors, *states,
+                use_reentrant=False,
+            )
+            x_out = out[0]
+            new_states = list(out[1:])
+            return x_out, new_states
+        return self._forward_impl(x, regime_emb, posteriors, states)
