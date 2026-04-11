@@ -32,48 +32,50 @@ For the full architectural specification, see [`meridian-spec.md`](meridian-spec
 │                                                  # detects events, assembles feature vectors
 ├── c/
 │   ├── kernels/
-│   │   └── ternary_neon.c                         # TODO: ARM NEON ternary inference kernel
+│   │   └── ternary_neon.c                         # ARM NEON ternary inference kernel (stub)
 │   └── runtime/
-│       └── inference_runtime.c                    # TODO: Pi 5 inference runtime glue
+│       └── inference_runtime.c                    # Pi 5 inference runtime glue (stub)
 ├── python/
-│   ├── cli.py                                     # `meridian` CLI entrypoint
+│   ├── cli.py                                     # `meridian` CLI entrypoint (stub)
 │   ├── train/
 │   │   ├── feature_schema.py                      # Feature dimension contracts (288/96)
 │   │   ├── spec.py                                # Architecture hyperparameter contracts
 │   │   ├── splits.py                              # Deterministic train/validation/test splits
-│   │   └── qat.py                                 # TODO: quantization-aware training
+│   │   ├── pretrain.py                            # Phase 1 self-supervised pre-training entry point
+│   │   ├── portfolio_train.py                     # Phase 2 portfolio optimization training (Meridian-R/S)
+│   │   └── qat.py                                 # Phase 4 quantization-aware training (stub)
 │   ├── market_data/
 │   │   ├── environment.py                         # H100 environment validation
 │   │   ├── workspace.py                           # Data workspace management
 │   │   ├── pipeline.py                            # Data pipeline orchestration
-│   │   ├── feature_assembly.py                    # TODO: 288-dim per-asset + 96-dim market assembler
+│   │   ├── feature_assembly.py                    # 184-dim per-asset + 96-dim market assembler (stub)
 │   │   ├── dataset_ingestion.py                   # JSONL → memory-mapped shards
 │   │   ├── finance_query_collector.py             # Historical data collector (Rust binary bridge)
 │   │   ├── marketreader.py                        # MarketReader text encoder (3-tier: headline/summary/deep)
-│   │   └── regime_hmm.py                         # 4-state HMM regime pre-fitting
+│   │   └── regime_hmm.py                         # 4-state HMM regime pre-fitting (stub)
 │   ├── core/
 │   │   ├── regime_aware_backbone.py               # RA-GDN blocks + regime-routed FMoE
-│   │   ├── event_encoder.py                       # TODO: EventEncoder (18 event types → D-dim tokens)
+│   │   ├── event_encoder.py                       # EventEncoder: 18 event types → D-dim tokens with time decay
 │   │   ├── self_supervised_pretraining.py         # Return/volatility/correlation predictive objectives
 │   │   ├── temporal_cascade.py                    # Hourly/daily/weekly GDN stack with surprise injection
 │   │   ├── cross_asset_fusion.py                  # 2-layer MHA with sector bias prior (110+ tokens)
 │   │   └── episodic_memory.py                     # FAISS-backed financial episodic memory
 │   ├── optimization/
-│   │   ├── portfolio_heads.py                     # TODO: Meridian-R + Meridian-S output heads
-│   │   └── losses.py                              # TODO: DSR loss, turnover penalty, aux tasks
+│   │   ├── portfolio_heads.py                     # Meridian-R + Meridian-S output heads with leverage normalization
+│   │   └── losses.py                              # DSR loss, turnover penalty, volatility auxiliary task
 │   ├── adaptation/
-│   │   └── adaptation.py                          # TODO: 3-tier continuous learning system
+│   │   └── adaptation.py                          # 3-tier continuous learning system (stub)
 │   ├── backtesting/
-│   │   └── backtesting.py                         # TODO: MeridianStrategy + walk-forward + Monte Carlo
+│   │   └── backtesting.py                         # MeridianStrategy + walk-forward + Monte Carlo
 │   ├── paper_trading/
-│   │   └── paper_trading.py                       # TODO: PaperBroker + SQLite logging + graduation checks
+│   │   └── paper_trading.py                       # PaperBroker + SQLite logging + graduation checks (stub)
 │   ├── monitoring/
-│   │   └── monitoring.py                          # TODO: adaptation health dashboard
+│   │   └── monitoring.py                          # Adaptation health dashboard (stub)
 │   ├── runtime/
-│   │   ├── inference_pipeline.py                  # TODO: Pi 5 per-minute inference orchestration
-│   │   └── memory_store.py                        # TODO: recurrent state + FAISS store management
+│   │   ├── inference_pipeline.py                  # Pi 5 per-minute inference orchestration (stub)
+│   │   └── memory_store.py                        # Recurrent state + FAISS store management (stub)
 │   ├── quantization/
-│   │   └── ternary_kernels.py                     # TODO: C kernel Python bindings
+│   │   └── ternary_kernels.py                     # C kernel Python bindings (stub)
 ├── scripts/
 │   └── setup_h100_env.sh                          # H100 node bootstrap
 ├── pyproject.toml
@@ -190,9 +192,9 @@ Override with `--command-template` for a custom collector command.
 
 ### Phase 2: Portfolio Training (Weeks 11–14)
 
-- [ ] Portfolio output heads: Meridian-R (return) and Meridian-S (Sharpe) with leverage normalization
-- [ ] DSR (Differential Sharpe Ratio) loss function, turnover penalty, volatility auxiliary task
-- [ ] Build MeridianStrategy wrapper for finance-query backtesting engine
+- [x] Portfolio output heads: Meridian-R (return) and Meridian-S (Sharpe) with leverage normalization
+- [x] DSR (Differential Sharpe Ratio) loss function, turnover penalty, volatility auxiliary task
+- [x] Build MeridianStrategy wrapper for finance-query backtesting engine
 - [ ] Run Phase 2a (return head, ~50K steps) and Phase 2b (Sharpe head, ~30K steps)
 - [ ] Run backtests vs all benchmarks (buy-and-hold SPY, equal-weight, risk parity)
 - [ ] Run walk-forward validation, Monte Carlo analysis, regime-segmented analysis
