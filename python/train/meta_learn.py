@@ -261,7 +261,7 @@ class MetaLearner:
         sector_ids = torch.zeros(N, dtype=torch.long, device=self.device)
         episodic = torch.zeros(1, self.spec.n_episodic_retrievals, self.spec.d_model, device=self.device)
 
-        states = self.backbone.init_state(1, self.device)
+        states = self.backbone.init_state(1, N, self.device)
         all_weights: list[torch.Tensor] = []
 
         for t in range(T):

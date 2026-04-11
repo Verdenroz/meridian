@@ -145,75 +145,64 @@ class RAGDNLayer(nn.Module):
         # Signature: (surprise: Tensor[B], beta: Tensor[B,H,1,1]) -> Tensor[B,H,1,1]
         self.surprise_hook: Callable[[torch.Tensor, torch.Tensor], torch.Tensor] | None = None
 
-    def init_state(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        """Zero initial state (B, n_heads, d_head, d_v)."""
-        return torch.zeros(batch_size, self.n_heads, self.d_head, self.d_v, device=device)
+    def init_state(self, batch_size: int, n_assets: int, device: torch.device) -> torch.Tensor:
+        """Zero initial state (B, N, n_heads, d_head, d_v) — one state per asset.
 
-    def _step(
-        self,
-        x: torch.Tensor,          # (B, D)
-        state: torch.Tensor,       # (B, n_heads, d_head, d_v)
-        regime_emb: torch.Tensor,  # (B, regime_emb_dim)
-        prev_out: torch.Tensor,    # (B, D)
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        B = x.shape[0]
-        H, Dh, Dv = self.n_heads, self.d_head, self.d_v
-
-        q = self.q_proj(x).view(B, H, Dh)  # (B, H, Dh)
-        k = self.k_proj(x).view(B, H, Dh)  # (B, H, Dh)
-        v = self.v_proj(x).view(B, H, Dv)  # (B, H, Dv)
-
-        # DeltaNet requires unit-norm keys to prevent state norm explosion.
-        # Without this, ||S_t|| grows as O(t) and the recurrence diverges.
-        k = F.normalize(k, dim=-1)
-
-        gate_input = torch.cat([prev_out, regime_emb], dim=-1)  # (B, D+64)
-        # α, β: (B, H, 1, 1) for broadcasting against state
-        alpha = torch.sigmoid(self.alpha_proj(gate_input)).view(B, H, 1, 1)
-        beta  = torch.sigmoid(self.beta_proj(gate_input)).view(B, H, 1, 1)
-
-        # Retrieve: h = S · q → (B, H, Dv)
-        # state: (B, H, Dh, Dv), q: (B, H, Dh)
-        s_q = torch.einsum("bhdc,bhd->bhc", state, k)  # (B, H, Dv) — correction term
-
-        # Update state: S_new = α·S + β · k ⊗ (v − α·S^T k)
-        correction = v - alpha.squeeze(-1) * s_q        # (B, H, Dv)
-
-        # Tier 1 adaptation: modulate β by surprise magnitude
-        if self.surprise_hook is not None:
-            surprise_t = correction.detach().pow(2).sum(dim=(-2, -1))  # (B,)
-            beta = self.surprise_hook(surprise_t, beta)
-
-        outer = torch.einsum("bhd,bhc->bhdc", k, correction)  # (B, H, Dh, Dv)
-        new_state = alpha * state + beta * outer         # (B, H, Dh, Dv)
-
-        # Output: h = new_S · q
-        h = torch.einsum("bhdc,bhd->bhc", new_state, q)  # (B, H, Dv)
-        h = h.reshape(B, H * Dv)                          # (B, H*Dv)
-        out = self.drop(self.o_proj(h))                    # (B, D)
-        return out, new_state
+        Uses bf16 on CUDA to match autocast dtype, halving state memory and
+        avoiding float32 upcasting in the large (B,N,H,Dh,Dv) einsum ops.
+        """
+        dtype = torch.bfloat16 if device.type == "cuda" else torch.float32
+        return torch.zeros(batch_size, n_assets, self.n_heads, self.d_head, self.d_v,
+                           device=device, dtype=dtype)
 
     def forward(
         self,
-        x: torch.Tensor,          # (B, T, D)
-        state: torch.Tensor,       # (B, n_heads, d_head, d_v)
-        regime_emb: torch.Tensor,  # (B, regime_emb_dim)  — constant over sequence
+        x: torch.Tensor,          # (B, N, D)
+        state: torch.Tensor,       # (B, N, n_heads, d_head, d_v)
+        regime_emb: torch.Tensor,  # (B, regime_emb_dim)
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Pre-norm
+        """Fully vectorised over N assets — no serial loop.
+
+        Each asset maintains its own independent GDN state across portfolio
+        timesteps. Gates are conditioned on the current asset token + regime
+        embedding (replacing the old prev_out cross-asset dependency, which
+        imposed an arbitrary ordering on assets). Cross-asset information flows
+        through CrossAssetFusion, not through the GDN state.
+
+        Weight shapes are unchanged from the serial version so pretrained
+        checkpoints load without modification.
+        """
         residual = x
         x = self.norm(x)
-        B, T, _ = x.shape
-        device = x.device
+        B, N, _ = x.shape
+        H, Dh, Dv = self.n_heads, self.d_head, self.d_v
 
-        prev_out = torch.zeros(B, self.d_model, device=device)
-        outputs = []
-        for t in range(T):
-            out_t, state = self._step(x[:, t], state, regime_emb, prev_out)
-            prev_out = out_t
-            outputs.append(out_t)
+        q = self.q_proj(x).view(B, N, H, Dh)
+        k = F.normalize(self.k_proj(x).view(B, N, H, Dh), dim=-1)
+        v = self.v_proj(x).view(B, N, H, Dv)
 
-        out = torch.stack(outputs, dim=1)  # (B, T, D)
-        return residual + out, state
+        # Gates: condition on current token + regime (same weight shapes as before)
+        regime_exp = regime_emb.unsqueeze(1).expand(-1, N, -1)   # (B, N, re)
+        gate_input = torch.cat([x, regime_exp], dim=-1)           # (B, N, D+re)
+        alpha = torch.sigmoid(self.alpha_proj(gate_input)).view(B, N, H, 1, 1)
+        beta  = torch.sigmoid(self.beta_proj(gate_input)).view(B, N, H, 1, 1)
+
+        # DeltaNet update — vectorised over N
+        # state: (B, N, H, Dh, Dv),  k: (B, N, H, Dh)
+        s_k        = torch.einsum("bnhdc,bnhd->bnhc", state, k)   # (B, N, H, Dv)
+        correction = v - alpha.squeeze(-1) * s_k                    # (B, N, H, Dv)
+
+        if self.surprise_hook is not None:
+            surprise_t = correction.detach().pow(2).sum(dim=(-2, -1))  # (B, N)
+            beta = self.surprise_hook(surprise_t, beta)
+
+        outer     = torch.einsum("bnhd,bnhc->bnhdc", k, correction)  # (B, N, H, Dh, Dv)
+        new_state = alpha * state + beta * outer                       # (B, N, H, Dh, Dv)
+
+        h   = torch.einsum("bnhdc,bnhd->bnhc", new_state, q)         # (B, N, H, Dv)
+        h   = h.reshape(B, N, H * Dv)
+        out = self.drop(self.o_proj(h))                                # (B, N, D)
+        return residual + out, new_state
 
 
 # ── FMoE Block (Section 7.4) ─────────────────────────────────────────────────
@@ -267,18 +256,18 @@ class FMoEBlock(nn.Module):
         gate_weights = F.softmax(top_vals, dim=-1)               # (B, k)
 
         B, T, D = x.shape
-        out = torch.zeros_like(x)
-        for ki in range(self.top_k):
-            expert_ids = top_idx[:, ki]  # (B,) — which expert is active for each item
-            weights    = gate_weights[:, ki].view(B, 1, 1)  # (B, 1, 1)
-            # Route each batch element to its assigned expert
-            # Group by expert_id to minimise expert forward passes
-            for eid, expert in enumerate(self.experts):
-                mask = (expert_ids == eid)  # (B,)
-                if not mask.any():
-                    continue
-                expert_out = expert(x[mask])   # (n_matched, T, D)
-                out[mask] += weights[mask] * expert_out
+        n_experts = len(self.experts)
+        # Run all experts on all inputs — eliminates conditional branching.
+        # Extra compute (4 vs 2 experts) is negligible at B=2, N=100 vs. kernel launch savings.
+        all_expert_out = torch.stack(
+            [expert(x) for expert in self.experts], dim=0
+        )  # (n_experts, B, T, D)
+        # Scatter gate weights into per-expert weight tensor
+        expert_weights = torch.zeros(B, n_experts, device=x.device, dtype=x.dtype)
+        expert_weights.scatter_(1, top_idx, gate_weights)  # (B, n_experts)
+        # Weighted sum: (n_experts, B, 1, 1) * (n_experts, B, T, D)
+        w = expert_weights.permute(1, 0).unsqueeze(-1).unsqueeze(-1)  # (n_experts, B, 1, 1)
+        out = (all_expert_out * w).sum(dim=0)  # (B, T, D)
 
         return residual + self.drop(out)
 
@@ -434,9 +423,9 @@ class RAGDNBackbone(nn.Module):
                 gdn_idx += 1
         return x, new_states
 
-    def init_state(self, batch_size: int, device: torch.device) -> list[torch.Tensor]:
-        """Create zero GDN states for a new sequence."""
-        return [b.init_state(batch_size, device) for b in self.gdn_blocks]
+    def init_state(self, batch_size: int, n_assets: int, device: torch.device) -> list[torch.Tensor]:
+        """Create zero GDN states for a new sequence. Shape: (B, N, H, Dh, Dv) per block."""
+        return [b.init_state(batch_size, n_assets, device) for b in self.gdn_blocks]
 
     def forward(
         self,

@@ -355,7 +355,7 @@ class SelfSupervisedPretrainer:
 
         all_asset_states = []
         all_fused_states = []
-        states = self.backbone.init_state(B, self.device)
+        states = self.backbone.init_state(B, N, self.device)
 
         for t in range(T):
             af_t = asset_feats[:, t]     # (B, 1, 288)

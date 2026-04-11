@@ -37,15 +37,11 @@ class SectorBiasPrior(nn.Module):
         """Build the full n_tokens × n_tokens additive bias matrix."""
         bias = torch.zeros(n_tokens, n_tokens, device=self.affinity.device)
         n_assets = sector_ids.shape[0]
-        for i in range(n_assets):
-            si = sector_ids[i].item()
-            if si < 0:
-                continue
-            for j in range(n_assets):
-                sj = sector_ids[j].item()
-                if sj < 0:
-                    continue
-                bias[i, j] = self.affinity[si, sj]
+        valid = sector_ids >= 0                                      # (n_assets,)
+        valid_ids = sector_ids.clamp(min=0)                          # safe index; masked below
+        pair_bias = self.affinity[valid_ids][:, valid_ids]           # (n_assets, n_assets)
+        mask = valid.unsqueeze(1) & valid.unsqueeze(0)               # (n_assets, n_assets)
+        bias[:n_assets, :n_assets] = pair_bias * mask.float()
         return bias
 
 
@@ -74,17 +70,17 @@ class FusionMHALayer(nn.Module):
         H, Dh = self.n_heads, self.d_head
 
         qkv = self.qkv_proj(x).view(B, N, 3, H, Dh).permute(2, 0, 3, 1, 4)
-        q, k, v = qkv[0], qkv[1], qkv[2]  # each (B, H, N, Dh)
+        q, k, v = qkv.unbind(0)  # each (B, H, N, Dh)
 
-        scale = Dh ** -0.5
-        attn = torch.einsum("bhin,bhjn->bhij", q, k) * scale  # (B, H, N, N)
+        attn_bias = None
         if bias is not None:
-            attn = attn + bias.unsqueeze(0).unsqueeze(0)       # broadcast over B and H
+            attn_bias = bias.unsqueeze(0).unsqueeze(0).expand(B, H, -1, -1)
 
-        attn = F.softmax(attn, dim=-1)
-        attn = self.drop(attn)
-
-        out = torch.einsum("bhij,bhjd->bhid", attn, v)         # (B, H, N, Dh)
+        out = F.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=attn_bias,
+            dropout_p=self.drop.p if self.training else 0.0,
+        )  # (B, H, N, Dh)
         out = out.permute(0, 2, 1, 3).contiguous().view(B, N, D)
         return residual + self.drop(self.o_proj(out))
 
@@ -123,6 +119,7 @@ class CrossAssetFusion(nn.Module):
         portfolio_token: torch.Tensor,   # (B, D)
         episodic_tokens: torch.Tensor,   # (B, k, D)  — k episodic retrievals
         sector_ids: torch.Tensor,        # (N_assets,) int64  — GICS sector index per asset
+        precomputed_bias: torch.Tensor | None = None,  # (N_total, N_total) — cached bias
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Concatenate all tokens: (B, N_assets + 1 + 1 + k, D)
         market_exp    = market_token.unsqueeze(1)      # (B, 1, D)
@@ -131,13 +128,14 @@ class CrossAssetFusion(nn.Module):
             [asset_tokens, market_exp, portfolio_exp, episodic_tokens], dim=1
         )  # (B, N_total, D)
 
-        N_total = tokens.shape[1]
-        # Sector IDs for non-asset tokens: -1 (no sector bias)
-        n_extras = N_total - asset_tokens.shape[1]
-        extra_ids = torch.full((n_extras,), -1, dtype=torch.long, device=sector_ids.device)
-        full_ids = torch.cat([sector_ids, extra_ids], dim=0)  # (N_total,)
-
-        bias = self.sector_bias.bias_matrix(full_ids, N_total)  # (N_total, N_total)
+        if precomputed_bias is not None:
+            bias = precomputed_bias
+        else:
+            N_total = tokens.shape[1]
+            n_extras = N_total - asset_tokens.shape[1]
+            extra_ids = torch.full((n_extras,), -1, dtype=torch.long, device=sector_ids.device)
+            full_ids = torch.cat([sector_ids, extra_ids], dim=0)  # (N_total,)
+            bias = self.sector_bias.bias_matrix(full_ids, N_total)  # (N_total, N_total)
 
         for layer in self.layers:
             tokens = layer(tokens, bias)
