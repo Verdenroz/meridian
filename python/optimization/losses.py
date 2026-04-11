@@ -74,8 +74,8 @@ def dsr_loss(
         Rt = R[:, t]
         dA = Rt - A
         dB = Rt.pow(2) - Bm
-        denom = (Bm - A.pow(2)).clamp(min=1e-8).pow(1.5)
-        dsr_t = (Bm * dA - 0.5 * A * dB) / denom
+        denom = (Bm - A.pow(2)).clamp(min=1e-4).pow(1.5)
+        dsr_t = ((Bm * dA - 0.5 * A * dB) / denom).clamp(-100, 100)
         dsr_values.append(dsr_t)
         # Update moments
         A  = (1 - eta) * A  + eta * Rt
@@ -163,6 +163,10 @@ def return_head_loss(
 ) -> dict[str, torch.Tensor]:
     """Combined Meridian-R training loss.
 
+    Turnover and vol_aux penalties are adaptively scaled relative to
+    the DSR magnitude so their gradients remain meaningful regardless
+    of how large DSR grows during training.
+
     Returns a dict with individual components and 'total' for logging.
     """
     l_dsr  = dsr_loss(weights, asset_returns, eta=dsr_eta)
@@ -172,5 +176,12 @@ def return_head_loss(
         if pred_vol is not None
         else weights.new_zeros(1).squeeze()
     )
-    total = l_dsr + lambda_turn * l_turn + lambda_vol * l_vol
+    # Adaptive scaling: make λ control *relative* importance to DSR,
+    # not absolute magnitude.  stop-gradient ratio so scaling doesn't
+    # affect the DSR gradient itself.
+    dsr_scale = l_dsr.detach().abs().clamp(min=1.0, max=100.0)
+    turn_scale = dsr_scale / l_turn.detach().clamp(min=1e-6)
+    vol_scale  = dsr_scale / l_vol.detach().clamp(min=1e-6) if l_vol.abs() > 0 else 1.0
+
+    total = l_dsr + lambda_turn * turn_scale * l_turn + lambda_vol * vol_scale * l_vol
     return {"dsr": l_dsr, "turnover": l_turn, "vol_aux": l_vol, "total": total}

@@ -42,6 +42,7 @@ class MeridianR(nn.Module):
         self.score = nn.Sequential(
             nn.Linear(d_model, hidden_dim),
             nn.SiLU(),
+            nn.Dropout(0.2),
             nn.Linear(hidden_dim, 1, bias=False),
         )
 
@@ -73,6 +74,7 @@ class MeridianS(nn.Module):
         self.score = nn.Sequential(
             nn.Linear(d_model, hidden_dim),
             nn.SiLU(),
+            nn.Dropout(0.2),
             nn.Linear(hidden_dim, 1, bias=False),
         )
         # log_temperature for numerical stability; exp gives temperature > 0
@@ -92,6 +94,37 @@ class MeridianS(nn.Module):
         """
         logits = self.score(asset_tokens).squeeze(-1)  # (B, N)
         return F.softmax(logits / self.temperature, dim=-1)
+
+
+class PortfolioVolHead(nn.Module):
+    """Portfolio-level volatility prediction head.
+
+    Predicts the realised portfolio volatility over a short horizon from
+    the market-wide fusion token.  Used as an auxiliary training signal
+    (vol_aux loss) to regularise the backbone's risk representations.
+
+    Input:  market token from CrossAssetFusion output (B, D)
+    Output: predicted portfolio vol per horizon step (B, horizon) ≥ 0
+    """
+
+    def __init__(self, d_model: int = 768, hidden_dim: int = 128, horizon: int = 5) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(d_model, hidden_dim),
+            nn.SiLU(),
+            nn.Dropout(0.2),
+            nn.Linear(hidden_dim, horizon),
+        )
+
+    def forward(self, market_token: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            market_token: (B, D) — market-wide token from fusion output
+
+        Returns:
+            pred_vol: (B, horizon) — predicted portfolio volatility ≥ 0
+        """
+        return F.softplus(self.net(market_token))
 
 
 class AuxHeadSurprise(nn.Module):
