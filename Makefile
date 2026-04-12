@@ -22,7 +22,7 @@ TMUX_RUN    = tmux kill-session -t $1 2>/dev/null; \
 
 collect:
 	$(PYTHON) -m market_data.pipeline collect \
-		--symbols-file $(SYMBOLS) --interval 1d --start 2010-01-01 \
+		--symbols-file $(SYMBOLS) --interval 1d \
 		--data-dir $(DATA_DIR) --workers 8
 
 stats:
@@ -54,7 +54,7 @@ smoke-pretrain:
 # On 24GB GPUs (RTX 3090): use 4 with --gradient-checkpointing
 # On A100/H100 (40-80GB):  use 16+ without --gradient-checkpointing
 BATCH_PORT ?= 4
-PORT_EXTRA ?= --gradient-checkpointing --compile --workers 2
+PORT_EXTRA ?= --gradient-checkpointing --workers 2
 
 portfolio-return:
 	$(call TMUX_RUN,portfolio,source .venv/bin/activate && PYTHONPATH=python python -m train.portfolio_train \

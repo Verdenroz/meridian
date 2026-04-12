@@ -46,7 +46,7 @@ class PipelineConfig:
     data_dir: Path = Path("data/mmaps")
     reports_dir: Path = Path("reports/ingestion")
     interval: str = "1d"
-    start: str | None = "2010-01-01"
+    start: str | None = None
     end: str | None = None
     workers: int = 4
     binary: Path | None = None
@@ -214,7 +214,7 @@ def _cli() -> None:
     p_collect.add_argument("--data-dir",     type=Path, default=Path("data/mmaps"))
     p_collect.add_argument("--reports-dir",  type=Path, default=Path("reports/ingestion"))
     p_collect.add_argument("--interval",     default="1d", choices=["1m", "5m", "1h", "1d"])
-    p_collect.add_argument("--start",        default="2010-01-01")
+    p_collect.add_argument("--start",        default=None)
     p_collect.add_argument("--end",          default=None)
     p_collect.add_argument("--workers",      type=int, default=4)
     p_collect.add_argument("--binary",       type=Path, default=None)

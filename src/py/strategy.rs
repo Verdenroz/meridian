@@ -177,7 +177,7 @@ pub fn run_backtest(
             .initial_capital(1_000_000.0)
             .commission_pct(0.0010)
             .slippage_pct(0.0005)
-            .bars_per_year(252.0 * 390.0)
+            .bars_per_year(252.0)
             .position_size_pct(1.0)
             .close_at_end(true)
             .build()

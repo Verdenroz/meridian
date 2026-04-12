@@ -160,6 +160,7 @@ class PortfolioTrainConfig:
     save_every: int = 5_000
     checkpoint_dir: Path = field(default_factory=lambda: Path("checkpoints/portfolio"))
     bptt_chunk: int = 16           # truncated BPTT chunk length (0 = full seq)
+    patience: int = 5              # early stopping: evals without improvement before halt
     gradient_checkpointing: bool = False
     compile: bool = False          # torch.compile the backbone (2-4x faster, ~60s warmup)
 
@@ -234,21 +235,22 @@ class PortfolioTrainer:
         # Market features: average across assets (they share the same market context)
         mkt_mean = market_feats.mean(dim=1)  # (B, T, 96)
 
-        # Bootstrap regime/portfolio state
-        regime_emb  = torch.zeros(B, self.spec.regime_emb_dim, device=self.device)
-        posteriors  = torch.full((B, self.spec.n_regimes), 0.25, device=self.device)
+        # Bootstrap portfolio/calendar/sector state
         portfolio_s = torch.zeros(B, self.spec.portfolio_state_dim, device=self.device)
         calendar    = torch.zeros(B, self.spec.calendar_dim, device=self.device)
         sector_ids  = torch.zeros(N, dtype=torch.long, device=self.device)
         episodic    = torch.zeros(B, self.spec.n_episodic_retrievals, self.spec.d_model, device=self.device)
 
+        # Regime detector state (updated each timestep)
+        regime_ema      = torch.zeros(B, self.spec.regime_emb_dim, device=self.device)
+        prev_regime_emb = None
+        prev_port_return = torch.zeros(B, device=self.device)
+        portfolio_value  = torch.ones(B, device=self.device)
+
         states = self.backbone.init_state(B, N, self.device)
 
         all_weights: list[torch.Tensor] = []
         all_vol_preds: list[torch.Tensor] = []
-
-        use_amp = self.device.type == "cuda"
-        autocast_ctx = torch.autocast("cuda", dtype=torch.bfloat16) if use_amp else torch.autocast("cpu", enabled=False)
 
         # Pre-allocate reusable zero tensors (avoids 128 CUDA allocs per batch)
         n_full = self.spec.n_assets  # 100
@@ -264,44 +266,58 @@ class PortfolioTrainer:
             full_ids = torch.cat([sector_ids, extra_ids], dim=0)
             precomputed_bias = self.fusion.sector_bias.bias_matrix(full_ids, n_total)
 
-        with autocast_ctx:
-            for t in range(T):
-                af_t  = asset_feats[:, :, t, :]   # (B, N, 184)
-                mf_t  = mkt_mean[:, t, :]          # (B, 96)
+        for t in range(T):
+            af_t  = asset_feats[:, :, t, :]   # (B, N, 184)
+            mf_t  = mkt_mean[:, t, :]          # (B, 96)
 
-                asset_tok, mkt_tok, port_tok, _ = self.input_projection(
-                    af_t, mf_t, portfolio_s, calendar, regime_emb
-                )
-                out, states = self.backbone(asset_tok, regime_emb, posteriors, states)
-                fused, mkt_out = self.fusion(
-                    out, mkt_tok, port_tok, episodic, sector_ids,
-                    precomputed_bias=precomputed_bias,
-                )
+            # Regime detection: market features + portfolio summary → regime_emb, posteriors
+            portfolio_value = portfolio_value * (1.0 + prev_port_return)
+            portfolio_summary = torch.stack([
+                portfolio_value, prev_port_return,
+                torch.ones(B, device=self.device),  # leverage (1.0 for long-only)
+            ], dim=-1)  # (B, 3)
+            regime_emb, posteriors, _ = self.regime_detector(
+                mf_t, portfolio_summary, regime_ema, prev_regime_emb,
+            )
+            regime_ema = (0.98 * regime_ema + 0.02 * regime_emb).detach()
+            prev_regime_emb = regime_emb.detach()
 
-                # Portfolio head
-                if head == "return":
-                    w_t = self.head_r(fused)   # (B, N)
-                else:
-                    w_t = self.head_s(fused)   # (B, N)
+            asset_tok, mkt_tok, port_tok, _ = self.input_projection(
+                af_t, mf_t, portfolio_s, calendar, regime_emb
+            )
+            out, states = self.backbone(asset_tok, regime_emb, posteriors, states)
+            fused, mkt_out = self.fusion(
+                out, mkt_tok, port_tok, episodic, sector_ids,
+                precomputed_bias=precomputed_bias,
+            )
 
-                all_weights.append(w_t)
+            # Portfolio head
+            if head == "return":
+                w_t = self.head_r(fused)   # (B, N)
+            else:
+                w_t = self.head_s(fused)   # (B, N)
 
-                # Volatility auxiliary: predict portfolio vol from market token
-                if head == "return":
-                    all_vol_preds.append(self.vol_head(mkt_out))  # (B, horizon)
+            all_weights.append(w_t)
 
-                # Update portfolio state: [weights (100), unrealized P&L (100), value (1)] = 201
-                w_padded = F.pad(w_t.detach(), (0, n_full - N))  # (B, 100)
-                portfolio_s = torch.cat([
-                    w_padded,    # weights (100)
-                    _zeros_n,    # unrealised P&L (100)
-                    _zeros_1,    # portfolio value (1)
-                ], dim=-1)  # (B, 201)
+            # Volatility auxiliary: predict portfolio vol from market token
+            if head == "return":
+                all_vol_preds.append(self.vol_head(mkt_out))  # (B, horizon)
 
-                # Truncated BPTT: detach GDN state every bptt_chunk steps so the
-                # backward graph covers at most bptt_chunk timesteps at a time.
-                if bptt_chunk > 0 and (t + 1) % bptt_chunk == 0:
-                    states = [s.detach_() for s in states]
+            # Update portfolio state: [weights (100), unrealized P&L (100), value (1)] = 201
+            w_padded = F.pad(w_t.detach(), (0, n_full - N))  # (B, 100)
+            portfolio_s = torch.cat([
+                w_padded,    # weights (100)
+                _zeros_n,    # unrealised P&L (100)
+                _zeros_1,    # portfolio value (1)
+            ], dim=-1)  # (B, 201)
+
+            # Track portfolio return for next step's regime detection
+            prev_port_return = (w_t.detach() * af_t[:, :, 3]).sum(dim=-1)
+
+            # Truncated BPTT: detach GDN state every bptt_chunk steps so the
+            # backward graph covers at most bptt_chunk timesteps at a time.
+            if bptt_chunk > 0 and (t + 1) % bptt_chunk == 0:
+                states = [s.detach_() for s in states]
 
         weights = torch.stack(all_weights, dim=1)  # (B, T, N)
         pred_vol = torch.stack(all_vol_preds, dim=1) if all_vol_preds else None  # (B, T, horizon)
@@ -322,6 +338,7 @@ class PortfolioTrainer:
                 head_params
                 + list(self.backbone.parameters())
                 + list(self.fusion.parameters())
+                + list(self.regime_detector.parameters())
                 + list(self.input_projection.parameters())
                 + list(self.aux_head.parameters())
                 + list(self.vol_head.parameters())
@@ -336,12 +353,12 @@ class PortfolioTrainer:
         cfg: PortfolioTrainConfig,
         max_batches: int = 20,
     ) -> float:
-        for m in (self.backbone, self.fusion, self.input_projection,
-                  self.head_r, self.head_s, self.vol_head):
+        for m in (self.backbone, self.fusion, self.regime_detector,
+                  self.input_projection, self.head_r, self.head_s, self.vol_head):
             m.eval()
         total = 0.0
         n = 0
-        with torch.no_grad():
+        with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"):
             for i, (features, _) in enumerate(val_loader):
                 if i >= max_batches:
                     break
@@ -359,8 +376,8 @@ class PortfolioTrainer:
                     loss = rolling_sharpe_loss(weights, returns)
                 total += loss.item()
                 n += 1
-        for m in (self.backbone, self.fusion, self.input_projection,
-                  self.head_r, self.head_s, self.vol_head):
+        for m in (self.backbone, self.fusion, self.regime_detector,
+                  self.input_projection, self.head_r, self.head_s, self.vol_head):
             m.train()
         return total / max(n, 1)
 
@@ -380,8 +397,9 @@ class PortfolioTrainer:
             optimizer, lr_lambda=lambda s: self._cosine_lr(s, cfg)
         )
 
-        start_step    = 0
-        best_val_loss = float("inf")
+        start_step       = 0
+        best_val_loss    = float("inf")
+        no_improve_count = 0
 
         if resume_from is not None and resume_from.exists():
             ckpt = load_checkpoint(resume_from)
@@ -396,15 +414,20 @@ class PortfolioTrainer:
                 try:
                     self.vol_head.load_state_dict(state["vol_head"])
                 except RuntimeError:
-                    print("vol_head checkpoint incompatible — initialising fresh.")
+                    pass  # pretrain vol_head has different arch — fresh init is fine
             if f"head_{cfg.head}" in state:
                 (self.head_r if cfg.head == "return" else self.head_s).load_state_dict(
                     state[f"head_{cfg.head}"]
                 )
-                optimizer.load_state_dict(ckpt.optimizer_state)
-                scheduler.load_state_dict(ckpt.scheduler_state)
-                start_step    = ckpt.step
-                best_val_loss = ckpt.best_val_loss
+                # Only restore optimizer/scheduler if param groups match
+                # (e.g. return→return or sharpe→sharpe resume, NOT return→sharpe)
+                n_ckpt = sum(len(g["params"]) for g in ckpt.optimizer_state["param_groups"])
+                n_opt  = sum(len(g["params"]) for g in optimizer.state_dict()["param_groups"])
+                if n_ckpt == n_opt:
+                    optimizer.load_state_dict(ckpt.optimizer_state)
+                    scheduler.load_state_dict(ckpt.scheduler_state)
+                    start_step    = ckpt.step
+                    best_val_loss = ckpt.best_val_loss
             print(f"Resumed from step {start_step}  best_val={best_val_loss:.4f}")
 
         # Compile after checkpoint loading so state dict keys match (uncompiled backbone
@@ -417,11 +440,12 @@ class PortfolioTrainer:
         if cfg.head == "sharpe":
             for p in (list(self.backbone.parameters())
                       + list(self.fusion.parameters())
+                      + list(self.regime_detector.parameters())
                       + list(self.input_projection.parameters())):
                 p.requires_grad_(False)
 
-        for m in (self.backbone, self.fusion, self.input_projection,
-                  self.head_r, self.head_s, self.vol_head):
+        for m in (self.backbone, self.fusion, self.regime_detector,
+                  self.input_projection, self.head_r, self.head_s, self.vol_head):
             m.train()
 
         step      = start_step
@@ -437,20 +461,21 @@ class PortfolioTrainer:
             # DataLoader collates (N, T, F) items → (B, N, T, F); ready for forward
             optimizer.zero_grad(set_to_none=True)
 
-            weights, returns, pred_vol = self._forward(features, cfg.head, cfg)
+            with torch.autocast("cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"):
+                weights, returns, pred_vol = self._forward(features, cfg.head, cfg)
 
-            if cfg.head == "return":
-                loss_dict = return_head_loss(
-                    weights, returns,
-                    pred_vol=pred_vol,
-                    lambda_turn=cfg.lambda_turn,
-                    lambda_vol=cfg.lambda_vol,
-                    dsr_eta=cfg.dsr_eta,
-                )
-                loss = loss_dict["total"]
-            else:
-                loss = rolling_sharpe_loss(weights, returns)
-                loss_dict = {"total": loss}
+                if cfg.head == "return":
+                    loss_dict = return_head_loss(
+                        weights, returns,
+                        pred_vol=pred_vol,
+                        lambda_turn=cfg.lambda_turn,
+                        lambda_vol=cfg.lambda_vol,
+                        dsr_eta=cfg.dsr_eta,
+                    )
+                    loss = loss_dict["total"]
+                else:
+                    loss = rolling_sharpe_loss(weights, returns)
+                    loss_dict = {"total": loss}
 
             loss.backward()
             nn.utils.clip_grad_norm_(params, cfg.grad_clip)
@@ -468,7 +493,14 @@ class PortfolioTrainer:
                 print(f"  val loss={val_loss:.4f}")
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
+                    no_improve_count = 0
                     self._save(cfg.best_path, step, optimizer, scheduler, best_val_loss)
+                else:
+                    no_improve_count += 1
+                    if no_improve_count >= cfg.patience:
+                        print(f"Early stopping at step {step} "
+                              f"(no improvement for {cfg.patience} evals)")
+                        break
 
             if step % cfg.save_every == 0:
                 self._save(cfg.step_path_fn(step), step, optimizer, scheduler, best_val_loss)
@@ -526,6 +558,29 @@ def _make_smoke_shards(tmp_dir: Path, n_assets: int, seq_len: int) -> list[Path]
     return paths
 
 
+def _filter_short_assets(paths: list[Path], feature_dim: int = 184) -> list[Path]:
+    """Drop assets shorter than the 10th-percentile shard length.
+
+    Prevents a handful of short-history assets (e.g. XLC, est. 2018) from
+    truncating the entire tail-aligned dataset during training.
+    """
+    if len(paths) <= 1:
+        return paths
+    lengths: list[tuple[int, Path]] = []
+    for p in paths:
+        n_bytes = p.stat().st_size
+        rows = n_bytes // (4 * feature_dim)  # float32 = 4 bytes
+        lengths.append((rows, p))
+    lengths.sort(key=lambda x: x[0])
+    threshold = lengths[len(lengths) // 10][0]
+    kept = [p for rows, p in lengths if rows >= threshold]
+    dropped = len(paths) - len(kept)
+    if dropped:
+        print(f"Dropped {dropped}/{len(paths)} short assets "
+              f"(threshold={threshold} rows, kept={len(kept)})")
+    return kept
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def _build_model(spec: MeridianSpec, device: torch.device):
@@ -560,6 +615,10 @@ def main() -> None:
     parser.add_argument("--compile",          action="store_true",
                         help="torch.compile the backbone for faster training (~60s warmup, "
                              "then 2-4x faster per step). Recommended on A100/H100.")
+    parser.add_argument("--stride",           type=int,  default=4,
+                        help="Stride between sequences (lower = more data, default 4)")
+    parser.add_argument("--patience",         type=int,  default=5,
+                        help="Early stopping patience (evals without improvement)")
     parser.add_argument("--smoke",            action="store_true")
     args = parser.parse_args()
 
@@ -610,9 +669,11 @@ def main() -> None:
         val_paths   = enumerate_shards(args.data_dir, "validation")
         if not train_paths:
             raise RuntimeError(f"No train shards at {args.data_dir}/train")
+        train_paths = _filter_short_assets(train_paths)
+        val_paths   = _filter_short_assets(val_paths)
         train_loader = build_portfolio_loader(
             train_paths, args.seq_len, args.batch_size, num_workers=args.workers,
-            stride=16, augment=True,
+            stride=args.stride, augment=True,
         )
         val_loader = build_portfolio_loader(
             val_paths, args.seq_len, args.batch_size, shuffle=False, num_workers=args.workers,
@@ -621,6 +682,7 @@ def main() -> None:
             head=args.head, total_steps=args.steps,
             batch_size=args.batch_size, seq_len=args.seq_len,
             lr=args.lr, checkpoint_dir=args.checkpoint_dir,
+            patience=args.patience,
             gradient_checkpointing=args.gradient_checkpointing,
             compile=args.compile,
         )

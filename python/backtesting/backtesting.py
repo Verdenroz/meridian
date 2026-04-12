@@ -35,7 +35,7 @@ class BacktestSpec:
     initial_capital: float = 1_000_000.0
     commission_bps: float = 10.0  # 10 basis points
     slippage_bps: float = 5.0  # 5 basis points
-    bars_per_year: float = 252 * 390  # minute bars
+    bars_per_year: float = 252  # daily bars
     max_positions: int = 100
     mc_simulations: int = 1000
     mc_seed: int = 42
@@ -43,27 +43,28 @@ class BacktestSpec:
 
 # ── Candle loading ───────────────────────────────────────────────────────────
 
-OHLCV_INDICES = {
-    "timestamp": 0,
-    "open": 1,
-    "high": 2,
-    "low": 3,
-    "close": 4,
-    "volume": 5,
-}
-
-
 def load_candles_from_shards(
     data_dir: Path,
     symbols: list[str],
 ) -> tuple[dict[str, np.ndarray], int]:
-    """Load OHLCV candle arrays from f32bin shards.
+    """Reconstruct OHLCV candle arrays from f32bin shard log-returns.
+
+    Shard price_volume block layout (10 floats):
+      [0] open  = ln(open / prev_close)
+      [1] high  = ln(high / open)
+      [2] low   = ln(low / open)
+      [3] close = ln(close / prev_close)   ← primary return
+      [4] volume (normalized vs SMA20)
+      [5-9] multi-horizon returns
+
+    We reconstruct synthetic prices via cumulative exponentiation from a
+    base price of 100.  The backtesting engine only needs relative movements.
 
     Returns:
         candles: {symbol: (T, 6) float64 array of [ts, O, H, L, C, V]}
         min_bars: shortest shard length across all symbols
     """
-    feature_dim = 280
+    feature_dim = 184
     candles = {}
     min_bars = float("inf")
 
@@ -74,19 +75,35 @@ def load_candles_from_shards(
 
         raw = np.memmap(path, dtype="float32", mode="r")
         n = len(raw) // feature_dim
-        data = raw[: n * feature_dim].reshape(n, feature_dim)
+        data = raw[: n * feature_dim].reshape(n, feature_dim).astype(np.float64)
         min_bars = min(min_bars, n)
 
-        # Feature indices 0-5 are the OHLCV block in the shard layout.
-        # Timestamp is synthetic (minute-bar indexed from epoch).
-        arr = np.zeros((n, 6), dtype=np.float64)
-        arr[:, 0] = np.arange(n, dtype=np.float64) * 60 + 1609459200  # synthetic ts
-        arr[:, 1] = data[:, 1].astype(np.float64)  # open
-        arr[:, 2] = data[:, 2].astype(np.float64)  # high
-        arr[:, 3] = data[:, 3].astype(np.float64)  # low
-        arr[:, 4] = data[:, 4].astype(np.float64)  # close (index 4 in shard)
-        arr[:, 5] = data[:, 5].astype(np.float64)  # volume
+        # Reconstruct close prices from log-returns: close[t] = base * exp(cumsum(lr))
+        close_lr = data[:, 3]  # ln(close / prev_close)
+        close = 100.0 * np.exp(np.cumsum(close_lr))
 
+        # Reconstruct open/high/low relative to close
+        open_lr = data[:, 0]   # ln(open / prev_close)
+        high_lr = data[:, 1]   # ln(high / open)
+        low_lr = data[:, 2]    # ln(low / open)
+
+        # prev_close for each bar (shift close by 1, first bar uses base)
+        prev_close = np.empty(n, dtype=np.float64)
+        prev_close[0] = 100.0
+        prev_close[1:] = close[:-1]
+
+        open_price = prev_close * np.exp(open_lr)
+        high_price = open_price * np.exp(high_lr)
+        low_price = open_price * np.exp(low_lr)
+
+        # Volume: de-normalize from SMA20-normalized (approximate, use exp)
+        vol_norm = data[:, 4]
+        volume = 1_000_000.0 * np.exp(vol_norm)  # synthetic absolute volume
+
+        # Synthetic daily timestamps (86400s apart)
+        ts = np.arange(n, dtype=np.float64) * 86400 + 1609459200
+
+        arr = np.column_stack([ts, open_price, high_price, low_price, close, volume])
         candles[sym] = arr
 
     # Tail-align to shortest common length
@@ -108,18 +125,20 @@ def load_model_and_produce_weights(
 ) -> tuple[np.ndarray, list[str], dict[str, np.ndarray]]:
     """Load a trained Meridian model and compute portfolio weights.
 
+    Mirrors the recurrent forward pass from PortfolioTrainer._forward():
+    each timestep runs regime detection → input projection → backbone →
+    cross-asset fusion → head, stepping the GDN recurrent state forward.
+
+    Uses feature shards for model inference but fetches real OHLCV prices
+    from Yahoo Finance for the backtesting engine.
+
     Returns:
         weights: (T, N) float64 array of target portfolio weights
         symbols: list of N ticker strings
-        candles: dict mapping symbol to (T, 6) OHLCV array
+        candles: dict mapping symbol to (T, 6) real OHLCV array
     """
-    from core.cross_asset_fusion import CrossAssetFusion
-    from core.regime_aware_backbone import (
-        InputProjection,
-        RAGDNBackbone,
-        RegimeDetector,
-    )
     from optimization.portfolio_heads import MeridianR, MeridianS
+    from train.pretrain import build_model
 
     # Discover symbols from available shard files
     shard_files = sorted(data_dir.glob("*.f32bin"))
@@ -127,88 +146,163 @@ def load_model_and_produce_weights(
     if not symbols:
         raise FileNotFoundError(f"no .f32bin shards in {data_dir}")
 
-    candles, min_bars = load_candles_from_shards(data_dir, symbols)
-    symbols = [s for s in symbols if s in candles]
-    N = len(symbols)
-
     # Load shard features for model inference
-    feature_dim = 280
-    arrays = []
+    feature_dim = 184
+    shard_arrays = {}
     for sym in symbols:
         path = data_dir / f"{sym}.f32bin"
         raw = np.memmap(path, dtype="float32", mode="r")
         n = len(raw) // feature_dim
-        data = raw[: n * feature_dim].reshape(n, feature_dim)
-        arrays.append(data[-min_bars:])
+        shard_arrays[sym] = raw[: n * feature_dim].reshape(n, feature_dim)
+
+    # Tail-align shards to shortest common length
+    min_bars = min(a.shape[0] for a in shard_arrays.values())
+    arrays = [shard_arrays[sym][-min_bars:] for sym in symbols]
+    N = len(symbols)
+
+    # Fetch real OHLCV candles from Yahoo Finance for backtesting
+    print(f"Fetching real OHLCV for {N} symbols...")
+    real_candles = meridian_py.fetch_candles(symbols, interval="1d", range="10y")
+    # Keep only symbols that were successfully fetched
+    fetched = [s for s in symbols if s in real_candles]
+    if len(fetched) < N:
+        missing = set(symbols) - set(fetched)
+        print(f"  warning: {len(missing)} symbols not fetched: {missing}")
+        # Re-align: drop missing symbols from inference arrays too
+        idx_map = {s: i for i, s in enumerate(symbols)}
+        arrays = [arrays[idx_map[s]] for s in fetched]
+        symbols = fetched
+        N = len(symbols)
+        min_bars = min(a.shape[0] for a in arrays)
+        arrays = [a[-min_bars:] for a in arrays]
+
+    # Tail-align real candles to shard length
+    candles = {}
+    for sym in symbols:
+        rc = real_candles[sym]
+        candles[sym] = rc[-min_bars:] if rc.shape[0] >= min_bars else rc
+    print(f"  {N} symbols, {min_bars} bars (shard), candle lengths: "
+          f"{min(c.shape[0] for c in candles.values())}-"
+          f"{max(c.shape[0] for c in candles.values())}")
 
     # (N, T, F) aligned features
     features = np.stack(arrays, axis=0)
 
-    # Build model
-    input_proj = InputProjection(spec)
-    regime_det = RegimeDetector(spec)
-    backbone = RAGDNBackbone(spec)
-    fusion = CrossAssetFusion(spec)
-    head_module = (
-        MeridianR(spec.d_model) if head == "return" else MeridianS(spec.d_model)
-    )
+    # Build model components (same construction as portfolio_train)
+    dev = torch.device(device)
+    backbone, fusion, regime_det, input_proj = build_model(spec, dev)
+    head_r = MeridianR(spec.d_model).to(dev)
+    head_s = MeridianS(spec.d_model).to(dev)
+    head_module = head_r if head == "return" else head_s
 
-    # Load checkpoint
+    # Load checkpoint — format: {model_state: {backbone: ..., fusion: ..., ...}}
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    state = (
-        ckpt
-        if isinstance(ckpt, dict) and "model_state_dict" not in ckpt
-        else ckpt.get("model_state_dict", ckpt)
-    )
+    model_state = ckpt.get("model_state", ckpt)
 
-    # Partial load: match keys across components
-    for module, prefix in [
-        (input_proj, "input_proj."),
-        (regime_det, "regime_det."),
-        (backbone, "backbone."),
-        (fusion, "fusion."),
-        (head_module, "head."),
-    ]:
-        sub_state = {
-            k.removeprefix(prefix): v for k, v in state.items() if k.startswith(prefix)
-        }
-        if sub_state:
-            module.load_state_dict(sub_state, strict=False)
+    component_map = {
+        "backbone": backbone,
+        "fusion": fusion,
+        "regime_detector": regime_det,
+        "input_projection": input_proj,
+        "head_return": head_r,
+        "head_sharpe": head_s,
+    }
+    for key, module in component_map.items():
+        if key in model_state:
+            module.load_state_dict(model_state[key], strict=False)
 
     for m in [input_proj, regime_det, backbone, fusion, head_module]:
-        m.to(device).eval()
+        m.eval()
 
-    # Produce weights in chunks to avoid OOM
-    seq_len = spec.train_seq_len
-    all_weights = []
-    feat_tensor = torch.from_numpy(features).to(device)  # (N, T, F)
+    # Run recurrent forward pass (mirrors PortfolioTrainer._forward)
+    feat_tensor = torch.from_numpy(features).float().to(dev)  # (N, T, F)
+    B = 1
 
+    # Split per-asset (184) features — no market block in 184-dim shards
+    # Market features are the last 96 dims when feature_dim=280; with 184 we
+    # use zeros (same as training when market block is absent from shard).
+    asset_feats = feat_tensor.unsqueeze(0)  # (1, N, T, 184)
+
+    # Bootstrap recurrent state
+    portfolio_s = torch.zeros(B, spec.portfolio_state_dim, device=dev)
+    calendar = torch.zeros(B, spec.calendar_dim, device=dev)
+    sector_ids = torch.zeros(N, dtype=torch.long, device=dev)
+    episodic = torch.zeros(B, spec.n_episodic_retrievals, spec.d_model, device=dev)
+    regime_ema = torch.zeros(B, spec.regime_emb_dim, device=dev)
+    prev_regime_emb = None
+    prev_port_return = torch.zeros(B, device=dev)
+    portfolio_value = torch.ones(B, device=dev)
+    states = backbone.init_state(B, N, dev)
+
+    n_full = spec.n_assets  # 100
+    _zeros_n = torch.zeros(B, n_full, device=dev)
+    _zeros_1 = torch.zeros(B, 1, device=dev)
+
+    # Pre-compute sector bias
     with torch.no_grad():
-        for t in range(0, min_bars - seq_len, seq_len):
-            chunk = feat_tensor[:, t : t + seq_len, :].unsqueeze(0)  # (1, N, T, F)
-            B, Nc, T, Fd = chunk.shape
+        n_episodic = episodic.shape[1]
+        n_total = N + 1 + 1 + n_episodic
+        n_extras = n_total - N
+        extra_ids = torch.full((n_extras,), -1, dtype=torch.long, device=dev)
+        full_ids = torch.cat([sector_ids, extra_ids], dim=0)
+        precomputed_bias = fusion.sector_bias.bias_matrix(full_ids, n_total)
 
-            # Dummy inputs for components that need them
-            market_f = chunk[:, 0, :, -96:]  # (B, T, 96) market features
-            portfolio_s = torch.zeros(B, spec.portfolio_state_dim, device=device)
+    all_weights = []
+    use_autocast = dev.type == "cuda"
 
-            regime_logits = regime_det(
-                market_f[:, -1, :],
-                portfolio_s[:, :3] if portfolio_s.shape[-1] >= 3 else portfolio_s,
+    with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_autocast):
+        for t in range(min_bars):
+            af_t = asset_feats[:, :, t, :]  # (B, N, 184)
+            # Market features: zeros (not present in 184-dim shards)
+            mf_t = torch.zeros(B, 96, device=dev)
+
+            # Regime detection
+            portfolio_value = portfolio_value * (1.0 + prev_port_return)
+            portfolio_summary = torch.stack([
+                portfolio_value, prev_port_return,
+                torch.ones(B, device=dev),
+            ], dim=-1)  # (B, 3)
+            regime_emb, posteriors, _ = regime_det(
+                mf_t, portfolio_summary, regime_ema, prev_regime_emb,
             )
-            regime_probs = F.softmax(regime_logits, dim=-1)
+            regime_ema = (0.98 * regime_ema + 0.02 * regime_emb).detach()
+            prev_regime_emb = regime_emb.detach()
 
-            proj = input_proj(chunk, regime_probs)  # (B, N, D)
-            backbone_out = backbone(proj, regime_probs)  # (B, N, D)
-            fused = fusion(backbone_out, regime_probs)  # (B, N, D)
-            w = head_module(fused)  # (B, N)
-            all_weights.append(w.cpu().numpy())
+            # Input projection
+            asset_tok, mkt_tok, port_tok, _ = input_proj(
+                af_t, mf_t, portfolio_s, calendar, regime_emb
+            )
+            out, states = backbone(asset_tok, regime_emb, posteriors, states)
+            fused, mkt_out = fusion(
+                out, mkt_tok, port_tok, episodic, sector_ids,
+                precomputed_bias=precomputed_bias,
+            )
 
-    weights = np.concatenate(all_weights, axis=0)  # (n_chunks, N)
-    # Repeat each chunk's weights for seq_len bars (constant within chunk)
-    weights_expanded = np.repeat(weights, seq_len, axis=0)[:min_bars]
+            # Head
+            w_t = head_module(fused)  # (B, N)
+            all_weights.append(w_t.cpu().numpy())
 
-    return weights_expanded.astype(np.float64), symbols, candles
+            # Update portfolio state
+            w_padded = F.pad(w_t.detach(), (0, n_full - N))
+            portfolio_s = torch.cat([
+                w_padded, _zeros_n, _zeros_1,
+            ], dim=-1)
+
+            prev_port_return = (w_t.detach() * af_t[:, :, 3]).sum(dim=-1)
+
+            if t > 0 and t % 100 == 0:
+                print(f"  inference progress: {t}/{min_bars}")
+
+    weights = np.concatenate(all_weights, axis=0)  # (T_shard, N)
+
+    # Align weights and candles to the same length (take tail of each)
+    min_candle = min(c.shape[0] for c in candles.values())
+    T = min(weights.shape[0], min_candle)
+    weights = weights[-T:]
+    candles = {sym: arr[-T:] for sym, arr in candles.items()}
+    print(f"  aligned {T} bars for backtest")
+
+    return weights.astype(np.float64), symbols, candles
 
 
 # ── Benchmark suite ──────────────────────────────────────────────────────────
@@ -280,6 +374,7 @@ def run_monte_carlo_analysis(
             mc = meridian_py.run_monte_carlo(
                 sr,
                 num_simulations=bs.mc_simulations,
+                method="block_bootstrap",
                 seed=bs.mc_seed,
             )
             mc_results[sym] = mc
@@ -362,7 +457,7 @@ def smoke_test() -> None:
 
     # Monte Carlo on one symbol
     sr = result.symbol_result("AAPL")
-    mc = meridian_py.run_monte_carlo(sr, num_simulations=200, seed=42)
+    mc = meridian_py.run_monte_carlo(sr, num_simulations=200, method="block_bootstrap", seed=42)
     print(f"\nMonte Carlo (AAPL): {mc}")
     print("Smoke test passed.")
 
@@ -373,11 +468,13 @@ def main() -> None:
         "--checkpoint", type=Path, help="path to trained model checkpoint"
     )
     parser.add_argument("--data-dir", type=Path, default=Path("data/mmaps"))
+    parser.add_argument("--split", default="test",
+                        help="data split to backtest on (default: test)")
     parser.add_argument("--head", choices=["return", "sharpe"], default="return")
     parser.add_argument(
         "--smoke", action="store_true", help="run smoke test with synthetic data"
     )
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = parser.parse_args()
 
     if args.smoke:
@@ -388,9 +485,13 @@ def main() -> None:
         parser.error("--checkpoint required (or use --smoke)")
 
     bs = BacktestSpec()
+    shard_dir = args.data_dir / args.split
+    if not shard_dir.exists():
+        parser.error(f"split directory not found: {shard_dir}")
+    print(f"Backtesting on {args.split} split: {shard_dir}")
     weights, symbols, candles = load_model_and_produce_weights(
         args.checkpoint,
-        args.data_dir,
+        shard_dir,
         args.head,
         device=args.device,
     )

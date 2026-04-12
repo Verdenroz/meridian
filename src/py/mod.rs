@@ -12,6 +12,7 @@ pub mod strategy;
 pub mod results;
 pub mod benchmarks;
 pub mod comparison;
+pub mod data;
 pub mod validation;
 
 /// Python module registered as `meridian_py`.
@@ -46,6 +47,9 @@ fn meridian_py(m: &Bound<'_, PyModule>) -> PyResult<()> {
 
     // Validation
     m.add_function(wrap_pyfunction!(validation::run_monte_carlo, m)?)?;
+
+    // Data fetching
+    m.add_function(wrap_pyfunction!(data::fetch_candles, m)?)?;
 
     Ok(())
 }

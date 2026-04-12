@@ -133,7 +133,7 @@ def volatility_aux_loss(
 def rolling_sharpe_loss(
     weights: torch.Tensor,        # (B, T, N)
     asset_returns: torch.Tensor,  # (B, T, N)
-    annual_factor: float = 252.0 * 390.0,
+    annual_factor: float = 252.0,
     eps: float = 1e-6,
 ) -> torch.Tensor:
     """Negative annualised Sharpe ratio over the full sequence window.

@@ -2,13 +2,13 @@
 #
 # Composition:
 #   70 large-cap equities  — all optionable, EDGAR-filed, across all 11 GICS sectors
-#   30 ETFs                — broad market, sector, factor, bond, commodity, volatility
+#   30 ETFs                — broad market, sector, factor, bond, commodity, international
 #
 # Selection criteria (equities):
 #   - S&P 500 constituent or equivalent market cap (>$10B)
 #   - Liquid options chain (> 500 OI on front-month ATM)
 #   - EDGAR filer (10-K/10-Q available)
-#   - At least 5 years of 1-minute OHLCV history
+#   - At least 15 years of OHLCV history (listed before 2011)
 #
 # Sector distribution (70 equities across 11 GICS sectors):
 #   Information Technology  (12)
@@ -34,14 +34,14 @@ AMD     # AMD — CPUs, GPUs (NVIDIA competitor)
 INTC    # Intel — legacy semiconductor bellwether
 QCOM    # Qualcomm — mobile chips, 5G
 TXN     # Texas Instruments — analog/embedded semiconductors
-NOW     # ServiceNow — IT workflow automation
+ADBE    # Adobe — creative/document cloud, digital media
 AMAT    # Applied Materials — semiconductor equipment
 
 # ── Health Care (9) ──────────────────────────────────────────────────────────
 LLY     # Eli Lilly — GLP-1 drugs, oncology
 UNH     # UnitedHealth — largest US health insurer
 JNJ     # Johnson & Johnson — diversified pharma/medtech
-ABBV    # AbbVie — immunology (Humira successor pipeline)
+BMY     # Bristol-Myers Squibb — oncology, cardiovascular
 MRK     # Merck — oncology (Keytruda), vaccines
 TMO     # Thermo Fisher — lab instruments, life sciences tools
 ABT     # Abbott Labs — diagnostics, medical devices
@@ -69,7 +69,7 @@ LOW     # Lowe's — home improvement (HD comp)
 BKNG    # Booking Holdings — online travel
 
 # ── Communication Services (6) ───────────────────────────────────────────────
-META    # Meta — social media, AR/VR
+EA      # Electronic Arts — interactive entertainment, gaming
 GOOGL   # Alphabet — search, cloud, YouTube
 NFLX    # Netflix — streaming, ad-supported tier
 DIS     # Disney — media, streaming, theme parks
@@ -82,7 +82,7 @@ HON     # Honeywell — aerospace, building automation
 UPS     # UPS — parcel delivery logistics
 BA      # Boeing — commercial/defense aerospace
 GE      # GE Aerospace — jet engines, defense
-RTX     # RTX (Raytheon) — defense, aerospace systems
+GD      # General Dynamics — defense, aerospace, marine systems
 DE      # Deere & Company — agriculture/construction equipment
 LMT     # Lockheed Martin — defense prime contractor
 
@@ -100,7 +100,7 @@ COP     # ConocoPhillips — E&P pure-play
 OXY     # Occidental Petroleum — E&P, Berkshire-backed, active options
 
 # ── Materials (4) ────────────────────────────────────────────────────────────
-LIN     # Linde — industrial gases (global leader)
+APD     # Air Products — industrial gases, hydrogen energy
 FCX     # Freeport-McMoRan — copper, gold mining
 NEM     # Newmont — largest gold miner
 SHW     # Sherwin-Williams — paints, coatings
@@ -120,29 +120,31 @@ DUK     # Duke Energy — regulated electric, Carolinas/Midwest
 # Broad market
 SPY     # S&P 500 (SPDR) — primary benchmark
 QQQ     # Nasdaq-100 (Invesco) — mega-cap tech
+DIA     # Dow Jones Industrial (SPDR) — price-weighted blue-chip
 IWM     # Russell 2000 (iShares) — small-cap exposure
 VTI     # Total US market (Vanguard)
 MDY     # S&P 400 Mid-Cap (SPDR)
 
-# Sector ETFs (SPDR Select Sector suite — 11 sectors)
+# Sector ETFs (SPDR Select Sector — 9 sectors with 15+ year history)
 XLK     # Technology
 XLV     # Health Care
 XLF     # Financials
 XLY     # Consumer Discretionary
-XLC     # Communication Services
 XLI     # Industrials
 XLP     # Consumer Staples
 XLE     # Energy
 XLB     # Materials
-XLRE    # Real Estate
 XLU     # Utilities
+
+# Real Estate (IYR predates the XLRE GICS split)
+IYR     # US Real Estate (iShares) — broad REIT exposure
 
 # Factor / style
 VTV     # Value (Vanguard)
 VUG     # Growth (Vanguard)
-QUAL    # Quality factor (iShares MSCI USA Quality)
-MTUM    # Momentum factor (iShares MSCI USA Momentum)
-USMV    # Min volatility (iShares MSCI USA Min Vol)
+DVY     # Select Dividend (iShares) — high-dividend-yield
+RSP     # S&P 500 Equal Weight (Invesco) — equal-weight factor
+SDY     # S&P Dividend Aristocrats (SPDR) — consistent dividend growers
 
 # Fixed income
 TLT     # 20+ Year Treasury (iShares)
@@ -150,12 +152,10 @@ IEF     # 7-10 Year Treasury (iShares)
 HYG     # High-yield corporate bonds (iShares)
 LQD     # Investment-grade corporate bonds (iShares)
 
-# Commodities & alternatives
+# Commodities
 GLD     # Gold (SPDR)
+SLV     # Silver (iShares) — precious metals diversification
 USO     # Crude oil (United States Oil Fund)
-
-# Volatility
-VXX     # Short-term VIX futures (iPath)
 
 # International
 EFA     # Developed markets ex-US (iShares MSCI EAFE)

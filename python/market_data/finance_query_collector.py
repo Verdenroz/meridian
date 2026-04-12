@@ -49,8 +49,8 @@ def _find_binary() -> Path:
 
     repo_root = Path(__file__).resolve().parents[2]
     for candidate in (
-        repo_root / "target" / "release" / "meridian",
-        repo_root / "target" / "debug" / "meridian",
+        repo_root / "target" / "release" / "meridian-bus",
+        repo_root / "target" / "debug" / "meridian-bus",
     ):
         if candidate.exists():
             return candidate
