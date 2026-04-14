@@ -1,7 +1,8 @@
 """Loss functions for portfolio optimization training.
 
 Return head (Meridian-R) loss:
-  L = -DSR(w, r) + λ_turn · TurnoverPenalty(w) + λ_vol · VolatilityAux(w, r)
+  L = -DSR(w, r) + λ_ret · Return(w, r) + λ_turn · TurnoverPenalty(w)
+      + λ_vol · VolatilityAux(w, r)
 
   DSR (Differential Sharpe Ratio):
     Online estimate of d/dη [E[R] / σ[R]] using exponential moving moments.
@@ -17,7 +18,7 @@ Return head (Meridian-R) loss:
 
 Sharpe head (Meridian-S) loss:
   L = -SharpeRatio(w, r)_{rolling_window}
-  Backbone frozen; only Meridian-S head parameters updated.
+  Trained with staged backbone fine-tuning (freeze then low-LR unfreeze).
 
 Hyperparameters:
   λ_turn = 0.1   — turnover penalty weight
@@ -85,6 +86,16 @@ def dsr_loss(
     return -dsr.mean()
 
 
+# ── Explicit return term ───────────────────────────────────────────────────────
+
+def expected_return_loss(
+    weights: torch.Tensor,       # (B, T, N)
+    asset_returns: torch.Tensor, # (B, T, N)
+) -> torch.Tensor:
+    """Negative mean portfolio return (maximize expected return)."""
+    return -portfolio_returns(weights, asset_returns).mean()
+
+
 # ── Turnover penalty ─────────────────────────────────────────────────────────
 
 def turnover_penalty(weights: torch.Tensor) -> torch.Tensor:  # (B, T, N) → scalar
@@ -138,7 +149,7 @@ def rolling_sharpe_loss(
 ) -> torch.Tensor:
     """Negative annualised Sharpe ratio over the full sequence window.
 
-    Used for Meridian-S head training (backbone frozen).
+    Used for Meridian-S head training.
     Computes Sharpe over the entire T-step window, which at 200K steps
     of 64-step sequences covers substantial regime variation.
 
@@ -157,31 +168,33 @@ def return_head_loss(
     weights: torch.Tensor,        # (B, T, N)
     asset_returns: torch.Tensor,  # (B, T, N)
     pred_vol: torch.Tensor | None = None,  # (B, T, horizon) from vol head
+    lambda_ret: float = 0.1,
     lambda_turn: float = 0.1,
     lambda_vol: float = 0.05,
     dsr_eta: float = 0.01,
 ) -> dict[str, torch.Tensor]:
-    """Combined Meridian-R training loss.
-
-    Turnover and vol_aux penalties are adaptively scaled relative to
-    the DSR magnitude so their gradients remain meaningful regardless
-    of how large DSR grows during training.
+    """Combined Meridian-R training loss per spec equation.
 
     Returns a dict with individual components and 'total' for logging.
     """
     l_dsr  = dsr_loss(weights, asset_returns, eta=dsr_eta)
+    l_ret  = expected_return_loss(weights, asset_returns)
     l_turn = turnover_penalty(weights)
     l_vol  = (
         volatility_aux_loss(pred_vol, weights, asset_returns)
         if pred_vol is not None
         else weights.new_zeros(1).squeeze()
     )
-    # Adaptive scaling: make λ control *relative* importance to DSR,
-    # not absolute magnitude.  stop-gradient ratio so scaling doesn't
-    # affect the DSR gradient itself.
-    dsr_scale = l_dsr.detach().abs().clamp(min=1.0, max=100.0)
-    turn_scale = dsr_scale / l_turn.detach().clamp(min=1e-6)
-    vol_scale  = dsr_scale / l_vol.detach().clamp(min=1e-6) if l_vol.abs() > 0 else 1.0
-
-    total = l_dsr + lambda_turn * turn_scale * l_turn + lambda_vol * vol_scale * l_vol
-    return {"dsr": l_dsr, "turnover": l_turn, "vol_aux": l_vol, "total": total}
+    total = (
+        l_dsr
+        + lambda_ret * l_ret
+        + lambda_turn * l_turn
+        + lambda_vol * l_vol
+    )
+    return {
+        "dsr": l_dsr,
+        "return": l_ret,
+        "turnover": l_turn,
+        "vol_aux": l_vol,
+        "total": total,
+    }

@@ -43,6 +43,29 @@ class BacktestSpec:
 
 # ── Candle loading ───────────────────────────────────────────────────────────
 
+def _load_shard_rows(path: Path, feature_dim: int = 280) -> np.ndarray:
+    raw = np.memmap(path, dtype="float32", mode="r")
+    n_floats = int(raw.size)
+    if n_floats % feature_dim != 0:
+        raise ValueError(
+            f"shard {path} has unsupported row width "
+            f"(floats={n_floats}, expected multiple of {feature_dim})"
+        )
+    return raw.reshape(-1, feature_dim).astype(np.float64)
+
+
+def blend_head_weights(
+    weights_r: np.ndarray,          # (B, N)
+    weights_s: np.ndarray,          # (B, N)
+    regime_posteriors: np.ndarray,  # (B, 4): [low_vol, high_vol, mean_rev, crisis]
+) -> np.ndarray:
+    """Blend return/sharpe heads using regime posterior weights."""
+    alpha_s = regime_posteriors[:, 1] + regime_posteriors[:, 3]
+    alpha_r = regime_posteriors[:, 0] + regime_posteriors[:, 2]
+    mixed = alpha_r[:, None] * weights_r + alpha_s[:, None] * weights_s
+    denom = np.clip(mixed.sum(axis=1, keepdims=True), 1e-12, None)
+    return mixed / denom
+
 def load_candles_from_shards(
     data_dir: Path,
     symbols: list[str],
@@ -64,7 +87,6 @@ def load_candles_from_shards(
         candles: {symbol: (T, 6) float64 array of [ts, O, H, L, C, V]}
         min_bars: shortest shard length across all symbols
     """
-    feature_dim = 184
     candles = {}
     min_bars = float("inf")
 
@@ -73,9 +95,8 @@ def load_candles_from_shards(
         if not path.exists():
             continue
 
-        raw = np.memmap(path, dtype="float32", mode="r")
-        n = len(raw) // feature_dim
-        data = raw[: n * feature_dim].reshape(n, feature_dim).astype(np.float64)
+        data = _load_shard_rows(path)
+        n = data.shape[0]
         min_bars = min(min_bars, n)
 
         # Reconstruct close prices from log-returns: close[t] = base * exp(cumsum(lr))
@@ -120,6 +141,7 @@ def load_model_and_produce_weights(
     checkpoint_path: Path,
     data_dir: Path,
     head: str = "return",
+    sharpe_checkpoint_path: Path | None = None,
     spec: MeridianSpec = DEFAULT_SPEC,
     device: str = "cpu",
 ) -> tuple[np.ndarray, list[str], dict[str, np.ndarray]]:
@@ -147,13 +169,10 @@ def load_model_and_produce_weights(
         raise FileNotFoundError(f"no .f32bin shards in {data_dir}")
 
     # Load shard features for model inference
-    feature_dim = 184
     shard_arrays = {}
     for sym in symbols:
         path = data_dir / f"{sym}.f32bin"
-        raw = np.memmap(path, dtype="float32", mode="r")
-        n = len(raw) // feature_dim
-        shard_arrays[sym] = raw[: n * feature_dim].reshape(n, feature_dim)
+        shard_arrays[sym] = _load_shard_rows(path).astype(np.float32)
 
     # Tail-align shards to shortest common length
     min_bars = min(a.shape[0] for a in shard_arrays.values())
@@ -165,6 +184,11 @@ def load_model_and_produce_weights(
     real_candles = meridian_py.fetch_candles(symbols, interval="1d", range="10y")
     # Keep only symbols that were successfully fetched
     fetched = [s for s in symbols if s in real_candles]
+    if not fetched:
+        raise RuntimeError(
+            "No candles fetched for requested symbols; cannot run backtest "
+            f"(symbols={symbols})"
+        )
     if len(fetched) < N:
         missing = set(symbols) - set(fetched)
         print(f"  warning: {len(missing)} symbols not fetched: {missing}")
@@ -193,8 +217,6 @@ def load_model_and_produce_weights(
     backbone, fusion, regime_det, input_proj = build_model(spec, dev)
     head_r = MeridianR(spec.d_model).to(dev)
     head_s = MeridianS(spec.d_model).to(dev)
-    head_module = head_r if head == "return" else head_s
-
     # Load checkpoint — format: {model_state: {backbone: ..., fusion: ..., ...}}
     ckpt = torch.load(checkpoint_path, map_location=device, weights_only=False)
     model_state = ckpt.get("model_state", ckpt)
@@ -211,17 +233,33 @@ def load_model_and_produce_weights(
         if key in model_state:
             module.load_state_dict(model_state[key], strict=False)
 
-    for m in [input_proj, regime_det, backbone, fusion, head_module]:
+    if head == "blended":
+        if sharpe_checkpoint_path is not None:
+            sharpe_ckpt = torch.load(
+                sharpe_checkpoint_path, map_location=device, weights_only=False
+            )
+            sharpe_state = sharpe_ckpt.get("model_state", sharpe_ckpt)
+            if "head_sharpe" not in sharpe_state:
+                raise ValueError(
+                    f"checkpoint {sharpe_checkpoint_path} does not contain head_sharpe"
+                )
+            head_s.load_state_dict(sharpe_state["head_sharpe"], strict=False)
+        elif "head_sharpe" not in model_state:
+            raise ValueError(
+                "blended head mode requires a sharpe head checkpoint "
+                "(pass --checkpoint-sharpe)"
+            )
+
+    for m in [input_proj, regime_det, backbone, fusion, head_r, head_s]:
         m.eval()
 
     # Run recurrent forward pass (mirrors PortfolioTrainer._forward)
     feat_tensor = torch.from_numpy(features).float().to(dev)  # (N, T, F)
     B = 1
 
-    # Split per-asset (184) features — no market block in 184-dim shards
-    # Market features are the last 96 dims when feature_dim=280; with 184 we
-    # use zeros (same as training when market block is absent from shard).
-    asset_feats = feat_tensor.unsqueeze(0)  # (1, N, T, 184)
+    # Split per-asset and market blocks from canonical 280-dim rows.
+    asset_feats = feat_tensor[..., :184].unsqueeze(0)   # (1, N, T, 184)
+    market_feats = feat_tensor[..., 184:].unsqueeze(0)  # (1, N, T, 96)
 
     # Bootstrap recurrent state
     portfolio_s = torch.zeros(B, spec.portfolio_state_dim, device=dev)
@@ -253,8 +291,7 @@ def load_model_and_produce_weights(
     with torch.no_grad(), torch.autocast("cuda", dtype=torch.bfloat16, enabled=use_autocast):
         for t in range(min_bars):
             af_t = asset_feats[:, :, t, :]  # (B, N, 184)
-            # Market features: zeros (not present in 184-dim shards)
-            mf_t = torch.zeros(B, 96, device=dev)
+            mf_t = market_feats[:, :, t, :].mean(dim=1)  # (B, 96)
 
             # Regime detection
             portfolio_value = portfolio_value * (1.0 + prev_port_return)
@@ -278,8 +315,19 @@ def load_model_and_produce_weights(
                 precomputed_bias=precomputed_bias,
             )
 
-            # Head
-            w_t = head_module(fused)  # (B, N)
+            if head == "return":
+                w_t = head_r(fused)  # (B, N)
+            elif head == "sharpe":
+                w_t = head_s(fused)  # (B, N)
+            elif head == "blended":
+                w_r = head_r(fused)
+                w_s = head_s(fused)
+                alpha_s = posteriors[:, 1] + posteriors[:, 3]
+                alpha_r = posteriors[:, 0] + posteriors[:, 2]
+                w_t = alpha_r.unsqueeze(1) * w_r + alpha_s.unsqueeze(1) * w_s
+                w_t = w_t / w_t.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+            else:
+                raise ValueError(f"unsupported head mode: {head}")
             all_weights.append(w_t.cpu().numpy())
 
             # Update portfolio state
@@ -470,7 +518,13 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=Path("data/mmaps"))
     parser.add_argument("--split", default="test",
                         help="data split to backtest on (default: test)")
-    parser.add_argument("--head", choices=["return", "sharpe"], default="return")
+    parser.add_argument("--head", choices=["return", "sharpe", "blended"], default="return")
+    parser.add_argument(
+        "--checkpoint-sharpe",
+        type=Path,
+        default=None,
+        help="Sharpe-head checkpoint for blended mode",
+    )
     parser.add_argument(
         "--smoke", action="store_true", help="run smoke test with synthetic data"
     )
@@ -493,6 +547,7 @@ def main() -> None:
         args.checkpoint,
         shard_dir,
         args.head,
+        sharpe_checkpoint_path=args.checkpoint_sharpe,
         device=args.device,
     )
 

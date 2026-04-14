@@ -16,9 +16,8 @@ Input JSONL schema (one row per asset-minute):
   }
 
 Output: binary shard files at data/mmaps/{split}/{symbol}.f32bin
-  Format: raw little-endian f32, PER_ASSET_FEATURE_DIM (184) floats per row, no header.
-  Market-wide features (96-dim) are written as a separate shard at data/mmaps/market.f32bin
-  and padded with zeros in historical mode where market data is unavailable.
+  Format: raw little-endian f32, (PER_ASSET_FEATURE_DIM + MARKET_FEATURE_DIM)
+  floats per row (184 + 96 = 280), no header.
 
 Split assignment is delegated to train.splits.
 Ingestion manifest written to reports/ingestion/{symbol}.json.
@@ -42,7 +41,7 @@ from train.splits import Split, assign_split
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
-ROW_DIM = PER_ASSET_FEATURE_DIM  # 184 floats per per-asset row
+ROW_DIM = PER_ASSET_FEATURE_DIM + MARKET_FEATURE_DIM  # 280 floats per row
 ROW_STRUCT = struct.Struct(f"<{ROW_DIM}f")
 
 # Block sizes (must sum to PER_ASSET_FEATURE_DIM = 184)
@@ -59,6 +58,7 @@ _BLOCK_DIMS: dict[str, int] = {
 assert sum(_BLOCK_DIMS.values()) == PER_ASSET_FEATURE_DIM, (
     f"Block dims sum to {sum(_BLOCK_DIMS.values())}, expected {PER_ASSET_FEATURE_DIM}"
 )
+_MARKET_DIM = MARKET_FEATURE_DIM
 
 
 # ── Manifest ──────────────────────────────────────────────────────────────────
@@ -120,6 +120,7 @@ def _pack_row(row: dict) -> tuple[str, datetime, bytes]:
     floats: list[float] = []
     for block, dim in _BLOCK_DIMS.items():
         floats.extend(_coerce_block(row.get(block), dim))
+    floats.extend(_coerce_block(row.get("market"), _MARKET_DIM))
 
     return symbol, ts, ROW_STRUCT.pack(*floats)
 
@@ -139,7 +140,8 @@ class ShardWriter:
             shard_dir = self._data_dir / split
             shard_dir.mkdir(parents=True, exist_ok=True)
             path = shard_dir / f"{symbol}.f32bin"
-            self._handles[key] = open(path, "ab")  # noqa: SIM115
+            # Overwrite per ingest run so repeated collections rebuild canonical shards.
+            self._handles[key] = open(path, "wb")  # noqa: SIM115
         return self._handles[key]
 
     def write(self, symbol: str, split: str, packed: bytes) -> None:
@@ -251,12 +253,12 @@ def enumerate_shards(data_dir: Path, split: Split) -> list[Path]:
 
 
 def shard_row_count(path: Path) -> int:
-    """Return the number of feature rows in a shard file."""
+    """Return the number of 280-dim feature rows in a shard file."""
     size = path.stat().st_size
     row_bytes = ROW_STRUCT.size
     if size % row_bytes != 0:
         raise ValueError(
-            f"shard {path} size {size} is not a multiple of row size {row_bytes}"
+            f"shard {path} size {size} is not a multiple of canonical row size {row_bytes}"
         )
     return size // row_bytes
 
