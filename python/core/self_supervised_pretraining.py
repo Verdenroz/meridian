@@ -1,9 +1,8 @@
-"""Self-supervised pre-training scaffold — three joint predictive objectives (Section 10.2)."""
+"""Self-supervised pre-training scaffold — TCP objective (Section 11.3)."""
 
 from __future__ import annotations
 
 import math
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
@@ -12,102 +11,376 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.utils.data import DataLoader, Dataset, IterableDataset
+from torch.utils.data import DataLoader, IterableDataset
+
+PER_ASSET_FEATURE_DIM = 184
+MARKET_FEATURE_DIM = 96
+TOTAL_FEATURE_DIM = PER_ASSET_FEATURE_DIM + MARKET_FEATURE_DIM
+RETURN_FEATURE_INDEX = 3
+SYNTHETIC_SHARD_PREFIX = "FDA_SYNTH_"
+UNKNOWN_SECTOR_ID = -1
 
 
-# ── Prediction heads ─────────────────────────────────────────────────────────
+# ── Contrastive projection ───────────────────────────────────────────────────
 
-class ReturnHead(nn.Module):
-    """Objective 1: predict next-step log-return per asset."""
 
-    def __init__(self, d_model: int = 768, n_assets: int = 100) -> None:
+class ProjectionHead(nn.Module):
+    """Two-layer projector used by temporal contrastive pretraining."""
+
+    def __init__(self, d_model: int = 768, proj_dim: int = 128) -> None:
         super().__init__()
-        self.proj = nn.Linear(d_model, 1)
+        self.net = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.SiLU(),
+            nn.Linear(d_model, proj_dim),
+        )
 
-    def forward(self, asset_states: torch.Tensor) -> torch.Tensor:
-        # asset_states: (B, N_assets, D)
-        return self.proj(asset_states).squeeze(-1)  # (B, N_assets)
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return F.normalize(self.net(x), dim=-1)
 
 
-class VolatilityHead(nn.Module):
-    """Objective 2: predict 5-step realised volatility per asset."""
+class ReturnPredictionHead(nn.Module):
+    """Auxiliary next-return prediction head used in Phase-1 TCP training."""
 
-    def __init__(self, d_model: int = 768, horizon: int = 5) -> None:
+    def __init__(self, d_model: int = 768) -> None:
         super().__init__()
-        self.horizon = horizon
-        self.proj    = nn.Linear(d_model, horizon)
+        self.net = nn.Linear(d_model, 1)
 
-    def forward(self, asset_states: torch.Tensor) -> torch.Tensor:
-        # asset_states: (B, N_assets, D)
-        return F.softplus(self.proj(asset_states))  # (B, N_assets, horizon) ≥ 0
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x).squeeze(-1)
 
 
-class CorrelationHead(nn.Module):
-    """Objective 3: predict 20-day rolling pairwise correlation matrix."""
+def infer_regime_label(feature_seq: np.ndarray) -> int:
+    """Heuristic 4-state regime label — fallback for synthetic shards and
+    smoke tests where no HMM labels are available.
 
-    def __init__(self, d_model: int = 768, n_assets: int = 100) -> None:
-        super().__init__()
-        self.n_assets = n_assets
-        # Project each asset state to a correlation embedding; cosine sim → corr prediction
-        self.proj = nn.Linear(d_model, 64)
+    Uses two robust proxies available in every shard row:
+      - volatility proxy: market block index 0 (global offset 184)
+      - return proxy: close log-return at index 3
 
-    def forward(self, fused_states: torch.Tensor) -> torch.Tensor:
-        # fused_states: (B, N_assets, D)
-        emb = F.normalize(self.proj(fused_states), dim=-1)   # (B, N, 64)
-        corr = torch.bmm(emb, emb.transpose(1, 2))            # (B, N, N) ∈ [-1, 1]
-        return corr
+    Canonical IDs match the spec:
+      0 = low-vol bull  1 = high-vol trending
+      2 = mean-reverting  3 = crisis
+    """
+    vol_proxy = float(feature_seq[:, 184].mean())
+    ret_proxy = float(feature_seq[:, 3].mean())
+
+    if vol_proxy > 1.5:
+        return 3  # crisis
+    if abs(ret_proxy) > 0.5 or vol_proxy > 0.6:
+        return 1  # high-vol trending
+    if ret_proxy >= 0.0:
+        return 0  # low-vol trending
+    return 2  # mean-reverting
+
+
+# ── HMM regime labeling (§11.2 Phase 0, §11.3) ──────────────────────────────
+
+
+def _shard_returns(path: Path) -> np.ndarray:
+    """Load the per-row log-return series from a .f32bin shard as float64."""
+    raw = np.memmap(path, dtype="float32", mode="r")
+    n_rows = raw.size // TOTAL_FEATURE_DIM
+    data = raw.reshape(n_rows, TOTAL_FEATURE_DIM)
+    return data[:, RETURN_FEATURE_INDEX].reshape(-1, 1).astype(np.float64)
+
+
+def _canonicalize_hmm(
+    hmm: object, raw_labels: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Map raw HMM state integers to the spec's canonical regime IDs.
+
+    Canonicalization rules (spec §11.3):
+      0 = low-vol bull      → highest mean return
+      1 = high-vol trending → higher vol of the two middle states
+      2 = mean-reverting    → lower vol of the two middle states
+      3 = crisis            → lowest mean return
+
+    Returns (remap, canonical_labels) where remap[raw_state] = canonical_id.
+    """
+    means = hmm.means_.flatten()  # type: ignore[attr-defined]
+    stds = np.sqrt(hmm.covars_.flatten())  # type: ignore[attr-defined]
+    n = len(means)
+    mean_order = np.argsort(-means)  # descending: index 0 = highest-mean state
+
+    remap = np.empty(n, dtype=np.int64)
+    remap[mean_order[0]] = 0  # highest mean → bull
+    remap[mean_order[-1]] = 3  # lowest mean  → crisis
+    # Middle states: sort by vol desc → high-vol trending first
+    mid = sorted(mean_order[1:-1].tolist(), key=lambda s: -stds[s])
+    remap[mid[0]] = 1  # higher vol → high-vol trending
+    remap[mid[1]] = 2  # lower vol  → mean-reverting
+
+    return remap, remap[raw_labels]
+
+
+def build_spy_regime_labels(
+    data_dir: Path,
+    n_states: int = 4,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Fit a 4-state Gaussian HMM on SPY training-split returns and return
+    per-row regime labels for both train and validation splits.
+
+    Labels use the spec's canonical IDs (§11.3):
+      0 = low-vol bull    1 = high-vol trending
+      2 = mean-reverting  3 = crisis
+
+    The HMM is fit exclusively on the training split to prevent look-ahead
+    leakage; the fitted model is then applied to the validation split.
+    Labels are cached alongside the data directory for fast restarts.
+
+    Args:
+        data_dir:  Root shard directory (contains train/ and validation/).
+        n_states:  Number of HMM hidden states — must equal spec.n_regimes=4.
+
+    Returns:
+        (train_labels, val_labels) — int64 arrays of shape (n_rows,) per split,
+        or None for either element if the SPY shard is absent.
+    """
+    from hmmlearn.hmm import GaussianHMM
+
+    spy_train = data_dir / "train" / "SPY.f32bin"
+    spy_val = data_dir / "validation" / "SPY.f32bin"
+    cache_train = data_dir / "spy_regime_labels_train.npy"
+    cache_val = data_dir / "spy_regime_labels_val.npy"
+
+    if not spy_train.exists():
+        return None, None
+
+    # Cache hit: verify the label count still matches the shard row count.
+    if cache_train.exists():
+        cached = np.load(cache_train)
+        raw_check = np.memmap(spy_train, dtype="float32", mode="r")
+        expected = raw_check.size // TOTAL_FEATURE_DIM
+        if cached.shape[0] == expected:
+            val_labels = np.load(cache_val) if cache_val.exists() else None
+            return cached, val_labels
+
+    # Fit on training split only (no look-ahead).
+    train_returns = _shard_returns(spy_train)
+    hmm = GaussianHMM(
+        n_components=n_states,
+        covariance_type="diag",
+        n_iter=200,
+        random_state=42,
+        verbose=False,
+    )
+    hmm.fit(train_returns)
+    remap, train_labels = _canonicalize_hmm(hmm, hmm.predict(train_returns))
+    np.save(cache_train, train_labels)
+
+    counts = np.bincount(train_labels, minlength=n_states)
+    print(
+        f"HMM regime labels fit on {len(train_labels)} SPY rows — "
+        f"bull={counts[0]}  hi-vol={counts[1]}  "
+        f"mean-rev={counts[2]}  crisis={counts[3]}"
+    )
+
+    val_labels: np.ndarray | None = None
+    if spy_val.exists():
+        val_returns = _shard_returns(spy_val)
+        raw_val = hmm.predict(val_returns)
+        val_labels = remap[raw_val]
+        np.save(cache_val, val_labels)
+
+    return train_labels, val_labels
 
 
 # ── Data loading ─────────────────────────────────────────────────────────────
 
+
 class ShardDataset(IterableDataset):
-    """Streams (feature_seq, target_seq) pairs from .f32bin memory-mapped shards.
+    """Streams TCP training tuples from .f32bin memory-mapped shards.
 
     Each .f32bin shard contains rows of shape (per_asset_feature_dim + market_dim)
     = 184 + 96 = 280 floats, stored as little-endian float32.
 
-    Sequences are extracted with stride=1 (every possible starting offset),
-    yielding (seq_len + 1) rows so we can use the last row for targets.
+    For each anchor window W_a, the dataset emits:
+      - adjacent positive window W_b (offset by `positive_offset` rows),
+      - one-step-ahead return target for auxiliary prediction loss,
+      - metadata (asset/regime/sector IDs, source weight).
     """
 
-    FEATURE_DIM = 280  # 184 per-asset (120 continuous + 64 text) + 96 market-wide
+    PER_ASSET_DIM = PER_ASSET_FEATURE_DIM
+    FEATURE_DIM = (
+        TOTAL_FEATURE_DIM  # 184 per-asset (120 continuous + 64 text) + 96 market-wide
+    )
+    MARKET_DIM = MARKET_FEATURE_DIM
 
     def __init__(
         self,
         shard_paths: list[Path],
         seq_len: int = 64,
         shuffle: bool = True,
+        positive_offset: int = 4,
+        synthetic_prefix: str = SYNTHETIC_SHARD_PREFIX,
+        synthetic_loss_weight: float = 0.5,
+        symbol_to_sector: dict[str, int] | None = None,
+        symbol_to_id: dict[str, int] | None = None,
+        global_regime_labels: np.ndarray | None = None,
     ) -> None:
         self.shard_paths = shard_paths
-        self.seq_len     = seq_len
-        self.shuffle     = shuffle
+        self.seq_len = seq_len
+        self.shuffle = shuffle
+        self.positive_offset = positive_offset
+        self.synthetic_prefix = synthetic_prefix
+        self.synthetic_loss_weight = synthetic_loss_weight
+        self.symbol_to_sector = symbol_to_sector or {}
+        # When provided, IDs are used directly; otherwise derived from all shard
+        # paths sorted by stem — consistent across DataLoader workers.
+        self.symbol_to_id = symbol_to_id or {}
+        # Per-row HMM regime labels aligned to the SPY shard row order (all
+        # real shards share the same trading calendar).  None → heuristic fallback.
+        self.global_regime_labels = global_regime_labels
+        if self.positive_offset == 0:
+            raise ValueError("positive_offset must be non-zero for TCP views")
+        if self.synthetic_loss_weight <= 0.0:
+            raise ValueError(
+                "synthetic_loss_weight must be positive, "
+                f"got {self.synthetic_loss_weight}"
+            )
 
-    def _iter_shard(self, path: Path) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-        data = np.memmap(path, dtype="float32", mode="r")
-        n_rows = len(data) // self.FEATURE_DIM
-        data   = data[: n_rows * self.FEATURE_DIM].reshape(n_rows, self.FEATURE_DIM)
+    def _load_rows(self, path: Path) -> np.ndarray:
+        raw = np.memmap(path, dtype="float32", mode="r")
+        n_floats = int(raw.size)
+        if n_floats % self.FEATURE_DIM != 0:
+            raise ValueError(
+                f"shard {path} has unsupported row width "
+                f"(floats={n_floats}, expected multiple of {self.FEATURE_DIM})"
+            )
+        return raw.reshape(-1, self.FEATURE_DIM)
 
-        n_seqs = n_rows - self.seq_len
+    def _iter_shard(
+        self,
+        path: Path,
+        asset_id: int,
+        sector_id: int,
+        sample_weight: float,
+    ) -> Iterator[tuple[np.ndarray, np.ndarray, float, int, int, int, float, int]]:
+        data = self._load_rows(path)
+        n_rows = data.shape[0]
+
+        min_start = max(0, -self.positive_offset)
+        max_start = n_rows - self.seq_len - max(self.positive_offset, 0)
+        n_seqs = max_start - min_start
         if n_seqs <= 0:
             return
 
-        indices = np.arange(n_seqs)
+        indices = np.arange(min_start, max_start)
         if self.shuffle:
             np.random.shuffle(indices)
 
-        for start in indices:
-            seq    = data[start : start + self.seq_len]           # (T, F)
-            target = data[start + 1 : start + self.seq_len + 1]  # (T, F) — shifted by 1
-            yield seq, target
+        is_synthetic = path.stem.startswith(self.synthetic_prefix)
+        n_label_rows = (
+            len(self.global_regime_labels)
+            if self.global_regime_labels is not None
+            else 0
+        )
 
-    def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
+        for start in indices:
+            start_idx = int(start)
+            pos_start = start_idx + self.positive_offset
+            seq_a = data[start_idx : start_idx + self.seq_len]  # (T, F)
+            seq_b = data[pos_start : pos_start + self.seq_len]  # (T, F)
+            next_return = float(data[start_idx + self.seq_len, RETURN_FEATURE_INDEX])
+            # Use HMM label at the last step of the anchor window so the
+            # regime reflects the current market state at inference time.
+            # Synthetic shards have no date-aligned HMM labels → heuristic.
+            label_idx = start_idx + self.seq_len - 1
+            if (
+                not is_synthetic
+                and self.global_regime_labels is not None
+                and label_idx < n_label_rows
+            ):
+                regime_id = int(self.global_regime_labels[label_idx])
+            else:
+                regime_id = infer_regime_label(seq_a)
+            yield (
+                seq_a,
+                seq_b,
+                next_return,
+                asset_id,
+                regime_id,
+                sector_id,
+                sample_weight,
+                start_idx,
+            )
+
+    def __iter__(
+        self,
+    ) -> Iterator[
+        tuple[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+        ]
+    ]:
         paths = list(self.shard_paths)
+        worker = torch.utils.data.get_worker_info()
+        if worker is not None:
+            paths = paths[worker.id :: worker.num_workers]
+
         if self.shuffle:
             import random
+
             random.shuffle(paths)
-        for path in paths:
-            for seq, target in self._iter_shard(path):
-                yield torch.from_numpy(seq.copy()), torch.from_numpy(target.copy())
+        if self.symbol_to_id:
+            asset_to_id = self.symbol_to_id
+        else:
+            sorted_all = sorted(self.shard_paths, key=lambda x: x.stem)
+            asset_to_id = {p.stem: i for i, p in enumerate(sorted_all)}
+        iterators = {
+            path: iter(
+                self._iter_shard(
+                    path,
+                    asset_to_id[path.stem],
+                    self.symbol_to_sector.get(path.stem, UNKNOWN_SECTOR_ID),
+                    self.synthetic_loss_weight
+                    if path.stem.startswith(self.synthetic_prefix)
+                    else 1.0,
+                )
+            )
+            for path in paths
+        }
+        active = list(paths)
+        rng = np.random.default_rng()
+
+        while active:
+            if self.shuffle:
+                rng.shuffle(active)
+            next_active: list[Path] = []
+            for path in active:
+                iterator = iterators[path]
+                try:
+                    (
+                        seq_a,
+                        seq_b,
+                        next_return,
+                        asset_id,
+                        regime_id,
+                        sector_id,
+                        sample_weight,
+                        time_index,
+                    ) = next(iterator)
+                except StopIteration:
+                    continue
+                yield (
+                    torch.from_numpy(seq_a.copy()),
+                    torch.from_numpy(seq_b.copy()),
+                    torch.tensor(next_return, dtype=torch.float32),
+                    torch.tensor(asset_id, dtype=torch.long),
+                    torch.tensor(regime_id, dtype=torch.long),
+                    torch.tensor(sector_id, dtype=torch.long),
+                    torch.tensor(sample_weight, dtype=torch.float32),
+                    torch.tensor(time_index, dtype=torch.long),
+                )
+                next_active.append(path)
+            active = next_active
 
 
 def build_dataloader(
@@ -116,9 +389,28 @@ def build_dataloader(
     batch_size: int,
     shuffle: bool = True,
     num_workers: int = 4,
+    positive_offset: int = 4,
+    synthetic_loss_weight: float = 0.5,
+    symbol_to_sector: dict[str, int] | None = None,
+    symbol_to_id: dict[str, int] | None = None,
+    global_regime_labels: np.ndarray | None = None,
 ) -> DataLoader:
-    ds = ShardDataset(shard_paths, seq_len=seq_len, shuffle=shuffle)
-    return DataLoader(ds, batch_size=batch_size, num_workers=num_workers, pin_memory=True)
+    ds = ShardDataset(
+        shard_paths,
+        seq_len=seq_len,
+        shuffle=shuffle,
+        positive_offset=positive_offset,
+        synthetic_loss_weight=synthetic_loss_weight,
+        symbol_to_sector=symbol_to_sector,
+        symbol_to_id=symbol_to_id,
+        global_regime_labels=global_regime_labels,
+    )
+    return DataLoader(
+        ds,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+    )
 
 
 def build_split_loaders(
@@ -126,6 +418,9 @@ def build_split_loaders(
     seq_len: int,
     batch_size: int,
     num_workers: int = 4,
+    positive_offset: int = 4,
+    synthetic_loss_weight: float = 0.5,
+    symbol_to_sector: dict[str, int] | None = None,
 ) -> tuple[DataLoader, DataLoader]:
     """Build train and validation DataLoaders from split-aware shard directories.
 
@@ -148,7 +443,7 @@ def build_split_loaders(
     from market_data.dataset_ingestion import enumerate_shards
 
     train_shards = enumerate_shards(data_dir, "train")
-    val_shards   = enumerate_shards(data_dir, "validation")
+    val_shards = enumerate_shards(data_dir, "validation")
 
     if not train_shards:
         raise RuntimeError(
@@ -156,13 +451,50 @@ def build_split_loaders(
             "Run `python -m market_data.pipeline collect` first."
         )
 
-    train_loader = build_dataloader(train_shards, seq_len, batch_size, shuffle=True,  num_workers=num_workers)
-    val_loader   = build_dataloader(val_shards,   seq_len, batch_size, shuffle=False, num_workers=num_workers)
+    # Globally-consistent asset IDs (required for correct multi-worker batching).
+    all_stems = sorted({p.stem for p in train_shards + val_shards})
+    symbol_to_id = {stem: idx for idx, stem in enumerate(all_stems)}
+
+    # HMM regime labels from SPY (§11.2 / §11.3).  The HMM is fit on the
+    # training split only; the fitted model predicts val labels to avoid
+    # look-ahead.  Falls back silently to heuristic if SPY is absent.
+    train_regime_labels, val_regime_labels = build_spy_regime_labels(data_dir)
+    if train_regime_labels is None:
+        print(
+            "SPY shard not found — regime labels will use heuristic fallback. "
+            "Run 'make collect' and ensure SPY is in symbols.txt."
+        )
+
+    train_loader = build_dataloader(
+        train_shards,
+        seq_len,
+        batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        positive_offset=positive_offset,
+        synthetic_loss_weight=synthetic_loss_weight,
+        symbol_to_sector=symbol_to_sector,
+        symbol_to_id=symbol_to_id,
+        global_regime_labels=train_regime_labels,
+    )
+    val_loader = build_dataloader(
+        val_shards,
+        seq_len,
+        batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        positive_offset=positive_offset,
+        synthetic_loss_weight=synthetic_loss_weight,
+        symbol_to_sector=symbol_to_sector,
+        symbol_to_id=symbol_to_id,
+        global_regime_labels=val_regime_labels,
+    )
 
     return train_loader, val_loader
 
 
 # ── Checkpoint ───────────────────────────────────────────────────────────────
+
 
 @dataclass
 class Checkpoint:
@@ -171,7 +503,10 @@ class Checkpoint:
     optimizer_state: dict
     scheduler_state: dict
     best_val_loss: float
-    format_version: int = 1
+    best_val_contrastive_acc: float = 0.0
+    format_version: int = 2
+    architecture_version: str = "v4.0"
+    pretraining_objective: str = "tcp"
 
 
 def save_checkpoint(ckpt: Checkpoint, path: Path) -> None:
@@ -180,11 +515,14 @@ def save_checkpoint(ckpt: Checkpoint, path: Path) -> None:
     torch.save(
         {
             "format_version": ckpt.format_version,
-            "step":            ckpt.step,
-            "model_state":     ckpt.model_state,
+            "architecture_version": ckpt.architecture_version,
+            "pretraining_objective": ckpt.pretraining_objective,
+            "step": ckpt.step,
+            "model_state": ckpt.model_state,
             "optimizer_state": ckpt.optimizer_state,
             "scheduler_state": ckpt.scheduler_state,
-            "best_val_loss":   ckpt.best_val_loss,
+            "best_val_loss": ckpt.best_val_loss,
+            "best_val_contrastive_acc": ckpt.best_val_contrastive_acc,
         },
         tmp,
     )
@@ -194,53 +532,220 @@ def save_checkpoint(ckpt: Checkpoint, path: Path) -> None:
 def load_checkpoint(path: Path) -> Checkpoint:
     data = torch.load(path, map_location="cpu", weights_only=True)
     version = data.get("format_version", 0)
-    if version != 1:
+    if version != 2:
         raise ValueError(f"Unsupported checkpoint format version {version}")
+    if data.get("architecture_version") != "v4.0":
+        raise ValueError("Checkpoint architecture_version is not v4.0")
+    if data.get("pretraining_objective") != "tcp":
+        raise ValueError("Checkpoint pretraining objective is not tcp")
     return Checkpoint(
-        step             = data["step"],
-        model_state      = data["model_state"],
-        optimizer_state  = data["optimizer_state"],
-        scheduler_state  = data["scheduler_state"],
-        best_val_loss    = data["best_val_loss"],
-        format_version   = version,
+        step=data["step"],
+        model_state=data["model_state"],
+        optimizer_state=data["optimizer_state"],
+        scheduler_state=data["scheduler_state"],
+        best_val_loss=data["best_val_loss"],
+        best_val_contrastive_acc=float(data["best_val_contrastive_acc"]),
+        format_version=version,
+        architecture_version=data["architecture_version"],
+        pretraining_objective=data["pretraining_objective"],
     )
 
 
 # ── Loss functions ───────────────────────────────────────────────────────────
 
-def return_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """MSE with per-asset normalisation to prevent high-vol assets dominating."""
-    err  = pred - target                                       # (B, N)
-    norm = target.std(dim=0, keepdim=True).clamp(min=1e-6)    # (1, N)
-    return (err / norm).pow(2).mean()
+
+def _weighted_mean(values: torch.Tensor, weights: torch.Tensor | None) -> torch.Tensor:
+    if weights is None:
+        return values.mean()
+    if weights.ndim != 1 or weights.shape[0] != values.shape[0]:
+        raise ValueError(
+            "weights must be rank-1 and align with batch dimension, "
+            f"got weights={tuple(weights.shape)}, values={tuple(values.shape)}"
+        )
+    denom = weights.sum().clamp_min(1e-8)
+    return (values * weights).sum() / denom
 
 
-def volatility_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """MSE on realised vol prediction."""
-    return F.mse_loss(pred, target.clamp(min=0.0))
+def _multi_positive_info_nce_losses(
+    logits: torch.Tensor,
+    positive_mask: torch.Tensor,
+) -> torch.Tensor:
+    if logits.shape != positive_mask.shape:
+        raise ValueError(
+            "positive_mask must match logits shape, "
+            f"got logits={tuple(logits.shape)} mask={tuple(positive_mask.shape)}"
+        )
+    masked_logits = logits.masked_fill(~positive_mask, torch.finfo(logits.dtype).min)
+    log_num = torch.logsumexp(masked_logits, dim=1)
+    log_den = torch.logsumexp(logits, dim=1)
+    return log_den - log_num
 
 
-def correlation_loss(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
-    """Frobenius norm of correlation prediction error, averaged over batch."""
-    diff = pred - target.clamp(-1.0, 1.0)
-    return diff.pow(2).mean()
+def _pairwise_return_correlation(return_windows: torch.Tensor) -> torch.Tensor:
+    if return_windows.ndim != 2:
+        raise ValueError(
+            f"return_windows must have shape (B,T), got {tuple(return_windows.shape)}"
+        )
+    if return_windows.shape[1] <= 1:
+        return torch.zeros(
+            return_windows.shape[0],
+            return_windows.shape[0],
+            device=return_windows.device,
+            dtype=return_windows.dtype,
+        )
+    centered = return_windows - return_windows.mean(dim=1, keepdim=True)
+    norms = centered.norm(dim=1, keepdim=True).clamp_min(1e-6)
+    return (centered @ centered.T) / (norms @ norms.T)
+
+
+def _build_contrastive_logits_and_mask(
+    z_a: torch.Tensor,
+    z_b: torch.Tensor,
+    asset_ids: torch.Tensor | None = None,
+    regime_ids: torch.Tensor | None = None,
+    sector_ids: torch.Tensor | None = None,
+    return_windows: torch.Tensor | None = None,
+    time_indices: torch.Tensor | None = None,
+    temperature: float = 0.1,
+    hard_negative_boost: float = 0.25,
+    correlation_threshold: float = 0.6,
+    min_negative_gap: int = 50,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    if temperature <= 0.0:
+        raise ValueError(f"temperature must be > 0, got {temperature}")
+    z_a = F.normalize(z_a, dim=-1)
+    z_b = F.normalize(z_b, dim=-1)
+    logits = (z_a @ z_b.T) / temperature
+    positive_mask = torch.eye(z_a.shape[0], device=z_a.device, dtype=torch.bool)
+
+    if asset_ids is not None and regime_ids is not None:
+        if asset_ids.ndim != 1 or regime_ids.ndim != 1:
+            raise ValueError("asset_ids and regime_ids must be rank-1 tensors")
+        if asset_ids.shape[0] != z_a.shape[0] or regime_ids.shape[0] != z_a.shape[0]:
+            raise ValueError("metadata batch dimension must match embeddings")
+        same_asset = asset_ids[:, None] == asset_ids[None, :]
+        diff_regime = regime_ids[:, None] != regime_ids[None, :]
+        hard_negatives = same_asset & diff_regime
+        logits = logits + hard_negatives.to(logits.dtype) * hard_negative_boost
+
+    if (
+        asset_ids is not None
+        and regime_ids is not None
+        and sector_ids is not None
+        and return_windows is not None
+    ):
+        if sector_ids.ndim != 1 or sector_ids.shape[0] != z_a.shape[0]:
+            raise ValueError("sector_ids must be rank-1 and batch-aligned")
+        corr = _pairwise_return_correlation(return_windows)
+        known_sector = sector_ids >= 0
+        same_sector = sector_ids[:, None] == sector_ids[None, :]
+        same_regime = regime_ids[:, None] == regime_ids[None, :]
+        diff_asset = asset_ids[:, None] != asset_ids[None, :]
+        additional_positives = (
+            known_sector[:, None]
+            & known_sector[None, :]
+            & same_sector
+            & same_regime
+            & diff_asset
+            & (corr > correlation_threshold)
+        )
+        positive_mask = positive_mask | additional_positives
+
+    if asset_ids is not None and time_indices is not None and min_negative_gap >= 0:
+        if time_indices.ndim != 1 or time_indices.shape[0] != z_a.shape[0]:
+            raise ValueError("time_indices must be rank-1 and batch-aligned")
+        same_asset = asset_ids[:, None] == asset_ids[None, :]
+        time_delta = (time_indices[:, None] - time_indices[None, :]).abs()
+        nearby_same_asset = same_asset & (time_delta <= min_negative_gap)
+        disallowed_negatives = nearby_same_asset & ~positive_mask
+        logits = logits.masked_fill(disallowed_negatives, float("-inf"))
+
+    return logits, positive_mask
+
+
+def regime_aware_contrastive_terms(
+    z_a: torch.Tensor,
+    z_b: torch.Tensor,
+    asset_ids: torch.Tensor | None = None,
+    regime_ids: torch.Tensor | None = None,
+    sector_ids: torch.Tensor | None = None,
+    return_windows: torch.Tensor | None = None,
+    time_indices: torch.Tensor | None = None,
+    temperature: float = 0.1,
+    hard_negative_boost: float = 0.25,
+    correlation_threshold: float = 0.6,
+    min_negative_gap: int = 50,
+    sample_weights: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Symmetric multi-positive InfoNCE with regime-aware hard negatives."""
+    logits, positive_mask = _build_contrastive_logits_and_mask(
+        z_a,
+        z_b,
+        asset_ids=asset_ids,
+        regime_ids=regime_ids,
+        sector_ids=sector_ids,
+        return_windows=return_windows,
+        time_indices=time_indices,
+        temperature=temperature,
+        hard_negative_boost=hard_negative_boost,
+        correlation_threshold=correlation_threshold,
+        min_negative_gap=min_negative_gap,
+    )
+    weights = None
+    if sample_weights is not None:
+        weights = sample_weights.to(device=logits.device, dtype=logits.dtype)
+    losses_ab = _multi_positive_info_nce_losses(logits, positive_mask)
+    losses_ba = _multi_positive_info_nce_losses(logits.T, positive_mask.T)
+    loss_ab = _weighted_mean(losses_ab, weights)
+    loss_ba = _weighted_mean(losses_ba, weights)
+    loss = 0.5 * (loss_ab + loss_ba)
+
+    # Accuracy: fraction of anchors where the best positive outranks the best
+    # negative.  We mask using the full positive_mask (not just the diagonal) so
+    # that multi-asset positives are excluded from the negative pool — counting
+    # them as "mistakes" would underestimate accuracy and trigger early stopping
+    # prematurely.
+    neg_fill = torch.finfo(logits.dtype).min
+    neg_masked = logits.masked_fill(positive_mask, neg_fill)
+    pos_masked = logits.masked_fill(~positive_mask, neg_fill)
+    max_neg_row = neg_masked.max(dim=1).values
+    max_neg_col = neg_masked.max(dim=0).values
+    max_pos_row = pos_masked.max(dim=1).values
+    max_pos_col = pos_masked.max(dim=0).values
+    acc_ab = (max_pos_row > max_neg_row).float().mean()
+    acc_ba = (max_pos_col > max_neg_col).float().mean()
+    contrastive_acc = 0.5 * (acc_ab + acc_ba)
+    return loss, contrastive_acc
 
 
 # ── Trainer ──────────────────────────────────────────────────────────────────
 
+
 @dataclass
 class TrainConfig:
-    total_steps:     int   = 200_000
-    batch_size:      int   = 8
-    seq_len:         int   = 64
-    lr:              float = 1e-4
-    warmup_steps:    int   = 2_000
-    grad_clip:       float = 1.0
-    log_every:       int   = 100
-    eval_every:      int   = 1_000
-    save_every:      int   = 5_000
-    checkpoint_dir:  Path  = field(default_factory=lambda: Path("checkpoints"))
-    checkpoint_name: str   = "backbone_pretrain.pt"
+    total_steps: int = 20_000
+    batch_size: int = 128
+    seq_len: int = 64
+    lr: float = 3e-4
+    min_lr: float = 1e-5
+    warmup_steps: int = 2_000
+    grad_clip: float = 1.0
+    log_every: int = 100
+    eval_every: int = 1_000
+    save_every: int = 5_000
+    eval_max_batches: int = 50
+    contrastive_temperature: float = 0.1
+    contrastive_weight: float = 0.7
+    prediction_weight: float = 0.3
+    positive_pair_offset: int = 4
+    fda_loss_weight: float = 0.5
+    multi_asset_corr_threshold: float = 0.6
+    negative_min_separation: int = 50
+    early_stop_patience_evals: int = 20
+    early_stop_min_delta: float = 1e-4
+    checkpoint_dir: Path = field(default_factory=lambda: Path("checkpoints"))
+    checkpoint_name: str = "backbone_pretrain.pt"
+    compile: bool = False
 
     @property
     def checkpoint_path(self) -> Path:
@@ -248,13 +753,7 @@ class TrainConfig:
 
 
 class SelfSupervisedPretrainer:
-    """Trains the RA-GDN backbone + fusion on three joint self-supervised objectives.
-
-    Objectives (jointly minimised):
-      1. Return prediction:      MSE on next-step log-return per asset
-      2. Volatility prediction:  MSE on 5-min realised vol per asset
-      3. Correlation prediction: Frobenius norm on 20-day rolling correlation matrix
-    """
+    """Trains the hybrid RA-GDN + SWA backbone with v4 TCP objective."""
 
     def __init__(
         self,
@@ -265,138 +764,267 @@ class SelfSupervisedPretrainer:
         d_model: int = 768,
         n_assets: int = 100,
         device: torch.device | None = None,
+        gradient_checkpointing: bool = False,
+        bptt_horizon: int = 0,
     ) -> None:
-        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.backbone         = backbone.to(self.device)
-        self.fusion           = fusion.to(self.device)
-        self.regime_detector  = regime_detector.to(self.device)
+        self.device = device or torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu"
+        )
+        # bptt_horizon=0 means full BPTT (T steps).  Any positive value detaches
+        # recurrent states every K steps, limiting the backward graph to K steps
+        # of state history.  Reduces peak VRAM from O(T) to O(K) for GDN/SWA
+        # state chains — critical for 24 GB GPUs with T=64 and B=128.
+        self.bptt_horizon = bptt_horizon
+        self.backbone = backbone.to(self.device)
+        if gradient_checkpointing and hasattr(
+            backbone, "enable_gradient_checkpointing"
+        ):
+            backbone.enable_gradient_checkpointing()
+        self.fusion = fusion.to(self.device)
+        self.regime_detector = regime_detector.to(self.device)
         self.input_projection = input_projection.to(self.device)
+        self.projection_head = ProjectionHead(d_model=d_model).to(self.device)
+        self.prediction_head = ReturnPredictionHead(d_model=d_model).to(self.device)
 
-        self.return_head = ReturnHead(d_model, n_assets).to(self.device)
-        self.vol_head    = VolatilityHead(d_model).to(self.device)
-        self.corr_head   = CorrelationHead(d_model, n_assets).to(self.device)
-
-        self._all_modules = nn.ModuleList([
-            backbone, fusion, regime_detector, input_projection,
-            self.return_head, self.vol_head, self.corr_head,
-        ])
+        self._all_modules = nn.ModuleList(
+            [
+                backbone,
+                fusion,
+                input_projection,
+                self.projection_head,
+                self.prediction_head,
+            ]
+        )
 
     def _cosine_lr(self, step: int, cfg: TrainConfig) -> float:
         if step < cfg.warmup_steps:
             return step / max(cfg.warmup_steps, 1)
-        progress = (step - cfg.warmup_steps) / max(cfg.total_steps - cfg.warmup_steps, 1)
-        return 0.5 * (1.0 + math.cos(math.pi * progress))
+        progress = (step - cfg.warmup_steps) / max(
+            cfg.total_steps - cfg.warmup_steps, 1
+        )
+        cosine_decay = 0.5 * (1.0 + math.cos(math.pi * progress))
+        min_ratio = min(cfg.min_lr / max(cfg.lr, 1e-12), 1.0)
+        return min_ratio + (1.0 - min_ratio) * cosine_decay
+
+    @staticmethod
+    def _unpack_batch(batch):
+        if len(batch) != 8:
+            raise ValueError(f"expected 8-tuple batch, got arity {len(batch)}")
+        (
+            features,
+            positives,
+            next_returns,
+            asset_ids,
+            regime_ids,
+            sector_ids,
+            sample_weights,
+            time_indices,
+        ) = batch
+        return (
+            features,
+            positives,
+            next_returns,
+            asset_ids,
+            regime_ids,
+            sector_ids,
+            sample_weights,
+            time_indices,
+        )
 
     def _model_state(self) -> dict:
+        backbone_mod = getattr(self.backbone, "_orig_mod", self.backbone)
         return {
-            "backbone":         self.backbone.state_dict(),
-            "fusion":           self.fusion.state_dict(),
-            "regime_detector":  self.regime_detector.state_dict(),
+            "backbone": backbone_mod.state_dict(),
+            "fusion": self.fusion.state_dict(),
+            "regime_detector": self.regime_detector.state_dict(),
             "input_projection": self.input_projection.state_dict(),
-            "return_head":      self.return_head.state_dict(),
-            "vol_head":         self.vol_head.state_dict(),
-            "corr_head":        self.corr_head.state_dict(),
+            "projection_head": self.projection_head.state_dict(),
+            "prediction_head": self.prediction_head.state_dict(),
         }
 
     def _load_model_state(self, state: dict) -> None:
-        self.backbone.load_state_dict(state["backbone"])
+        backbone_mod = getattr(self.backbone, "_orig_mod", self.backbone)
+        backbone_mod.load_state_dict(state["backbone"])
         self.fusion.load_state_dict(state["fusion"])
         self.regime_detector.load_state_dict(state["regime_detector"])
         self.input_projection.load_state_dict(state["input_projection"])
-        self.return_head.load_state_dict(state["return_head"])
-        self.vol_head.load_state_dict(state["vol_head"])
-        self.corr_head.load_state_dict(state["corr_head"])
+        self.projection_head.load_state_dict(state["projection_head"])
+        self.prediction_head.load_state_dict(state["prediction_head"])
 
     def evaluate(
         self,
         val_loader: DataLoader,
         cfg: TrainConfig,
-        max_batches: int = 50,
+        max_batches: int | None = None,
     ) -> dict[str, float]:
         self._all_modules.eval()
-        totals: dict[str, float] = {"return": 0.0, "vol": 0.0, "corr": 0.0, "total": 0.0}
+        max_eval_batches = cfg.eval_max_batches if max_batches is None else max_batches
+        totals: dict[str, float] = {
+            "contrastive": 0.0,
+            "prediction": 0.0,
+            "total": 0.0,
+            "contrastive_acc": 0.0,
+        }
+        pred_values: list[torch.Tensor] = []
+        target_values: list[torch.Tensor] = []
         n = 0
         with torch.no_grad():
-            for batch_idx, (features, targets) in enumerate(val_loader):
-                if batch_idx >= max_batches:
+            for batch_idx, batch in enumerate(val_loader):
+                if batch_idx >= max_eval_batches:
                     break
-                losses = self._forward_losses(features, targets)
-                for k, v in losses.items():
+                (
+                    features,
+                    positives,
+                    next_returns,
+                    asset_ids,
+                    regime_ids,
+                    sector_ids,
+                    sample_weights,
+                    time_indices,
+                ) = self._unpack_batch(batch)
+                with torch.autocast(
+                    device_type=self.device.type,
+                    dtype=torch.bfloat16,
+                    enabled=self.device.type == "cuda",
+                ):
+                    losses = self._forward_losses(
+                        features,
+                        positives,
+                        next_returns=next_returns,
+                        asset_ids=asset_ids,
+                        regime_ids=regime_ids,
+                        sector_ids=sector_ids,
+                        sample_weights=sample_weights,
+                        time_indices=time_indices,
+                        temperature=cfg.contrastive_temperature,
+                        contrastive_weight=cfg.contrastive_weight,
+                        prediction_weight=cfg.prediction_weight,
+                        correlation_threshold=cfg.multi_asset_corr_threshold,
+                        min_negative_gap=cfg.negative_min_separation,
+                        return_aux=True,
+                    )
+                for k in ("contrastive", "prediction", "total", "contrastive_acc"):
+                    v = losses[k]
                     totals[k] += v.item()
+                pred_values.append(losses["pred_returns"].detach().cpu())
+                target_values.append(losses["target_returns"].detach().cpu())
                 n += 1
         self._all_modules.train()
-        return {k: v / max(n, 1) for k, v in totals.items()}
+        metrics = {k: v / max(n, 1) for k, v in totals.items()}
+        if pred_values:
+            pred = torch.cat(pred_values)
+            target = torch.cat(target_values)
+            sse = torch.sum((pred - target) ** 2)
+            sst = torch.sum((target - target.mean()) ** 2)
+            metrics["prediction_r2"] = (1.0 - (sse / sst)).item() if sst > 0 else 0.0
+        else:
+            metrics["prediction_r2"] = 0.0
+        return metrics
 
-    def _forward_losses(
-        self,
-        features: torch.Tensor,  # (B, T, 280) — per-asset (184) + market (96)
-        targets: torch.Tensor,   # (B, T, 280) — same, shifted by 1 step
-    ) -> dict[str, torch.Tensor]:
-        features = features.to(self.device)
-        targets  = targets.to(self.device)
+    def _encode_sequence(self, features: torch.Tensor) -> torch.Tensor:
+        """Encode one temporal window into a pooled sequence representation."""
         B, T, _ = features.shape
+        asset_feats = features[..., :184].unsqueeze(2)  # (B, T, N=1, 184)
+        market_feats = features[..., 184:]  # (B, T, 96)
 
-        # Split features into asset (184) and market (96) blocks
-        asset_feats   = features[..., :184]    # (B, T, 184)
-        market_feats  = features[..., 184:]    # (B, T, 96)
-        target_returns = targets[..., :10]     # price_volume block as return proxy
-
-        # For single-asset training shards, treat as N=1 asset
-        asset_feats = asset_feats.unsqueeze(2)   # (B, T, 1, 184)
-        N = 1
-
-        # Bootstrap regime with zeros (no HMM prior available during pre-training)
-        regime_emb   = torch.zeros(B, 64, device=self.device)
-        posteriors   = torch.full((B, 4), 0.25, device=self.device)
-        portfolio_s  = torch.zeros(B, 201, device=self.device)
-        calendar     = torch.zeros(B, 20, device=self.device)
-        sector_ids   = torch.zeros(N, dtype=torch.long, device=self.device)
+        n_assets = 1
+        regime_emb = torch.zeros(B, 64, device=self.device)
+        posteriors = torch.full((B, 4), 0.25, device=self.device)
+        portfolio_s = torch.zeros(B, 201, device=self.device)
+        calendar = torch.zeros(B, 20, device=self.device)
+        sector_ids = torch.zeros(n_assets, dtype=torch.long, device=self.device)
         episodic_tok = torch.zeros(B, 8, 768, device=self.device)
+        states = self.backbone.init_state(B, n_assets, self.device)
 
-        all_asset_states = []
-        all_fused_states = []
-        states = self.backbone.init_state(B, N, self.device)
-
+        pooled_steps: list[torch.Tensor] = []
         for t in range(T):
-            af_t = asset_feats[:, t]     # (B, 1, 288)
-            mf_t = market_feats[:, t]    # (B, 96)
-
-            asset_tok, mkt_tok, port_tok, cal_tok = self.input_projection(
+            # Truncated BPTT: detach recurrent state every `bptt_horizon` steps
+            # so the backward graph is bounded to K steps of state history.
+            # bptt_horizon=0 keeps the default full-sequence BPTT.
+            if self.bptt_horizon > 0 and t > 0 and t % self.bptt_horizon == 0:
+                states = [s.detach() for s in states]
+            af_t = asset_feats[:, t]  # (B, 1, 184)
+            mf_t = market_feats[:, t]  # (B, 96)
+            asset_tok, mkt_tok, port_tok, _ = self.input_projection(
                 af_t, mf_t, portfolio_s, calendar, regime_emb
             )
             out, states = self.backbone(asset_tok, regime_emb, posteriors, states)
             fused, _ = self.fusion(out, mkt_tok, port_tok, episodic_tok, sector_ids)
-            all_asset_states.append(out)
-            all_fused_states.append(fused)
+            pooled_steps.append(fused.squeeze(1))  # (B, D)
 
-        asset_states = torch.stack(all_asset_states, dim=1)  # (B, T, N, D)
-        fused_states = torch.stack(all_fused_states, dim=1)  # (B, T, N, D)
+        return torch.stack(pooled_steps, dim=1).mean(dim=1)  # (B, D)
 
-        # Squeeze N=1 for prediction heads
-        asset_seq = asset_states.squeeze(2)   # (B, T, D)
-        fused_seq = fused_states.squeeze(2)   # (B, T, D)
+    def _forward_losses(
+        self,
+        features: torch.Tensor,  # (B, T, 280) — per-asset (184) + market (96)
+        positives: torch.Tensor,  # (B, T, 280) — temporally adjacent window
+        next_returns: torch.Tensor | None = None,  # (B,) one-step-ahead return target
+        asset_ids: torch.Tensor | None = None,
+        regime_ids: torch.Tensor | None = None,
+        sector_ids: torch.Tensor | None = None,
+        sample_weights: torch.Tensor | None = None,
+        time_indices: torch.Tensor | None = None,
+        temperature: float = 0.1,
+        contrastive_weight: float = 0.7,
+        prediction_weight: float = 0.3,
+        correlation_threshold: float = 0.6,
+        min_negative_gap: int = 50,
+        return_aux: bool = False,
+    ) -> dict[str, torch.Tensor]:
+        features = features.to(self.device)
+        positives = positives.to(self.device)
+        if next_returns is None:
+            next_returns = positives[:, -1, RETURN_FEATURE_INDEX]
+        next_returns = next_returns.to(self.device).to(torch.float32)
+        if asset_ids is not None:
+            asset_ids = asset_ids.to(self.device)
+        if regime_ids is not None:
+            regime_ids = regime_ids.to(self.device)
+        if sector_ids is not None:
+            sector_ids = sector_ids.to(self.device)
+        if sample_weights is not None:
+            sample_weights = sample_weights.to(self.device).to(torch.float32)
+        if time_indices is not None:
+            time_indices = time_indices.to(self.device)
+        view_a = self._encode_sequence(features)
+        view_b = self._encode_sequence(positives)
+        z_a = self.projection_head(view_a)
+        z_b = self.projection_head(view_b)
+        loss_contrastive, contrastive_acc = regime_aware_contrastive_terms(
+            z_a,
+            z_b,
+            asset_ids=asset_ids,
+            regime_ids=regime_ids,
+            sector_ids=sector_ids,
+            return_windows=features[:, :, RETURN_FEATURE_INDEX],
+            time_indices=time_indices,
+            temperature=temperature,
+            correlation_threshold=correlation_threshold,
+            min_negative_gap=min_negative_gap,
+            sample_weights=sample_weights,
+        )
 
-        # Objective 1: return prediction
-        pred_return = self.return_head(asset_seq.unsqueeze(2)).squeeze(2).squeeze(-1)  # (B, T)
-        tgt_return  = target_returns[..., 3]  # use close log-return as target (index 3)
-        loss_ret    = return_loss(pred_return, tgt_return)
+        pred_returns = self.prediction_head(view_a).to(torch.float32)
+        pred_errors = (pred_returns - next_returns) ** 2
+        if sample_weights is None:
+            loss_prediction = pred_errors.mean()
+        else:
+            denom = sample_weights.sum().clamp_min(1e-8)
+            loss_prediction = (pred_errors * sample_weights).sum() / denom
 
-        # Objective 2: volatility prediction (target = std of next horizon returns)
-        # Proxy: standard deviation of next 5 close returns from target shard
-        tgt_vol = target_returns[:, :, 3].unfold(1, 5, 1).std(dim=-1) if T >= 5 else \
-                  torch.zeros_like(pred_return[:, :T - 4] if T > 4 else pred_return)
-        pred_vol = self.vol_head(asset_seq.unsqueeze(2))[:, :tgt_vol.shape[1]].squeeze(2)
-        loss_vol = volatility_loss(pred_vol, tgt_vol.unsqueeze(-1).expand_as(pred_vol))
-
-        # Objective 3: correlation prediction (use last timestep's fused state)
-        last_fused = fused_states[:, -1]   # (B, N, D) — only N=1 here; kept for multi-asset
-        pred_corr  = self.corr_head(last_fused)           # (B, N, N)
-        # Target: identity matrix (N=1 case; replaced with real corr matrix for N>1)
-        tgt_corr   = torch.eye(N, device=self.device).unsqueeze(0).expand(B, -1, -1)
-        loss_corr  = correlation_loss(pred_corr, tgt_corr)
-
-        total = loss_ret + loss_vol + loss_corr
-        return {"return": loss_ret, "vol": loss_vol, "corr": loss_corr, "total": total}
+        loss_total = (
+            contrastive_weight * loss_contrastive + prediction_weight * loss_prediction
+        )
+        out: dict[str, torch.Tensor] = {
+            "contrastive": loss_contrastive,
+            "prediction": loss_prediction,
+            "total": loss_total,
+            "contrastive_acc": contrastive_acc,
+        }
+        if return_aux:
+            out["pred_returns"] = pred_returns
+            out["target_returns"] = next_returns
+        return out
 
     def train(
         self,
@@ -412,17 +1040,30 @@ class SelfSupervisedPretrainer:
             optimizer, lr_lambda=lambda step: self._cosine_lr(step, cfg)
         )
 
-        start_step      = 0
-        best_val_loss   = float("inf")
+        start_step = 0
+        best_val_loss = float("inf")
+        best_val_contrastive_acc = 0.0
+        stale_eval_count = 0
 
         if resume_from is not None and resume_from.exists():
             ckpt = load_checkpoint(resume_from)
             self._load_model_state(ckpt.model_state)
             optimizer.load_state_dict(ckpt.optimizer_state)
             scheduler.load_state_dict(ckpt.scheduler_state)
-            start_step    = ckpt.step
+            start_step = ckpt.step
             best_val_loss = ckpt.best_val_loss
-            print(f"Resumed from step {start_step}, best_val_loss={best_val_loss:.4f}")
+            best_val_contrastive_acc = ckpt.best_val_contrastive_acc
+            print(
+                f"Resumed from step {start_step}, "
+                f"best_val_loss={best_val_loss:.4f}, "
+                f"best_val_contrastive_acc={best_val_contrastive_acc:.4f}"
+            )
+
+        if cfg.compile:
+            print("Compiling backbone (one-time warmup)...")
+            self.backbone = torch.compile(self.backbone)
+            self._all_modules[0] = self.backbone
+            print("Compiled.")
 
         self._all_modules.train()
         step = start_step
@@ -430,13 +1071,42 @@ class SelfSupervisedPretrainer:
 
         while step < cfg.total_steps:
             try:
-                features, targets = next(data_iter)
+                batch = next(data_iter)
             except StopIteration:
                 data_iter = iter(train_loader)
-                features, targets = next(data_iter)
+                batch = next(data_iter)
+            (
+                features,
+                positives,
+                next_returns,
+                asset_ids,
+                regime_ids,
+                sector_ids,
+                sample_weights,
+                time_indices,
+            ) = self._unpack_batch(batch)
 
             optimizer.zero_grad(set_to_none=True)
-            losses = self._forward_losses(features, targets)
+            with torch.autocast(
+                device_type=self.device.type,
+                dtype=torch.bfloat16,
+                enabled=self.device.type == "cuda",
+            ):
+                losses = self._forward_losses(
+                    features,
+                    positives,
+                    next_returns=next_returns,
+                    asset_ids=asset_ids,
+                    regime_ids=regime_ids,
+                    sector_ids=sector_ids,
+                    sample_weights=sample_weights,
+                    time_indices=time_indices,
+                    temperature=cfg.contrastive_temperature,
+                    contrastive_weight=cfg.contrastive_weight,
+                    prediction_weight=cfg.prediction_weight,
+                    correlation_threshold=cfg.multi_asset_corr_threshold,
+                    min_negative_gap=cfg.negative_min_separation,
+                )
             losses["total"].backward()
             nn.utils.clip_grad_norm_(self._all_modules.parameters(), cfg.grad_clip)
             optimizer.step()
@@ -445,43 +1115,70 @@ class SelfSupervisedPretrainer:
 
             if step % cfg.log_every == 0:
                 lr_now = scheduler.get_last_lr()[0]
-                print(
-                    f"step={step:>7d}  "
-                    f"loss={losses['total'].item():.4f}  "
-                    f"ret={losses['return'].item():.4f}  "
-                    f"vol={losses['vol'].item():.4f}  "
-                    f"corr={losses['corr'].item():.4f}  "
-                    f"lr={lr_now:.2e}"
+                parts = "  ".join(
+                    f"{k}={losses[k].item():.4f}"
+                    for k in ("contrastive", "prediction", "total", "contrastive_acc")
                 )
+                print(f"step={step:>7d}  {parts}  lr={lr_now:.2e}")
 
             if val_loader is not None and step % cfg.eval_every == 0:
                 val_metrics = self.evaluate(val_loader, cfg)
                 val_loss = val_metrics["total"]
-                print(f"  val loss={val_loss:.4f}")
-                if val_loss < best_val_loss:
-                    best_val_loss = val_loss
+                val_contrastive_acc = val_metrics["contrastive_acc"]
+                val_pred_r2 = val_metrics["prediction_r2"]
+                # Track best loss independently so it stays current even when
+                # contrastive_acc plateaus (the two can decouple in later steps).
+                best_val_loss = min(best_val_loss, val_loss)
+                print(
+                    f"  val total={val_loss:.4f}  "
+                    f"contrastive_acc={val_contrastive_acc:.4f}  "
+                    f"pred_r2={val_pred_r2:.4f}  "
+                    f"best_loss={best_val_loss:.4f}"
+                )
+                if val_contrastive_acc > (
+                    best_val_contrastive_acc + cfg.early_stop_min_delta
+                ):
+                    best_val_contrastive_acc = val_contrastive_acc
+                    stale_eval_count = 0
                     save_checkpoint(
                         Checkpoint(
-                            step             = step,
-                            model_state      = self._model_state(),
-                            optimizer_state  = optimizer.state_dict(),
-                            scheduler_state  = scheduler.state_dict(),
-                            best_val_loss    = best_val_loss,
+                            step=step,
+                            model_state=self._model_state(),
+                            optimizer_state=optimizer.state_dict(),
+                            scheduler_state=scheduler.state_dict(),
+                            best_val_loss=best_val_loss,
+                            best_val_contrastive_acc=best_val_contrastive_acc,
                         ),
                         cfg.checkpoint_path,
                     )
+                else:
+                    stale_eval_count += 1
+                    if (
+                        cfg.early_stop_patience_evals > 0
+                        and stale_eval_count >= cfg.early_stop_patience_evals
+                    ):
+                        print(
+                            "Early stopping on validation contrastive accuracy "
+                            f"patience ({cfg.early_stop_patience_evals} evals)."
+                        )
+                        break
 
             if step % cfg.save_every == 0:
                 ckpt_path = cfg.checkpoint_dir / f"backbone_step{step}.pt"
                 save_checkpoint(
                     Checkpoint(
-                        step             = step,
-                        model_state      = self._model_state(),
-                        optimizer_state  = optimizer.state_dict(),
-                        scheduler_state  = scheduler.state_dict(),
-                        best_val_loss    = best_val_loss,
+                        step=step,
+                        model_state=self._model_state(),
+                        optimizer_state=optimizer.state_dict(),
+                        scheduler_state=scheduler.state_dict(),
+                        best_val_loss=best_val_loss,
+                        best_val_contrastive_acc=best_val_contrastive_acc,
                     ),
                     ckpt_path,
                 )
 
-        print(f"Training complete at step {step}. Best val loss: {best_val_loss:.4f}")
+        print(
+            f"Training complete at step {step}. "
+            f"Best val total={best_val_loss:.4f}, "
+            f"best contrastive_acc={best_val_contrastive_acc:.4f}"
+        )

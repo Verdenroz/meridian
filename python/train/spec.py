@@ -1,4 +1,4 @@
-"""Architecture hyperparameter contracts for Meridian v3.0 (Appendix C)."""
+"""Architecture hyperparameter contracts for Meridian (Appendix C)."""
 
 from __future__ import annotations
 
@@ -7,17 +7,26 @@ from dataclasses import dataclass, field
 
 @dataclass
 class MeridianSpec:
+    # ── Versioning / data contract (v4 hard requirement) ─────────────────────
+    architecture_version: str = "v4.0"
+    data_interval: str = "1d"
+    pretraining_objective: str = "tcp"
+
     # ── Model dimensions ────────────────────────────────────────────────────
     d_model: int = 768
     n_assets: int = 100
     n_regimes: int = 4
     regime_emb_dim: int = 64
 
-    # ── RA-GDN backbone ─────────────────────────────────────────────────────
+    # ── Hybrid RA-GDN + SWA backbone ───────────────────────────────────────
     n_gdn_blocks: int = 8
     n_fmoe_blocks: int = 3
-    # FMoE blocks inserted after GDN blocks 2, 5, 8 (1-indexed)
     fmoe_after_gdn: tuple[int, ...] = field(default_factory=lambda: (2, 5, 8))
+    n_swa_layers: int = 2
+    # SWA blocks inserted after GDN blocks 3 and 7 (1-indexed)
+    swa_after_gdn: tuple[int, ...] = field(default_factory=lambda: (3, 7))
+    swa_window: int = 64
+    swa_heads: int = 8
     n_experts: int = 4
     top_k_experts: int = 2
     n_heads: int = 4
@@ -70,14 +79,20 @@ class MeridianSpec:
     deep_out_dim: int = 64
 
     # ── Training ────────────────────────────────────────────────────────────
-    pretrain_steps: int = 200_000
+    pretrain_steps: int = 20_000
     portfolio_steps_return: int = 50_000
     portfolio_steps_sharpe: int = 30_000
     metalearning_steps: int = 100_000
     qat_steps: int = 50_000
-    train_batch_size: int = 8
+    train_batch_size: int = 128
     train_seq_len: int = 64
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-4
+    pretrain_min_lr: float = 1e-5
+    tcp_temperature: float = 0.1
+    tcp_lambda_contrastive: float = 0.7
+    tcp_lambda_prediction: float = 0.3
+    pretrain_fda_loss_weight: float = 0.5
+    pretrain_positive_offset: int = 4
     dropout: float = 0.1
 
     @property
@@ -85,14 +100,26 @@ class MeridianSpec:
         return self.per_asset_continuous_dim + self.per_asset_text_dim
 
     def validate(self) -> None:
+        assert self.architecture_version == "v4.0", "spec is pinned to v4.0"
+        assert self.data_interval == "1d", "v4 requires daily-aligned training data"
+        assert self.pretraining_objective == "tcp", (
+            "v4 requires temporal contrastive pretraining"
+        )
         assert self.d_model > 0, "d_model must be positive"
         assert self.n_regimes == 4, "spec requires exactly 4 regime classes"
         assert self.n_gdn_blocks == 8, "spec requires 8 RA-GDN blocks"
         assert self.n_fmoe_blocks == 3, "spec requires 3 FMoE blocks"
         assert len(self.fmoe_after_gdn) == self.n_fmoe_blocks
         assert all(1 <= p <= self.n_gdn_blocks for p in self.fmoe_after_gdn)
+        assert self.n_swa_layers == 2, "v4 requires 2 SWA layers"
+        assert len(self.swa_after_gdn) == self.n_swa_layers
+        assert all(1 <= p <= self.n_gdn_blocks for p in self.swa_after_gdn)
+        assert self.swa_window == 64, "v4 fixes SWA window at 64"
+        assert self.swa_heads > 0 and self.d_model % self.swa_heads == 0
         assert self.top_k_experts <= self.n_experts
-        assert self.top_k_experts <= self.n_regimes, "top_k ≤ n_regimes for regime routing"
+        assert self.top_k_experts <= self.n_regimes, (
+            "top_k ≤ n_regimes for regime routing"
+        )
         assert self.per_asset_continuous_dim == 120
         assert self.per_asset_text_dim == 64
         assert self.per_asset_feature_dim == 184
@@ -107,6 +134,15 @@ class MeridianSpec:
         assert self.regime_detector_input_dim == (
             self.market_feature_dim + 3 + self.regime_emb_dim
         )
+        assert self.pretrain_steps == 20_000
+        assert self.train_batch_size == 128
+        assert self.learning_rate == 3e-4
+        assert self.pretrain_min_lr == 1e-5
+        assert self.tcp_temperature == 0.1
+        assert self.tcp_lambda_contrastive == 0.7
+        assert self.tcp_lambda_prediction == 0.3
+        assert self.pretrain_fda_loss_weight == 0.5
+        assert self.pretrain_positive_offset == 4
 
 
 DEFAULT_SPEC = MeridianSpec()
