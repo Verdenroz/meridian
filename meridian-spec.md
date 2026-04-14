@@ -1,6 +1,6 @@
 # MERIDIAN: Regime-Adaptive State-Space Portfolio Model
 
-## Architectural Specification v3.0 — Full Data Integration
+## Architectural Specification v4.0 — Data-Constrained Full Integration
 
 ---
 
@@ -22,7 +22,7 @@
 7. [Model Components](#7-model-components)
    - 7.1 [Input Projection Layer with Variable Selection](#71-input-projection-layer-with-variable-selection)
    - 7.2 [Regime Detector](#72-regime-detector)
-   - 7.3 [Per-Asset Temporal Backbone (RA-GDN Stack)](#73-per-asset-temporal-backbone-ra-gdn-stack)
+   - 7.3 [Per-Asset Temporal Backbone (Hybrid RA-GDN + SWA Stack)](#73-per-asset-temporal-backbone-hybrid-ra-gdn--swa-stack)
    - 7.4 [Regime-Routed Sparse Mixture of Experts](#74-regime-routed-sparse-mixture-of-experts)
    - 7.5 [Temporal Cascade](#75-temporal-cascade)
    - 7.6 [Cross-Asset Fusion Module](#76-cross-asset-fusion-module)
@@ -30,86 +30,144 @@
    - 7.8 [Portfolio Output Heads](#78-portfolio-output-heads)
    - 7.9 [Auxiliary Prediction Head](#79-auxiliary-prediction-head)
    - 7.10 [MarketReader Text Encoder](#710-marketreader-text-encoder)
-8. [Continuous Learning System](#8-continuous-learning-system)
-   - 8.1 [Tier 1 — Surprise-Gated Delta Dynamics](#81-tier-1--surprise-gated-delta-dynamics)
-   - 8.2 [Tier 2 — Normalization Adaptation](#82-tier-2--normalization-adaptation)
-   - 8.3 [Tier 3 — Periodic Consolidation (EWC + Ternary LoRA)](#83-tier-3--periodic-consolidation-ewc--ternary-lora)
-   - 8.4 [Adaptation Feedback Loop](#84-adaptation-feedback-loop)
-9. [Quantization Strategy](#9-quantization-strategy)
-10. [Training Pipeline](#10-training-pipeline)
-    - 10.1 [Data Sources & Preprocessing](#101-data-sources--preprocessing)
-    - 10.2 [Phase 1 — Self-Supervised Pre-training](#102-phase-1--self-supervised-pre-training)
-    - 10.3 [Phase 2 — Portfolio Optimization Training](#103-phase-2--portfolio-optimization-training)
-    - 10.4 [Phase 3 — Meta-Learning for Plasticity](#104-phase-3--meta-learning-for-plasticity)
-    - 10.5 [Phase 4 — Quantization-Aware Training](#105-phase-4--quantization-aware-training)
-11. [Two-Head Strategy (Meridian-R / Meridian-S)](#11-two-head-strategy-meridian-r--meridian-s)
-12. [Historical Backtesting Framework](#12-historical-backtesting-framework)
-    - 12.1 [Meridian as a Backtesting Strategy](#121-meridian-as-a-backtesting-strategy)
-    - 12.2 [Benchmark Comparisons](#122-benchmark-comparisons)
-    - 12.3 [Walk-Forward Validation](#123-walk-forward-validation)
-    - 12.4 [Monte Carlo Confidence Intervals](#124-monte-carlo-confidence-intervals)
-    - 12.5 [Regime-Segmented Analysis](#125-regime-segmented-analysis)
-13. [Paper Trading System](#13-paper-trading-system)
-    - 13.1 [Architecture](#131-architecture)
-    - 13.2 [Performance Tracking](#132-performance-tracking)
-    - 13.3 [Adaptation Monitoring](#133-adaptation-monitoring)
-    - 13.4 [Graduation Criteria (Paper → Live)](#134-graduation-criteria-paper--live)
-14. [Inference Runtime on Pi 5](#14-inference-runtime-on-pi-5)
-15. [Memory Budget](#15-memory-budget)
-16. [Development Roadmap](#16-development-roadmap)
-17. [Risk Analysis & Mitigations](#17-risk-analysis--mitigations)
-18. [Appendix A — Parameter Count Breakdown](#appendix-a--parameter-count-breakdown)
-19. [Appendix B — Complete finance-query Integration Map](#appendix-b--complete-finance-query-integration-map)
-20. [Appendix C — Hyperparameter Reference](#appendix-c--hyperparameter-reference)
-21. [Appendix D — Event Type Catalog](#appendix-d--event-type-catalog)
+8. [Financial Diffusion Augmentation (FDA)](#8-financial-diffusion-augmentation-fda)
+   - 8.1 [Motivation & Scope](#81-motivation--scope)
+   - 8.2 [FDA Architecture](#82-fda-architecture)
+   - 8.3 [Stylized Fact Validation Gate](#83-stylized-fact-validation-gate)
+   - 8.4 [Regime-Conditioned Generation](#84-regime-conditioned-generation)
+   - 8.5 [Cross-Asset Correlation Preservation](#85-cross-asset-correlation-preservation)
+   - 8.6 [Limitations & Honest Caveats](#86-limitations--honest-caveats)
+9. [Continuous Learning System](#9-continuous-learning-system)
+   - 9.1 [Tier 1 — Surprise-Gated Delta Dynamics](#91-tier-1--surprise-gated-delta-dynamics)
+   - 9.2 [Tier 2 — Normalization Adaptation](#92-tier-2--normalization-adaptation)
+   - 9.3 [Tier 3 — Periodic Consolidation (EWC + Ternary LoRA)](#93-tier-3--periodic-consolidation-ewc--ternary-lora)
+   - 9.4 [Adaptation Feedback Loop](#94-adaptation-feedback-loop)
+10. [Quantization Strategy](#10-quantization-strategy)
+11. [Training Pipeline](#11-training-pipeline)
+    - 11.1 [Data Sources & Honest Row Counts](#111-data-sources--honest-row-counts)
+    - 11.2 [Phase 0 — FDA Pre-Training (Diffusion Model)](#112-phase-0--fda-pre-training-diffusion-model)
+    - 11.3 [Phase 1 — Contrastive Self-Supervised Pre-training](#113-phase-1--contrastive-self-supervised-pre-training)
+    - 11.4 [Phase 2 — Portfolio Optimization with Augmentation](#114-phase-2--portfolio-optimization-with-augmentation)
+    - 11.5 [Phase 3 — Meta-Learning for Plasticity](#115-phase-3--meta-learning-for-plasticity)
+    - 11.6 [Phase 4 — Quantization-Aware Training](#116-phase-4--quantization-aware-training)
+12. [Known Limitations & Expected Performance Bounds](#12-known-limitations--expected-performance-bounds)
+13. [Two-Head Strategy (Meridian-R / Meridian-S)](#13-two-head-strategy-meridian-r--meridian-s)
+14. [Historical Backtesting Framework](#14-historical-backtesting-framework)
+    - 14.1 [Meridian as a Backtesting Strategy](#141-meridian-as-a-backtesting-strategy)
+    - 14.2 [Benchmark Comparisons](#142-benchmark-comparisons)
+    - 14.3 [Walk-Forward Validation](#143-walk-forward-validation)
+    - 14.4 [Monte Carlo Confidence Intervals](#144-monte-carlo-confidence-intervals)
+    - 14.5 [Regime-Segmented Analysis](#145-regime-segmented-analysis)
+15. [Paper Trading System](#15-paper-trading-system)
+    - 15.1 [Architecture](#151-architecture)
+    - 15.2 [Performance Tracking](#152-performance-tracking)
+    - 15.3 [Adaptation Monitoring](#153-adaptation-monitoring)
+    - 15.4 [Graduation Criteria (Paper → Live)](#154-graduation-criteria-paper--live)
+16. [Inference Runtime on Pi 5](#16-inference-runtime-on-pi-5)
+17. [Memory Budget](#17-memory-budget)
+18. [Development Roadmap](#18-development-roadmap)
+19. [Risk Analysis & Mitigations](#19-risk-analysis--mitigations)
+20. [Appendix A — Parameter Count Breakdown](#appendix-a--parameter-count-breakdown)
+21. [Appendix B — Complete finance-query Integration Map](#appendix-b--complete-finance-query-integration-map)
+22. [Appendix C — Hyperparameter Reference](#appendix-c--hyperparameter-reference)
+23. [Appendix D — Event Type Catalog](#appendix-d--event-type-catalog)
+24. [Appendix E — FDA Stylized Fact Checklist](#appendix-e--fda-stylized-fact-checklist)
 
 ---
 
 ## 1. Executive Summary
 
-Meridian is a novel CPU-native neural network architecture designed to manage a portfolio of up to 100 US-listed assets (equities, ETFs, crypto) 24/7 on a Raspberry Pi 5. It ingests **every available data stream** from finance-query — price, volume, 42 technical indicators, 30+ RSS/news feeds, full options chains, EDGAR filings, XBRL fundamentals, earnings transcripts, analyst ratings, insider transactions, institutional ownership, macro series, yield curves, sector/industry data, Fear & Greed, world indices, trending tickers, and crypto market data — producing allocation weights every minute through a shared backbone with two output heads.
+Meridian is a CPU-native neural network architecture designed to manage a portfolio of up to 100 US-listed assets (equities, ETFs, crypto) 24/7 on a Raspberry Pi 5. It ingests every available data stream from finance-query — price, volume, 42 technical indicators, 30+ RSS/news feeds, full options chains, EDGAR filings, XBRL fundamentals, earnings transcripts, analyst ratings, insider transactions, institutional ownership, macro series, yield curves, sector/industry data, Fear & Greed, world indices, trending tickers, and crypto market data — producing allocation weights every minute through a shared backbone with two output heads.
 
-The model makes **proactive decisions** by processing discrete events (insider buys, analyst upgrades, SEC filings, earnings surprises, FOMC announcements) as they arrive, not just reacting to price changes. It is designed for both historical backtesting via finance-query's backtesting engine and real-time paper trading, with a continuous learning system that measurably improves over time.
+**v4.0 addresses a fundamental constraint identified during v3.0 implementation:** training and inference must use the same data source (finance-query) to avoid distribution mismatch. This eliminates paid minute-bar providers (Polygon.io, FirstRate Data) as training data sources. With finance-query's free tier, the available training corpus is approximately **1,695 daily bars per equity asset** — roughly 290× less than the spec's original ~490K minute-bar assumption. At a ~95M-parameter target, this corresponds to ~56,000:1 in the 100-asset sequence view (1,695 joint samples) and ~560:1 in the asset-day view (169,500 observations), which drives early saturation and limits OOS Sharpe to approximately 0.57 in the current baseline.
+
+**v4.0 addresses this through three research-backed mechanisms that require no external data:**
+
+1. **Financial Diffusion Augmentation (FDA)** — a regime-conditioned score-based diffusion model trained on real finance-query data that generates statistically valid synthetic training sequences, increasing effective training volume by up to 30× while preserving all stylized facts (fat tails, volatility clustering, cross-asset correlations).
+
+2. **Contrastive Self-Supervised Pretraining** — replaces the next-step return prediction objective in Phase 1 with a temporal contrastive objective that extracts up to 100× more training signal from the same data by treating temporally adjacent windows as positive pairs across the full 100-asset universe.
+
+3. **Portfolio-Theoretic Augmentation (PTA)** — applies label-preserving symmetry transformations during portfolio head training (asset permutations preserving covariance structure, sign-coupled return flips) that multiply effective portfolio training samples by 10–50× without introducing distributional drift.
+
+Additionally, the **RA-GDN backbone is augmented with interleaved Sparse Sliding Window Attention (SWA)** layers (Samba-style hybrid), giving the model precise short-sequence recall capability that reduces the data volume needed to achieve generalization.
+
+**Empirically validated baseline (v3.0 with daily data only):**
+
+| Metric | Result | Spec Target | Pass? |
+|---|---|---|---|
+| Sharpe (OOS 2024+) | 0.57 | > 1.0 | No |
+| Total Return | +15.18% | Beat passive | Yes (vs −9.21%) |
+| Max Drawdown | 13.05% | < 25% | Yes |
+| Win Rate | 67.25% | — | — |
+| MC Pass Rate | 73/100 | p5 > 0, Sharpe p25 > 0.5 | Partial |
+
+**v4.0 expected performance range (projected, not guaranteed):**
+
+| Metric | v3.0 Actual | v4.0 Target | Mechanism |
+|---|---|---|---|
+| Sharpe (OOS) | 0.57 | 0.82–1.24 (projected) | FDA + PTA + contrastive |
+| Max Drawdown | 13.05% | < 20% | Improved generalization |
+| Win Rate | 67.25% | 68–72% | Better backbone recall |
+
+The Sharpe > 1.0 target remains achievable but is not guaranteed with daily data alone. Section 12 (Known Limitations) documents the honest performance bounds.
 
 Key metrics:
 
 | Metric | Value |
 |---|---|
-| Total parameters | ~95M (35M active per forward pass) |
+| Total parameters | ~95–96M target architecture (~35M active); ~60.9M currently implemented in codebase |
 | Input features per asset | 120 scalar + 64 text embedding = 184 |
 | Market-wide features | 96 scalar |
 | Event types tracked | 18 discrete event categories |
 | Text sources ingested | 30+ RSS feeds + per-ticker news + transcripts |
+| FDA synthetic multiplier | Up to 30× generated windows before effective-sample discount (planned) |
 | Quantized model size | ~23 MB |
-| Runtime memory footprint | ~180 MB |
-| Inference latency (100 assets) | ~5–10 ms |
+| Runtime memory footprint | ~185 MB |
+| Inference latency (100 assets) | ~6–11 ms |
 | Data pipeline latency | ~200–500 ms (network-bound) |
 | Adaptation mechanisms | 3-tier (sub-second / hourly / daily) |
-| Training compute | ~250–400 H100-hours |
+| Training compute | ~180–280 H100-hours |
+| Training data source | finance-query exclusively |
+
+### 1.1 Validation and feasibility status (April 2026)
+
+| Area | Validation verdict | Feasibility status |
+|---|---|---|
+| Data-source fidelity (train = inference source) | **Validated** (internally consistent and code-aligned) | **Feasible now** — daily finance-query flows already exist in collection/backtesting paths |
+| Dataset arithmetic (rows/windows/ratios) | **Validated with corrections** (ratios harmonized in this spec) | **Feasible now** for daily-data training; does not remove small-sample risk |
+| FDA (diffusion augmentation) | **Research-grounded but unverified in this repo** | **Feasible with additional implementation** (new model + validation gate pipeline required) |
+| TCP (contrastive pretraining) | **Methodologically plausible** | **Feasible with additional implementation** (current pretraining still uses predictive objectives) |
+| PTA (portfolio-theoretic augmentation) | **Methodologically plausible** | **Feasible with additional implementation** (current portfolio trainer lacks these transforms) |
+| Hybrid RA-GDN + SWA | **Architecturally plausible** | **Partially feasible** — RA-GDN exists; SWA layers/caches are not yet present in code |
+| Performance targets | **Projected only** (not guaranteed) | Requires FDA/TCP/PTA/SWA implementation plus clean OOS evaluation |
 
 ---
 
 ## 2. Design Philosophy
 
-Six interlocking principles govern every architectural decision:
+Seven interlocking principles govern every architectural decision in v4.0:
 
-**Information maximalism.** The model should ingest every available signal — not just price and volume, but the full constellation of fundamental, sentiment, ownership, regulatory, macro, and cross-asset data that professional portfolio managers use. More information, properly compressed and weighted, strictly dominates less information for decision-making. The Variable Selection Network ensures irrelevant signals are gated to zero rather than adding noise.
+**Information maximalism.** The model ingests every available signal from finance-query — not just price and volume, but the full constellation of fundamental, sentiment, ownership, regulatory, macro, and cross-asset data that professional portfolio managers use. The Variable Selection Network ensures irrelevant signals are gated to zero rather than adding noise.
 
-**Temporal nativeness.** Financial markets are continuous processes with multi-scale dynamics. The Gated DeltaNet backbone models time as a first-class citizen through a recurrent state that captures infinite history, updates in O(1) per step, and requires no re-processing of context.
+**Temporal nativeness.** Financial markets are continuous processes with multi-scale dynamics. The hybrid RA-GDN + SWA backbone models time at two complementary scales: the recurrent state captures infinite-horizon compressed history in O(1) per step, while sliding window attention captures precise short-range episodic recall. Both are necessary — recurrence alone cannot recall exact events from even 20 steps ago without sufficient training data; attention alone cannot scale to infinite history.
 
 **Event-driven proactivity.** Markets move on discrete events: an insider purchase, an analyst upgrade, a Fed statement, an earnings miss. Meridian processes events as first-class inputs — not by waiting for their price impact, but by incorporating the event signal immediately when it arrives. The model learns the typical price dynamics following each event type and can position proactively.
 
-**Regime awareness.** Markets change. Meridian addresses this at three levels: recurrent dynamics adapt based on detected regime, MoE routes to specialized sub-networks, and continuous learning updates parameters using prediction errors.
+**Regime awareness.** Markets change. Meridian addresses this at three levels: recurrent dynamics adapt based on detected regime, MoE routes to specialized sub-networks, and continuous learning updates parameters using prediction errors. The FDA generates synthetic data conditioned on all four regimes, preventing the regime imbalance problem (crisis regimes are rare in 1,695 rows).
 
-**Extreme efficiency.** Every operation must justify its compute cost on a Cortex-A76. Ternary weights from inception, O(1) recurrence, no quadratic attention over long sequences.
+**Data source fidelity.** Training data must come from the same source as inference data. No paid third-party price provider is used for training. All price and indicator data is sourced from finance-query, ensuring z-score baselines, volume normalizations, and indicator values are computed consistently between training and live inference. This constraint is architecturally enforced: the FDA is trained on finance-query data and generates sequences in the finance-query feature space.
 
-**Separation of understanding from strategy.** The backbone learns market state. The output heads learn allocation strategy. This enables modular head swapping and backtesting flexibility.
+**Extreme efficiency.** Every operation must justify its compute cost on a Cortex-A76. Ternary weights from inception, O(1) recurrence, sliding window attention with fixed window size W=64 (O(W×N) not O(N²)). The added SWA layers increase inference latency by approximately 1.5 ms for the full 100-asset backbone — within budget.
+
+**Separation of understanding from strategy.** The backbone learns market state. The output heads learn allocation strategy. This enables modular head swapping and backtesting flexibility. The FDA augments both backbone pretraining and portfolio head training independently, with different augmentation strategies appropriate to each phase.
 
 ---
 
 ## 3. Novel Contributions
 
-Seven architectural innovations distinguish Meridian from existing work. These are unchanged from v2.0:
+Contributions 1–9 are carried forward from v3.0. v4.0 adds four new contributions that directly address the data scarcity constraint:
+
+**Carried forward from v3.0:**
 
 1. **Regime-Aware Gated DeltaNet (RA-GDN)** — regime embedding modulates forgetting gate α and update strength β
 2. **Surprise-Gated Plasticity (SGP)** — delta rule's prediction error drives adaptive learning rates
@@ -118,18 +176,29 @@ Seven architectural innovations distinguish Meridian from existing work. These a
 5. **External Regime-Routed Sparse MoE** — HMM/neural posterior drives expert selection
 6. **Financial Calendar Embedding** — market-specific temporal encoding
 7. **Ternary-Native Architecture with Precision Highway** — FP16 state, ternary weights
+8. **Multi-Modal Event Fusion** — discrete financial events encoded as typed event tokens
+9. **Hierarchical Text Aggregation** — MarketReader three-tier processing pipeline
 
-**New in v3.0:**
+**New in v4.0:**
 
-8. **Multi-Modal Event Fusion** — discrete financial events (insider trades, analyst changes, filings, macro releases) are encoded as typed event tokens and injected into the temporal backbone alongside continuous features, enabling proactive positioning before price impact materializes.
+10. **Hybrid RA-GDN + Sparse Sliding Window Attention (Samba-Finance)** — interleaved SWA layers at positions 3 and 7 of the 8-block backbone give the model precise episodic recall for recent market events without quadratic scaling. Window size W=64 steps (64 trading days at daily resolution; 64 minutes at minute resolution). This directly reduces the data volume required for the backbone to generalize, as precise short-term recall no longer needs to be learned through recurrent compression alone.
 
-9. **Hierarchical Text Aggregation** — MarketReader processes text at three granularities: headline-level (RSS titles, 4-dim sentiment vector), summary-level (article bodies, 32-dim topic+sentiment vector), and deep-level (earnings transcripts, 64-dim full embedding), with attention-weighted fusion per asset.
+11. **Financial Diffusion Augmentation (FDA)** — a regime-conditioned score-based diffusion model (FinDiff-style) trained exclusively on finance-query daily data that generates statistically valid synthetic price + feature sequences. Synthetic data passes a 9-point stylized fact validation gate before entering training. Increases effective training volume by up to 30×. All synthetic data is in the finance-query feature space, preserving train/inference distribution alignment.
+
+12. **Temporal Contrastive Pretraining (TCP)** — replaces next-step return prediction in Phase 1 with a temporal contrastive objective operating over the full 100-asset universe. Adjacent windows (±5 steps) form positive pairs; distant windows (>50 steps apart) and different-asset windows in different regimes form negative pairs. Extracts ~100× more gradient signal from the same data volume compared to single-step prediction.
+
+13. **Portfolio-Theoretic Augmentation (PTA)** — applies label-preserving symmetry transformations to portfolio training batches following Ziyin et al. (2022). Valid transformations include: asset permutations that preserve the covariance matrix block structure, simultaneous sign flips of return labels paired with weight sign flips, and scale-invariant portfolio rebalancing paths. Multiplies effective portfolio training samples by 10–50× without introducing distributional drift.
 
 ---
 
 ## 4. Hardware Target & Constraints
 
-Unchanged from v2.0 — Raspberry Pi 5 (8GB), BCM2712 quad-core Cortex-A76 @ 2.4 GHz, NEON SIMD. Training on H100 cloud (500-hour budget).
+Unchanged from v3.0 — Raspberry Pi 5 (8GB), BCM2712 quad-core Cortex-A76 @ 2.4 GHz, NEON SIMD. Training on H100 cloud (500-hour budget).
+
+**v4.0 additions:**
+- FDA model is trained offline and runs only during training data generation, not at inference. No Pi 5 memory budget impact.
+- SWA layers add ~1.5 ms to inference latency. Still comfortably within budget.
+- FDA training: ~40–60 H100-hours (separate from main model training budget).
 
 ---
 
@@ -151,12 +220,12 @@ CONTINUOUS STREAMS (every minute)                    EVENT STREAMS (as they arri
 PERIODIC UPDATES                                     ├── Institutional Ownership Changes
 ├── Options Chains (every 15 min)                    └── Trending Ticker Signals
 ├── Fundamentals/XBRL (quarterly)
-├── Yield Curve (daily)
-├── Sector/Industry Performance (daily)
-├── Earnings Transcripts (quarterly)
-├── Analyst Ratings Snapshot (daily)
-├── Institutional Ownership (quarterly)
-├── Insider Holdings Snapshot (daily)
+├── Yield Curve (daily)                    SOURCE CONSTRAINT (v4.0):
+├── Sector/Industry Performance (daily)    All training + inference data from
+├── Earnings Transcripts (quarterly)       finance-query only. No external
+├── Analyst Ratings Snapshot (daily)       price providers. Train/inference
+├── Institutional Ownership (quarterly)    distributions are identical by
+├── Insider Holdings Snapshot (daily)      construction.
 └── World Indices (hourly)
 
          │                                    │
@@ -170,6 +239,16 @@ PERIODIC UPDATES                                     ├── Institutional Own
 │  Portfolio: 201 features                                        │
 │  Calendar: 20 features                                          │
 └─────────────────────────────────────────────────────────────────┘
+         │                              │
+         │                    ┌─────────▼──────────────────────────┐
+         │                    │  FINANCIAL DIFFUSION AUGMENTATION  │
+         │                    │  (TRAINING ONLY — offline)         │
+         │                    │  Generates synthetic sequences in  │
+         │                    │  finance-query feature space       │
+         │                    │  Regime-conditioned generation     │
+         │                    │  9-point stylized fact gate        │
+         │                    │  Up to 30× real row multiplier     │
+         │                    └────────────────────────────────────┘
          │
          ▼
 ═══════════════════════════════════════════════════════════════════
@@ -195,8 +274,15 @@ PERIODIC UPDATES                                     ├── Institutional Own
          │
          ▼
 ┌───────────────────────────────────────────────────────┐
-│  PER-ASSET TEMPORAL BACKBONE (RA-GDN)                 │
-│  8 RA-GDN blocks + 3 FMoE blocks (4 experts each)    │
+│  PER-ASSET TEMPORAL BACKBONE (Hybrid RA-GDN + SWA)   │
+│  Block 1: RA-GDN                                      │
+│  Block 2: RA-GDN + FMoE                               │
+│  Block 3: RA-GDN → SWA(W=64) [NEW]                   │
+│  Block 4: RA-GDN                                      │
+│  Block 5: RA-GDN + FMoE                               │
+│  Block 6: RA-GDN                                      │
+│  Block 7: RA-GDN → SWA(W=64) [NEW]                   │
+│  Block 8: RA-GDN + FMoE                               │
 │  Shared weights, separate state per asset             │
 │  Event tokens injected at natural arrival time        │
 └───────────────────────────────────────────────────────┘
@@ -234,7 +320,7 @@ PERIODIC UPDATES                                     ├── Institutional Own
 
 ## 6. Data Ingestion Architecture
 
-This is the most significant expansion from v2.0. Meridian now ingests the full breadth of finance-query's API surface.
+Unchanged from v3.0. The full finance-query API surface is ingested as specified. Section 6 content is identical to v3.0 Sections 6.1–6.7, reproduced here for completeness.
 
 ### 6.1 Data Bus Design
 
@@ -277,7 +363,7 @@ DataBus Architecture:
 │    sec_filings diff → filing_event           │
 │    earnings actual vs estimate → earnings_ev │
 │    FRED release → macro_event                │
-│    options anomaly detector → options_event   │
+│    options anomaly detector → options_event  │
 │    trending diff → trending_event            │
 └─────────────────────────────────────────────┘
 ```
@@ -287,8 +373,6 @@ DataBus Architecture:
 Every minute, each of 100 assets gets a 120-dimensional continuous feature vector plus a 64-dimensional text embedding, for 184 effective dims total.
 
 #### Block 1: Price & Volume (10 features)
-
-Unchanged from v2.0.
 
 | Feature | Computation | Source |
 |---|---|---|
@@ -305,7 +389,7 @@ Unchanged from v2.0.
 
 #### Block 2: Technical Indicators — Full Suite (42 features)
 
-**Expanded from 20 to 42** — now using every indicator finance-query provides. Each indicator is z-scored with rolling 252-day statistics.
+Each indicator is z-scored with rolling 252-day statistics. Z-score baselines are computed from finance-query data and stored as rolling statistics — the same pipeline runs at training and inference time, ensuring no distributional mismatch.
 
 **Moving Averages (8 features):**
 
@@ -319,8 +403,6 @@ Unchanged from v2.0.
 | HMA(20) z-score | `indicators::hma(&closes, 20)` | `(price - HMA) / ATR` |
 | ALMA(20) z-score | `indicators::alma(&closes, 20, ...)` | `(price - ALMA) / ATR` |
 | McGinley(20) z-score | `indicators::mcginley_dynamic(&closes, 20)` | `(price - McG) / ATR` |
-
-All MA z-scores are normalized by ATR to make them comparable across assets with different volatility levels.
 
 **Momentum (11 features):**
 
@@ -385,7 +467,7 @@ All MA z-scores are normalized by ATR to make them comparable across assets with
 
 #### Block 3: Options-Derived (12 features)
 
-**Expanded from 5 to 12** — extracting the full options chain signal. Sourced from `ticker.options(date)` polled every 15 minutes.
+Sourced from `ticker.options(date)` polled every 15 minutes.
 
 | Feature | Computation | Notes |
 |---|---|---|
@@ -402,11 +484,9 @@ All MA z-scores are normalized by ATR to make them comparable across assets with
 | Unusual volume flag | Binary: volume > 2σ above 20-day average | Activity spike |
 | IV crush proximity | Days to earnings < 5 AND IV > 80th percentile | Pre-earnings vol signal |
 
-For assets without listed options (some ETFs, crypto): filled with a **learned 12-dim default embedding** per asset class.
+For assets without listed options: filled with a **learned 12-dim default embedding** per asset class.
 
 #### Block 4: Fundamental & Ownership (30 features)
-
-**Expanded from 10 to 30** — now incorporating the full depth of `financial_data()`, `key_stats()`, `earnings_trend()`, `earnings_history()`, insider activity, institutional ownership, and analyst ratings.
 
 **Financial Fundamentals (12 features):**
 
@@ -453,7 +533,7 @@ For assets without listed options (some ETFs, crypto): filled with a **learned 1
 | Insider buy count (90d) | `insider_transactions()` → count of buy transactions | Log-scaled |
 | Net insider value (90d) | `insider_transactions()` → net dollar value | Z-scored |
 | Insider ownership % | `insider_holders()` → total shares / outstanding | [0, 1] |
-| Institutional ownership % | `major_holders()` → insitutional percentage | [0, 1] |
+| Institutional ownership % | `major_holders()` → institutional percentage | [0, 1] |
 | Institutional Δ (quarterly) | `institution_ownership()` → change in top-10 total shares | Z-scored |
 
 **Asset Identity (2 features):**
@@ -465,7 +545,7 @@ For assets without listed options (some ETFs, crypto): filled with a **learned 1
 
 #### Block 5: Risk Analytics (8 features)
 
-**New block.** Sourced from `ticker.risk(Interval::OneDay, TimeRange::OneYear, Some("SPY"))`, refreshed daily.
+Sourced from `ticker.risk(Interval::OneDay, TimeRange::OneYear, Some("SPY"))`, refreshed daily.
 
 | Feature | Source | Encoding |
 |---|---|---|
@@ -480,7 +560,7 @@ For assets without listed options (some ETFs, crypto): filled with a **learned 1
 
 #### Block 6: Event State (10 features)
 
-**New block.** Encodes the recency and intensity of discrete events that have occurred for this asset. Each feature represents a decayed signal from the most recent event of that type.
+Each feature represents a decayed signal from the most recent event of that type.
 
 | Feature | Event Type | Encoding |
 |---|---|---|
@@ -497,8 +577,6 @@ For assets without listed options (some ETFs, crypto): filled with a **learned 1
 
 #### Block 7: Cross-Asset Context (8 features)
 
-**New block.** Per-asset features derived from the asset's relationship to the broader market, computed by the data pipeline.
-
 | Feature | Computation | Notes |
 |---|---|---|
 | Relative strength (20d) | Asset return / SPY return (20d) | Momentum vs market |
@@ -512,17 +590,13 @@ For assets without listed options (some ETFs, crypto): filled with a **learned 1
 
 #### Block 8: Text Embedding (64 features)
 
-From MarketReader (Section 7.10) processing the full text corpus pipeline (Section 6.5).
+From MarketReader (Section 7.10).
 
 **Total per-asset features: 10 + 42 + 12 + 30 + 8 + 10 + 8 = 120 continuous + 64 text = 184 effective dims.**
-
-At inference, the 120 continuous features are concatenated with the 64-dim text embedding to form the full 184-dim per-asset input.
 
 ---
 
 ### 6.3 Market-Wide Feature Assembly (96 dims)
-
-**Expanded from 24 to 96** — now incorporating world indices, full yield curve, sector/industry performance, crypto market state, currency movements, and richer macro signals.
 
 #### Volatility & Sentiment (12 features)
 
@@ -556,8 +630,6 @@ All 12 maturities from `fred::treasury_yields(year)`:
 | 30-year yield | `treasury_yield.y30` |
 | 2y-10y spread | Computed: y10 - y2 |
 
-All yields are provided as raw values (already in percentage points). The model learns yield curve dynamics through the temporal backbone.
-
 #### FRED Macro Series (12 features)
 
 | Feature | FRED ID | Update Frequency |
@@ -575,11 +647,7 @@ All yields are provided as raw values (already in percentage points). The model 
 | Consumer Confidence | `fred::series("UMCSENT")` | Monthly |
 | Leading Economic Index | `fred::series("USSLIND")` | Monthly |
 
-All macro features: raw value + Z-scored change from prior release. Held constant between releases (step function).
-
 #### Sector & Industry Performance (16 features)
-
-From `finance::sector(Sector::*)` across all 11 GICS sectors:
 
 | Feature | Dims | Computation |
 |---|---|---|
@@ -591,8 +659,6 @@ From `finance::sector(Sector::*)` across all 11 GICS sectors:
 | Breadth (% above SMA200) | 1 | From `finance::market_summary()` |
 
 #### World Indices & Cross-Asset (20 features)
-
-From `finance::indices(IndicesRegion::*)`:
 
 | Feature | Source | Dims |
 |---|---|---|
@@ -606,7 +672,7 @@ From `finance::indices(IndicesRegion::*)`:
 | Hang Seng return (1d) | `finance::indices(AsiaPacific)` | 1 |
 | Shanghai Composite return | `finance::indices(AsiaPacific)` | 1 |
 | DXY proxy (UUP) | `Ticker::new("UUP").price()` | 1 |
-| EUR/USD return | From `finance::currencies()` or ticker | 1 |
+| EUR/USD return | From `finance::currencies()` | 1 |
 | USD/JPY return | Same | 1 |
 | Gold (GLD) return | `Ticker::new("GLD").price()` | 1 |
 | Oil (USO) return | `Ticker::new("USO").price()` | 1 |
@@ -629,12 +695,10 @@ From `finance::indices(IndicesRegion::*)`:
 | Trending overlap with portfolio | Count of trending tickers in our portfolio | 1 |
 | Day gainers momentum | `finance::screener(Screener::DayGainers, 10)` avg gain | 1 |
 | Most actives vol ratio | `finance::screener(Screener::MostActives, 10)` avg vol ratio | 1 |
-| Market hours state | `finance::hours(Region::US)` → encoded as pre/open/post/closed | 1 |
+| Market hours state | `finance::hours(Region::US)` → pre/open/post/closed | 1 |
 | Minutes since market event | Minutes since last open/close transition | 1 |
 
 #### RSS & News Aggregate Signals (12 features)
-
-Derived from `feeds::fetch_all(sources)` across all 30+ RSS sources, processed by MarketReader:
 
 | Feature | Computation | Dims |
 |---|---|---|
@@ -657,107 +721,19 @@ Derived from `feeds::fetch_all(sources)` across all 30+ RSS sources, processed b
 
 ### 6.4 Event Stream Architecture
 
-Discrete financial events are a first-class input modality. Rather than waiting for their price impact, events are encoded and injected into the model immediately.
-
-**Event types (18 categories):**
-
-| Category | Event Source | Priority |
-|---|---|---|
-| INSIDER_BUY | `insider_transactions()` | HIGH |
-| INSIDER_SELL | `insider_transactions()` | HIGH |
-| ANALYST_UPGRADE | `grading_history()` | HIGH |
-| ANALYST_DOWNGRADE | `grading_history()` | HIGH |
-| EARNINGS_BEAT | `earnings_history()` | CRITICAL |
-| EARNINGS_MISS | `earnings_history()` | CRITICAL |
-| SEC_FILING_10K | `sec_filings()` / `edgar::submissions()` | MEDIUM |
-| SEC_FILING_10Q | Same | MEDIUM |
-| SEC_FILING_8K | Same | HIGH (unscheduled = material) |
-| SEC_FILING_OTHER | Same | LOW |
-| FOMC_DECISION | `feeds::fetch(FederalReserve)` | CRITICAL |
-| MACRO_RELEASE | FRED series update detection | HIGH |
-| NEWS_HIGH_IMPACT | MarketReader score > threshold | HIGH |
-| DIVIDEND_ANNOUNCED | `calendar_events()` | MEDIUM |
-| SPLIT_ANNOUNCED | `splits()` change detection | MEDIUM |
-| OPTIONS_UNUSUAL_ACTIVITY | Volume anomaly detector | HIGH |
-| TRENDING_ENTRY | `finance::trending()` membership gained | MEDIUM |
-| RATING_CHANGE | `recommendation_trend()` shift | MEDIUM |
-
-**Event encoding:** Each event is encoded into a D-dimensional token via a learned EventEncoder:
-
-```
-EventEncoder:
-  event_type_embedding: Embedding(18 → 64)    — one per event type
-  magnitude_projection: Linear(1 → 64)         — event magnitude (e.g., surprise %)
-  asset_id_embedding: Embedding(100 → 64)      — which asset
-  time_decay: exponential decay since event
-  
-  event_token = Linear(192 → D) applied to concat(type_emb, magnitude_proj, asset_emb)
-  event_token *= exp(-λ × minutes_since_event)
-```
-
-**Injection:** Event tokens are added to the per-asset token sequence at the minute they arrive. The RA-GDN backbone processes them alongside the regular continuous features. For market-wide events (FOMC, macro releases), the event token is broadcast to all assets.
-
-At any given minute, typically 0–3 event tokens are active (most minutes have no events). This adds negligible compute.
-
-**Parameters:** ~50K (embeddings + projection).
+Unchanged from v3.0. 18 event categories, typed event tokens with learned embeddings, time-decayed injection into the backbone. See Appendix D for full catalog.
 
 ---
 
 ### 6.5 Text Corpus Pipeline
 
-MarketReader (Section 7.10) processes text from the following sources, organized by processing priority:
-
-**Tier 1 — Headline-only (processed every 5 minutes):**
-RSS feeds polled via `feeds::fetch_all(sources)`:
-
-| Source Group | Feeds | Count |
-|---|---|---|
-| Central Banks | FederalReserve, Ecb, BankOfEngland | 3 |
-| Regulators | SecPressReleases, SecFilings, Cfpb | 3 |
-| Major Business News | Bloomberg, FinancialTimes, WsjMarkets, TheEconomist | 4 |
-| US Business News | MarketWatch, Cnbc, NytBusiness, Fortune | 4 |
-| Financial Analysis | Investing, CalculatedRisk, RitholtzBigPicture, FinancialPost, FtLex | 5 |
-| Crypto | CoinDesk, CoinTelegraph | 2 |
-| Tech | TechCrunch, VentureBeat, HackerNews, YCombinator | 4 |
-| Global | GuardianBusiness, Scmp, NikkeiAsia | 3 |
-| Wire Services | BusinessWire | 1 |
-| Macro | Bea, OilPrice | 2 |
-| **Total** | | **31 feeds** |
-
-Processing: Title + source → MarketReader headline encoder → 4-dim sentiment vector (positive, negative, uncertainty, relevance-to-finance).
-
-**Tier 2 — Summary-level (processed every 15 minutes for high-impact articles):**
-For articles with high headline relevance score: FeedEntry.summary (typically 1–3 paragraphs) → MarketReader summary encoder → 32-dim topic+sentiment vector.
-
-**Tier 3 — Deep-level (processed on arrival, queued):**
-- Per-ticker news from `ticker.news()` → full article text → 64-dim embedding
-- Earnings transcripts from `finance::earnings_transcript(sym, quarter, year)` → 64-dim embedding
-- Custom RSS feeds via `FeedSource::Custom(url)` for specialized financial blogs
-
-**Text aggregation per asset:** For each asset i, the final 64-dim text embedding is computed by weighted pooling across all text sources with time decay:
-
-```
-text_embedding_i = Σ_j (attention_weight_j × decay_j × embedding_j)
-
-where:
-  j iterates over all text items mentioning asset i in the last 24 hours
-  attention_weight_j = softmax(Linear(embedding_j) → scalar) over all j
-  decay_j = exp(-minutes_since_j / (τ × 60))  
-  τ = 4 hours for headlines, 12 hours for summaries, 48 hours for transcripts
-```
-
-**Text aggregation for market-wide:** Same process but pooling across all non-asset-specific articles:
-
-```
-market_text_embedding = same weighted pooling across general market news
-→ contributes to the 12 RSS/News aggregate features in market-wide vector
-```
+Unchanged from v3.0. MarketReader processes 31 RSS feeds at three tiers (headline/summary/deep). See Section 7.10 for the encoder architecture.
 
 ---
 
 ### 6.6 Portfolio State Vector (201 dims)
 
-Unchanged from v2.0:
+Unchanged:
 
 | Feature | Dims |
 |---|---|
@@ -769,7 +745,7 @@ Unchanged from v2.0:
 
 ### 6.7 Financial Calendar Embedding (20 dims)
 
-Unchanged from v2.0. Encodes minute of session, day of week, month, market-open status, proximity to FOMC, options expiration, etc.
+Unchanged. Encodes minute of session, day of week, month, market-open status, proximity to FOMC, options expiration, etc.
 
 ---
 
@@ -777,12 +753,12 @@ Unchanged from v2.0. Encodes minute of session, day of week, month, market-open 
 
 ### 7.1 Input Projection Layer with Variable Selection
 
-The input projection now handles the expanded feature space:
+Unchanged from v3.0:
 
 ```
 Per-Asset (184 dims → D):
   Step 1: Variable Selection Network
-    Per-feature importance: gates = softmax(Linear(regime_emb, 184)) ∈ ℝ^184
+    gates = softmax(Linear(regime_emb, 184)) ∈ ℝ^184
     x_selected = gates ⊙ features_184
     
   Step 2: Projection
@@ -802,24 +778,13 @@ Event Tokens (when present):
 
 Per-asset token:
   token_i = x_asset_i + x_market + x_portfolio + x_calendar
-  (event tokens are additional tokens, not summed)
 ```
 
-The **VSN** is critical with 184 input features — it ensures the model can dynamically ignore irrelevant signals. For example, during a crisis regime, the VSN might upweight VaR, correlation, and insider activity while downweighting valuation metrics. The regime embedding conditions the gating, so different regimes produce different feature weightings.
-
-**Parameters:** ~245K (184×768 + 96×768 + 201×768 + 20×768 + VSN).
+**Parameters:** ~245K
 
 ### 7.2 Regime Detector
 
-Expanded input to use the richer market-wide features:
-
-**Input:** Concatenation of:
-- Market-wide features (96 dims) — full yield curve, sector performance, indices, etc.
-- Portfolio summary: total value, aggregate P&L, current leverage (3 dims)
-- Rolling regime state: EMA of last 60 regime embeddings (64 dims)
-- **Total: 163 dims**
-
-**Architecture:**
+Unchanged from v3.0. Input: 96 market-wide + 3 portfolio summary + 64 regime state = 163 dims.
 
 ```
 Linear(163 → 256) → SiLU → Dropout(0.1)
@@ -829,474 +794,809 @@ Linear(256 → 128) → SiLU → Dropout(0.1)
 └── regime_change_velocity = ||regime_t − regime_{t-1}||_2
 ```
 
-The expanded input (full yield curve, world indices, sector performance, credit spreads) gives the regime detector much richer conditioning. The yield curve shape alone distinguishes recession risk, inflationary environments, and loose monetary policy regimes.
-
 **Parameters:** ~55K
 
-### 7.3–7.9: Model Core Components
+---
 
-These are architecturally identical to v2.0 Sections 6.5–6.11, with two adjustments:
+### 7.3 Per-Asset Temporal Backbone (Hybrid RA-GDN + SWA Stack)
 
-1. **Input dimension to backbone:** D=768, the per-asset projection maps from 184 dims. This only affects the input projection weights, not the backbone itself.
+**v4.0 change: Blocks 3 and 7 are now Hybrid blocks — an RA-GDN layer followed by a Sparse Sliding Window Attention (SWA) layer.** All other blocks remain pure RA-GDN. This is the Samba-Finance architecture (inspired by Samba, NeurIPS 2024).
 
-2. **Event token processing:** When event tokens are present for an asset at a given timestep, they are processed by the backbone as additional tokens in that asset's sequence. Since the RA-GDN operates in single-step recurrent mode at inference, event tokens are simply additional inputs that update the state S before the regular feature token is processed:
+**Motivation:** With 1,695 training rows per asset, the recurrent state cannot reliably learn to recall exact events from even 20 steps ago because there are too few sequences that share similar event-followed-by-consequence patterns. SWA provides **exact short-range recall** from the last W=64 steps without requiring learned recurrent compression. This directly addresses the mechanism behind the Sharpe 0.57 limitation: the model was missing recent events that the recurrent state had begun to compress away.
+
+#### 7.3.1 RA-GDN Block (Blocks 1, 2, 4, 5, 6, 8)
+
+Unchanged from v3.0. For each asset independently:
 
 ```
-If event_token exists for asset_i at time t:
-  1. Process event_token through GDN → updates S_i
-  2. Process regular feature_token through GDN → updates S_i again
+Input: x_t ∈ ℝ^D, state S_t ∈ ℝ^(d_head × d_v)
+
+Regime modulation:
+  α_t = sigmoid(W_α × regime_emb + b_α)   ∈ (0, 1)   — forgetting rate
+  β_t = sigmoid(W_β × regime_emb + b_β)   ∈ (0, 1)   — update strength
+
+DeltaNet update rule:
+  k_t = W_k × x_t                          ∈ ℝ^d_head
+  v_t = W_v × x_t                          ∈ ℝ^d_v
+  q_t = W_q × x_t                          ∈ ℝ^d_head
   
-Total: 2 GDN steps instead of 1 for that asset that minute.
-This happens for ~5% of asset-minutes, adding negligible overhead.
+  prediction error: δ_t = v_t − k_t^T × S_{t-1}
+  S_t = (1 − α_t) × S_{t-1} + β_t × k_t ⊗ δ_t
+  
+  y_t = q_t^T × S_t
+  output = W_o × y_t + x_t                 (residual connection)
 ```
 
-**All other component specs (RA-GDN blocks, FMoE, temporal cascade, cross-asset fusion, episodic memory, output heads, auxiliary head, MarketReader) remain as specified in v2.0 Sections 6.5–6.12.**
+#### 7.3.2 Sparse Sliding Window Attention (SWA) Layer (Blocks 3, 7)
+
+The SWA layer operates **only on the last W=64 timesteps** of the current sequence window, giving the model precise short-range memory.
+
+```
+SWA parameters:
+  W_q_swa, W_k_swa, W_v_swa: Linear(D → D)
+  W_o_swa: Linear(D → D)
+  n_heads_swa = 4, d_head_swa = 192
+  window_size W = 64
+
+Forward pass (training, sequence mode):
+  For timestep t with context window [t-W, t]:
+    Q = W_q_swa × X[t-W:t]   ∈ ℝ^(W × D)
+    K = W_k_swa × X[t-W:t]   ∈ ℝ^(W × D)
+    V = W_v_swa × X[t-W:t]   ∈ ℝ^(W × D)
+    
+    attn = softmax(QK^T / √d_head_swa) × V
+    output = W_o_swa × attn + X[t]   (residual at current step only)
+
+Forward pass (inference, recurrent mode):
+  Maintain rolling KV cache of last W=64 steps per asset
+  Cache size: 64 × D × 2 (keys + values) × FP16
+           = 64 × 768 × 2 × 2 bytes = 196 KB per asset
+           × 100 assets = 19.2 MB total KV cache
+  
+  At inference step t:
+    Append (k_t, v_t) to cache, evict oldest
+    Compute attention over all W cached pairs
+    Latency: O(W × D) = O(64 × 768) per asset, per SWA layer
+```
+
+**Critical design decision — why W=64:**
+- At daily resolution: 64 days ≈ 3 months of trading history. Captures the most recent earnings cycle, any recent analyst changes, and recent insider activity precisely.
+- At inference: O(W) not O(sequence_length). Fixed cost regardless of how long the system has been running.
+- At training: the RA-GDN handles >64 step dependencies. SWA handles ≤64. The combination covers all timescales without quadratic cost.
+
+**Quantization:** SWA attention weights are FP16 (not ternary) because attention logits require precision. Keys, values, and queries use INT8. This adds ~2.4 MB to the model size.
+
+**Hybrid block structure (complete backbone):**
+
+```
+Block 1:  RA-GDN
+Block 2:  RA-GDN → FMoE
+Block 3:  RA-GDN → SWA(W=64)       [Hybrid — precise short-term recall]
+Block 4:  RA-GDN
+Block 5:  RA-GDN → FMoE
+Block 6:  RA-GDN
+Block 7:  RA-GDN → SWA(W=64)       [Hybrid — pre-fusion recall]
+Block 8:  RA-GDN → FMoE
+```
+
+SWA at block 3: provides precise short-term context before the first temporal cascade injection point. SWA at block 7: provides precise recall immediately before cross-asset fusion, so the fusion module sees both long-range compressed state and exact short-range context.
+
+**Additional parameters from SWA layers:**
+Two SWA layers × (3 × D × D projection + D × D output) ≈ 2 × (4 × 768²) ≈ 4.7M parameters. These are FP16 / INT8.
+
+**Additional KV cache at inference:** 100 assets × 2 SWA layers × 64 × 768 × 2 (FP16) = 37.7 MB.
+
+---
+
+### 7.4 Regime-Routed Sparse Mixture of Experts
+
+Unchanged from v3.0. 3 FMoE blocks (after RA-GDN in blocks 2, 5, 8), 4 experts each, 2 active per step via regime posterior routing.
+
+**Parameters:** ~42.5M (21.3M active per forward pass).
+
+---
+
+### 7.5 Temporal Cascade
+
+Unchanged from v3.0. Three GDN stacks (hourly/daily/weekly resolution), bidirectional surprise-gated injection.
+
+**Parameters:** ~4.2M.
+
+---
+
+### 7.6 Cross-Asset Fusion Module
+
+Unchanged from v3.0. 110+ token multi-head attention over all assets + market + portfolio + episodic memory retrievals. Sector bias prior matrix. 2 layers.
+
+**v4.0 note:** Because SWA at block 7 feeds precise short-range state into this module, cross-asset fusion now operates on representations that include exact recent event context, not just recurrently compressed approximations. This is expected to improve the cross-asset correlation objective.
+
+**Parameters:** ~11.8M.
+
+---
+
+### 7.7 Financial Episodic Memory
+
+Unchanged from v3.0. FAISS k-NN buffer of 50,000 surprising market states. Entries populated during training on both real and FDA-generated sequences.
+
+**v4.0 note:** FDA-generated crisis sequences increase the representation of rare regimes in the episodic memory buffer. Without FDA, crisis-regime episodes are underrepresented (real data: ~2008, ~2020 = ~2 crisis years in 10yr history). With FDA: 30× multiplier with regime conditioning generates proportionally more crisis sequences, giving the buffer better coverage of tail scenarios.
+
+**Parameters:** ~200K projection weights + FAISS index.
+
+---
+
+### 7.8 Portfolio Output Heads
+
+Unchanged from v3.0. Two heads (return-maximizing Meridian-R, Sharpe-maximizing Meridian-S), shared backbone.
+
+**v4.0 note:** Portfolio-Theoretic Augmentation (Section 11.4) is applied during Phase 2 head training. The heads themselves are architecturally identical; PTA operates at the data level.
+
+**Parameters:** ~394K (197K per active head).
+
+---
+
+### 7.9 Auxiliary Prediction Head
+
+Unchanged from v3.0. Predicts next-step return and volatility for computing surprise signal.
+
+**Parameters:** ~100K.
+
+---
 
 ### 7.10 MarketReader Text Encoder
 
-Expanded to handle the three-tier text processing pipeline:
-
-**Three sub-encoders sharing the same GDN backbone:**
+Unchanged from v3.0.
 
 ```
 Shared components:
-  BPE Tokenizer: 4,096 vocab, trained on financial corpus
+  BPE Tokenizer: 4,096 vocab
   Token Embedding: 4,096 × 256
   Position Embedding: 512 × 256
   4 GDN Blocks: D=256, n_heads=4, d_head=32, d_v=64
 
 Tier-specific output heads:
-  Headline head:   attention_pool → Linear(256 → 4)   → 4-dim sentiment
-  Summary head:    attention_pool → Linear(256 → 32)  → 32-dim topic+sentiment
-  Deep head:       attention_pool → Linear(256 → 64)  → 64-dim full embedding
+  Headline:  attention_pool → Linear(256 → 4)   → 4-dim sentiment
+  Summary:   attention_pool → Linear(256 → 32)  → 32-dim topic+sentiment
+  Deep:      attention_pool → Linear(256 → 64)  → 64-dim full embedding
 
-Total parameters: ~3.5M
-Quantized (INT8): ~3.5 MB
+Total parameters: ~3.5M (INT8 quantized: ~3.5 MB)
 ```
-
-**Headline processing** (the most frequent): Only processes the title string (~10–20 tokens). Latency: < 0.5 ms on Pi 5. Can process ~200 headlines per second.
-
-**Summary processing**: Processes up to 128 tokens from the article summary. Latency: ~1 ms.
-
-**Deep processing**: Processes up to 512 tokens from full articles or earnings transcripts. Latency: ~2 ms. For earnings transcripts that exceed 512 tokens, a sliding window with max-pooling is used.
-
-**Training corpus for MarketReader:**
-1. Financial PhraseBank (sentiment classification)
-2. SEC filings sentiment (EDGAR corpus)
-3. Earnings call transcripts (Quartr/finance-query corpus) with post-call price direction labels
-4. Financial news headlines with next-day return labels
-5. Contrastive learning: articles about the same event → similar embeddings
 
 ---
 
-## 8. Continuous Learning System
+## 8. Financial Diffusion Augmentation (FDA)
 
-The three-tier system is unchanged from v2.0, with one addition:
+This is the central new system in v4.0. The FDA is a standalone model — trained separately, run offline, and never deployed to the Pi 5. Its sole purpose is to produce additional training sequences for the main Meridian model.
 
-### 8.1–8.3: Tiers 1–3
+### 8.1 Motivation & Scope
 
-Identical to v2.0 Sections 7.1–7.3.
+The core training problem: 1,695 daily rows per asset × 100 assets = 169,500 asset-day observations. For the backbone (pretrained with shared weights across assets), the effective training set is 169,500 rows (about a 560:1 parameter-to-observation ratio at 95M parameters). For the portfolio head (trained on 100-asset joint sequences), the effective training set is 1,695 sequences (about a 56,000:1 parameter-to-sequence ratio). This is why the model reaches training saturation before it has seen enough diversity to generalize.
 
-### 8.4 Adaptation Feedback Loop (New)
+FDA addresses this by generating synthetic sequences that:
+1. Are statistically indistinguishable from real finance-query data on 9 measurable stylized facts
+2. Are generated in the finance-query feature space (184-dim per-asset + 96-dim market-wide), ensuring no train/inference distribution mismatch
+3. Are conditioned on regime labels, enabling controlled generation of underrepresented regimes (crisis, high-volatility)
+4. Preserve cross-asset correlation structure, which is critical for portfolio head training
 
-The continuous learning system produces measurable adaptation metrics that feed back into the system itself:
+**FDA is used only for training data generation. At inference, the Pi 5 runs only the main Meridian model.**
 
-**Adaptation health dashboard (computed continuously):**
+### 8.2 FDA Architecture
+
+The FDA is a **score-based diffusion model** (DDPM with linear noise schedule) operating on financial time series windows. It is inspired by FinDiff (2023) and TSDiff (2023), adapted for the Meridian feature space.
+
+```
+FDA Model Architecture:
+
+Input space:
+  X ∈ ℝ^(T × N × F)  where:
+    T = 64 (window length in trading days)
+    N = 100 (assets)
+    F = 184 (per-asset features) + 96 (market-wide, broadcast)
+  
+  In practice: work in the return/indicator space (log-returns + 
+  normalized indicators), not raw prices, to improve stationarity.
+
+Diffusion process:
+  Forward: q(x_τ | x_0) = N(√ᾱ_τ × x_0, (1 − ᾱ_τ) × I)
+    τ = noise level from 1 to T_diff = 1000
+    ᾱ_τ = cumulative noise schedule (cosine schedule)
+  
+  Reverse (learned): p_θ(x_{τ-1} | x_τ, c)
+    c = conditioning vector (regime label + market context)
+
+Score network architecture:
+  Backbone: 4-layer U-Net operating on (T, N, F) tensor
+    Each level: (Conv1D along T) + (Linear across N) + RMSNorm
+    Skip connections at each resolution
+    
+  Conditioning:
+    Regime one-hot (4) → Linear(4 → 64) → γ, β for AdaRMSNorm
+    Market-wide context (96) → Linear(96 → 64) → AdaRMSNorm
+    Noise level τ → sinusoidal embedding(64) → AdaRMSNorm
+  
+  Total FDA parameters: ~8M (FP32 during training, not deployed)
+  FDA training: ~40–60 H100-hours
+  FDA inference: generate 50,000 windows in ~2 hours on H100
+```
+
+**Training the FDA:**
+
+```
+Training data: 100 assets × 1,695 days → windowed into
+  100 × (1695 - 64) = 100 × 1631 = 163,100 windows of length T=64
+  
+  Each window: X_t ∈ ℝ^(64 × 280)  (184 per-asset + 96 market-wide)
+  
+Regime labels: assigned by pre-fit 4-state HMM on SPY returns
+  Low-vol trending: ~55% of windows
+  High-vol trending: ~20% of windows
+  Mean-reverting: ~15% of windows
+  Crisis: ~10% of windows
+
+Loss: standard DDPM loss on ε-prediction
+  L = ||ε − ε_θ(x_τ, τ, c)||²
+
+Training: 200 epochs, AdamW lr=3e-4, batch=64 windows
+```
+
+### 8.3 Stylized Fact Validation Gate
+
+Every batch of synthetic sequences passes a 9-point gate before being admitted to the training pool. Sequences that fail any check are discarded. This ensures the model never trains on unrealistic synthetic data.
+
+| Check | Test | Threshold |
+|---|---|---|
+| **Fat tails** | Excess kurtosis of return distribution | > 1.0 (normal = 0) |
+| **Volatility clustering** | Autocorrelation of squared returns at lag 1 | > 0.10 |
+| **Negative skewness** | Return distribution skewness | < -0.05 |
+| **No autocorrelation in returns** | Ljung-Box test on raw returns | p > 0.05 |
+| **Leverage effect** | Correlation between past returns and future volatility | < -0.05 |
+| **Volume-volatility correlation** | Correlation of log-volume and absolute return | > 0.15 |
+| **Cross-asset correlations** | Mean pairwise correlation vs real data mean | Within ±0.10 |
+| **Tail co-movement** | Fraction of joint extreme events (>2σ same direction) | Within ±0.05 of real |
+| **Indicator consistency** | RSI computed from synthetic OHLCV matches synthetic RSI feature | Error < 0.01 |
+
+The last check — indicator consistency — ensures the FDA generates internally consistent feature vectors (RSI, MACD, etc. match what would be computed from the generated OHLCV values). This prevents the main model from training on contradictory signals.
+
+**Expected pass rate:** Based on FinDiff literature benchmarks, ~70–85% of generated sequences pass all 9 checks. The FDA is run until 50,000 valid windows are collected.
+
+### 8.4 Regime-Conditioned Generation
+
+A critical advantage of FDA over simple bootstrap resampling: **controlled generation of underrepresented regimes.**
+
+In 1,695 real days of SPY data, crisis regimes (defined as VIX > 30 sustained for 2+ weeks) occupy approximately 10–12% of trading days. In a walk-forward backtest, the OOS period may contain a higher or lower proportion of crisis days. The model trained only on real data has seen very few examples of crisis sequences for rare assets.
+
+FDA regime conditioning allows explicit oversampling:
+
+```
+Generation budget: 50,000 valid windows
+  Low-vol trending:    30% (15,000 windows)   ← underweight vs real 55%
+  High-vol trending:   25% (12,500 windows)
+  Mean-reverting:      25% (12,500 windows)
+  Crisis:              20% (10,000 windows)   ← overweight vs real 10%
+  
+Rationale: 
+  - Crisis regime is most important for drawdown control
+  - Main model has seen ~170 crisis windows in real data
+  - FDA adds ~10,000 crisis windows (59× more)
+  - Expected improvement: better calibrated crisis behavior
+```
+
+### 8.5 Cross-Asset Correlation Preservation
+
+Portfolio head training requires realistic joint distributions across 100 assets. Simple per-asset augmentation destroys cross-asset structure.
+
+The FDA generates joint windows (all 100 assets simultaneously) via the 2D score network operating on the (T × N) tensor. Cross-asset attention is implicit in the U-Net's spatial (N-axis) linear layers.
+
+**Validation:** Before the FDA training data is used for portfolio head training, an additional cross-asset check is performed:
+
+```python
+def validate_cross_asset_structure(synthetic_batch, real_batch):
+    """Checks that synthetic data preserves portfolio-relevant statistics."""
+    
+    # 1. Sector correlation blocks
+    for sector in GICS_SECTORS:
+        real_intra = mean_corr(real_batch, sector_assets[sector])
+        synth_intra = mean_corr(synthetic_batch, sector_assets[sector])
+        assert abs(real_intra - synth_intra) < 0.15
+    
+    # 2. Market beta distribution
+    real_betas = compute_betas(real_batch, market_index=SPY_idx)
+    synth_betas = compute_betas(synthetic_batch, market_index=SPY_idx)
+    assert ks_statistic(real_betas, synth_betas) < 0.20
+    
+    # 3. Minimum variance portfolio weights
+    real_mvp = min_variance_weights(real_batch)
+    synth_mvp = min_variance_weights(synthetic_batch)
+    assert mean_abs_difference(real_mvp, synth_mvp) < 0.05
+```
+
+If a batch of 1,000 synthetic windows fails this check, it is discarded and regenerated.
+
+### 8.6 Limitations & Honest Caveats
+
+The FDA is a powerful tool with real limitations that must be acknowledged:
+
+**Limitation 1: Cannot generate truly novel market regimes.** The FDA is trained on 10 years of daily data (~2014–2024). It can generate variations of what it saw — 2008-style crises are absent from the training window. If the next decade features a new type of shock (e.g., digital asset contagion at scale, geopolitical financial warfare), the FDA-generated crisis sequences may be poor approximations.
+
+**Limitation 2: Stylized fact preservation ≠ predictive signal preservation.** Generating sequences that match statistical properties does not guarantee the sequences contain the same predictive relationships between features and future returns. The FDA learns the marginal distribution well; it may learn the conditional distribution (given feature X, what is next-period return Y?) less well.
+
+**Limitation 3: 30× multiplier is not 30× real data.** Effective sample size increase is sub-linear. FDA-generated sequences are not independent from the real data they were generated from — they share statistical properties by design. The actual effective sample size increase is likely 5–10× for purposes of parameter estimation, not 30×.
+
+**Limitation 4: Indicator consistency check may miss edge cases.** The 9-point gate validates RSI consistency but does not validate every pairwise indicator relationship. A synthetic sequence where MACD and RSI are internally inconsistent might pass the gate.
+
+These limitations are why the v4.0 expected Sharpe range is 0.82–1.24 (projected), not 2.0+. The FDA helps; it does not solve the data problem.
+
+---
+
+## 9. Continuous Learning System
+
+### 9.1–9.3: Tiers 1–3
+
+Identical to v3.0 Sections 8.1–8.3. Surprise-gated delta dynamics, normalization adaptation, EWC + ternary LoRA consolidation.
+
+### 9.4 Adaptation Feedback Loop
+
+Identical to v3.0 Section 8.4, with one addition:
+
+**v4.0 addition — FDA quality monitoring during paper trading:**
+
+As the paper trading system accumulates real inference-time data, FDA quality can be retrospectively evaluated:
+
+```
+Monthly FDA quality check:
+  1. Collect 20 trading days of real finance-query feature vectors
+  2. Run stylized fact checks on real data vs. FDA-generated data
+  3. Compute distributional distance (MMD) between real and synthetic
+  
+  If MMD > 0.3:
+    - Flag: FDA may have drifted from current market conditions
+    - Retrain FDA on updated real data (including last 20 days)
+    - Regenerate synthetic training pool
+    - Trigger Phase 1 and Phase 2 retraining
+  
+  This ensures the FDA stays calibrated to current market structure,
+  not just the 2014-2024 training window.
+```
+
+**Adaptation health dashboard (same as v3.0, plus):**
 
 | Metric | What It Measures | Healthy Range |
 |---|---|---|
-| Surprise EMA | Baseline prediction error | Stable, slowly varying |
-| Surprise spike frequency | How often surprises exceed 3σ | < 5% of minutes |
-| Regime posterior entropy | How uncertain the regime detector is | Low = clear regime |
-| State norm trajectory | GDN hidden state magnitude over time | Bounded, no monotonic growth |
-| Norm parameter drift | How far Tier 2 params have moved from checkpoint | < 20% relative change |
-| LoRA adapter magnitude | How large the Tier 3 adjustments are | < 10% of base weight norm |
-| Auxiliary prediction R² | How well the model predicts next-step returns/vol | Declining → signal regime shift |
-| Feature importance entropy | How evenly VSN distributes attention | High = confusion, low = focused |
-
-**Adaptation triggers:**
-
-1. If `auxiliary_R²` drops below 0.01 for 2+ hours → increase Tier 1 sensitivity (raise γ)
-2. If `surprise_spike_frequency` > 15% for 1+ hours → trigger emergency Tier 3 consolidation
-3. If `state_norm` exceeds 2× training mean → emergency RMSNorm
-4. If `regime_posterior_entropy` stays high for 4+ hours → switch MoE to equal-weight (all-expert) mode until regime clarifies
-5. If `norm_parameter_drift` > 20% → reduce Tier 2 learning rate
-
-These rules are implemented as simple threshold checks in the data pipeline, not in the model itself. They provide a safety net for the adaptation system.
+| FDA-real MMD (monthly) | Distributional distance of synthetic vs real data | < 0.3 |
+| Stylized fact pass rate (current) | Fraction of current synthetic windows passing gate | > 0.70 |
+| SWA cache hit rate | Fraction of attention queries hitting informative keys | > 0.40 |
 
 ---
 
-## 9. Quantization Strategy
+## 10. Quantization Strategy
 
-Unchanged from v2.0. Mixed precision: ternary weights, FP16 hidden states, INT8 activations. Periodic RMSNorm on state. ARM NEON ternary kernels via TAB framework.
+Unchanged from v3.0, with one addition:
+
+**v4.0 addition — SWA layers:**
+SWA projection weights (W_q, W_k, W_v, W_o) are INT8 quantized. Attention logits and softmax are computed in FP16. KV cache stored in FP16. This is consistent with the broader precision highway strategy.
+
+The FDA model is never deployed to the Pi 5 and is therefore trained and run in FP32 on the H100 without quantization constraints.
 
 ---
 
-## 10. Training Pipeline
+## 11. Training Pipeline
 
-### 10.1 Data Sources & Preprocessing
+### 11.1 Data Sources & Honest Row Counts
 
-**Expanded training data corpus:**
+**v4.0 removes all paid external data providers.** Training data is sourced exclusively from finance-query to maintain train/inference distribution alignment.
 
-| Data Type | Source | Granularity | Historical Depth |
+| Data Type | Source | Granularity | Rows Per Asset | Notes |
+|---|---|---|---|---|
+| OHLCV (equities, ETFs) | `ticker.chart(1d, 10y)` via finance-query | Daily | ~1,695 | Hard constraint — Yahoo Finance free tier |
+| OHLCV (crypto) | `crypto::coin()` historical | Daily | ~3,285 | Crypto trades 7 days/week |
+| Technical indicators (42) | Computed from above OHLCV | Daily | ~1,695 | Same source, same z-score baselines |
+| Options chains | `ticker.options(date)` historical snapshots | Daily | ~252 per year | Limited history availability |
+| Fundamentals (XBRL) | `edgar::company_facts()` + finance-query | Quarterly | ~40 quarters | 10-year history |
+| Earnings actuals vs estimates | `earnings_history()` | Quarterly | ~40 quarters | |
+| Earnings estimate revisions | `earnings_trend()` | Monthly | ~36 months | ~3-year history |
+| Analyst ratings history | `recommendation_trend()` | Monthly | ~36 months | |
+| Analyst upgrades/downgrades | `grading_history()` | Event-driven | Variable | |
+| Insider transactions | `insider_transactions()` | Event-driven | Variable | |
+| Institutional ownership | `institution_ownership()` | Quarterly | ~20 quarters | |
+| News headlines | finance-query RSS historical | Event-driven | ~500K total headlines | Across all assets over 3 years |
+| Earnings transcripts | `earnings_transcript()` | Quarterly | ~40 per asset | |
+| Treasury yield curve | `fred::treasury_yields()` | Daily | ~1,695 rows | |
+| FRED macro (12 series) | `fred::series()` | Various | ~120 monthly observations | |
+| Fear & Greed | Historical | Daily | ~1,695 | |
+| VIX | `Ticker::new("^VIX").chart()` | Daily | ~1,695 | |
+| World indices | `finance::indices()` historical | Daily | ~1,695 | |
+| Sector performance | `finance::sector()` historical | Daily | ~1,695 | |
+
+**FDA synthetic data (generated from the above):**
+
+| Data Type | Method | Generated Rows | Valid After Gate |
 |---|---|---|---|
-| Minute OHLCV (equities, ETFs) | Polygon.io / FirstRate Data | 1-minute | 5 years |
-| Minute OHLCV (crypto) | Binance / CoinGecko historical | 1-minute | 5 years |
-| Full technical indicators (42) | Computed via finance-query | 1-minute | 5 years |
-| Options chains | CBOE / OptionMetrics | Daily snapshots | 5 years |
-| Fundamentals (XBRL) | `edgar::company_facts()` / finance-query | Quarterly | 5 years |
-| Earnings actuals vs estimates | finance-query `earnings_history()` | Quarterly | 5 years |
-| Earnings estimate revisions | finance-query `earnings_trend()` | Monthly | 3 years |
-| Analyst ratings history | finance-query `recommendation_trend()` | Monthly | 3 years |
-| Analyst upgrades/downgrades | finance-query `grading_history()` | Event-driven | 5 years |
-| Insider transactions | finance-query `insider_transactions()` | Event-driven | 5 years |
-| Institutional ownership | finance-query `institution_ownership()` | Quarterly | 5 years |
-| News headlines + summaries | finance-query RSS historical / GDELT | Event-driven | 3 years |
-| Earnings transcripts | finance-query `earnings_transcript()` | Quarterly | 3 years |
-| SEC filings metadata | `edgar::submissions()` | Event-driven | 5 years |
-| Treasury yield curve (all mats) | `fred::treasury_yields()` | Daily | 5 years |
-| FRED macro (12 series) | `fred::series()` | Various | 5 years |
-| Fear & Greed index | Historical from alternative.me | Daily | 5 years |
-| VIX + VIX3M | Ticker charts | 1-minute | 5 years |
-| World indices (9 indices) | `finance::indices()` historical | Daily | 5 years |
-| Sector performance (11 GICS) | `finance::sector()` historical | Daily | 5 years |
-| Crypto market (BTC, ETH) | `crypto::coin()` historical | Hourly | 5 years |
-| Screener memberships | `finance::screener()` historical | Daily | 2 years |
-| Trending tickers | `finance::trending()` historical | Daily | 2 years |
-| Risk analytics | `ticker.risk()` computed from price data | Daily | 5 years |
+| Synthetic OHLCV + feature sequences | FDA diffusion model | ~70,000 windows × 64 days | ~50,000 windows |
+| Crisis-regime oversampled sequences | FDA regime conditioning | ~14,000 windows × 64 days | ~10,000 windows |
+| **Total augmented effective rows** | **Real + synthetic** | **~51,695 per asset (est.)** | **Param ratio at 95M target: ~1,838:1 per-asset view (~18.4:1 pooled across 100 assets)** |
 
-**Data scale:**
-- ~490,000 minutes of US market data per equity asset
-- ~2,600,000 minutes of crypto data
-- ~100,000 discrete events (insider trades, filings, rating changes, etc.) per 100 assets over 5 years
-- ~500,000 news headlines, ~50,000 article summaries, ~4,000 earnings transcripts
-- Uncompressed: ~50 GB → stored as memory-mapped FP16 tensors
-
-**Event reconstruction:** For historical training, events are reconstructed from the diff of periodic API snapshots. For example, insider transactions are derived by diffing consecutive `insider_transactions()` calls and assigning each transaction to the minute of its filing date.
-
-### 10.2–10.5: Training Phases
-
-**Phase 1 — Self-supervised pre-training:** Uses 184-dim per-asset features and 96-dim market features (280 dims total per shard row). Training tasks unchanged (next-step return, volatility, correlation prediction). Estimated: ~100 H100-hours.
-
-**Phase 2 — Portfolio optimization:** Unchanged (DSR + return loss + volatility auxiliary). Estimated: ~80 H100-hours.
-
-**Phase 3 — Meta-learning for plasticity:** Regime transitions now use the richer event stream for more realistic simulation. For example, a simulated "Fed surprise" episode includes the FOMC_DECISION event token, the associated news headlines, and the yield curve shift. Estimated: ~50 H100-hours.
-
-**Phase 4 — QAT:** Unchanged. Estimated: ~20 H100-hours.
-
-**Total: ~260 H100-hours** (within 500-hour budget, with room for experimentation).
+**Honest assessment of the augmented dataset:**
+The 51,695 figure assumes the FDA generates fully independent samples, which overstates the effective sample count. A conservative estimate accounting for synthetic data dependency gives an effective independent sample count of ~8,000–15,000 rows per asset — a 5–9× improvement over the raw 1,695. This is meaningful but not the 290× gap needed to fully match the original spec's 490K assumption. The Sharpe > 1.0 target remains a stretch goal, not a guarantee.
 
 ---
 
-## 11. Two-Head Strategy (Meridian-R / Meridian-S)
+### 11.2 Phase 0 — FDA Pre-Training (Diffusion Model)
 
-Unchanged from v2.0. Shared backbone, two heads with different loss functions. One active at inference time, or blended with regime-dependent weighting.
+**Duration:** ~40–60 H100-hours  
+**Output:** Trained FDA model capable of generating validated synthetic sequences
+
+```
+Step 1: Data preparation
+  - Download all 100 assets' daily data via finance-query
+  - Compute all 42 indicators per asset
+  - Assemble 184-dim per-asset feature vectors for all 1,695 days
+  - Compute 96-dim market-wide feature vectors for all 1,695 days
+  - Normalize all features with rolling 252-day z-scores
+  - Run HMM on SPY returns to assign regime labels to all days
+  - Create (T=64, N=100, F=280) windows: 163,100 total
+  
+Step 2: FDA training
+  - Train score network for 200 epochs (see Section 8.2)
+  - Validation: held-out 20% of windows
+  - Monitor: FID-style score on stylized facts, not raw loss
+  
+Step 3: Synthetic data generation
+  - Generate 70,000 candidate windows
+  - Apply 9-point stylized fact validation gate
+  - Apply cross-asset correlation validation
+  - Collect 50,000 valid windows → write to training shards
+  
+Step 4: FDA quality verification
+  - Compute MMD between real and synthetic on held-out real windows
+  - Verify regime distribution matches target (30/25/25/20%)
+  - Verify no individual-asset autocorrelation leakage
+  - Sign off before proceeding to Phase 1
+```
 
 ---
 
-## 12. Historical Backtesting Framework
+### 11.3 Phase 1 — Contrastive Self-Supervised Pre-training
 
-Meridian integrates directly with finance-query's backtesting engine for historical validation.
+**Duration:** ~60–80 H100-hours  
+**Input:** Real data (1,695 rows × 100 assets) + FDA synthetic (50,000 windows × 100 assets)  
+**v4.0 change:** Replaces next-step prediction with Temporal Contrastive Pretraining (TCP)
 
-### 12.1 Meridian as a Backtesting Strategy
+**Why TCP instead of next-step prediction:**
 
-A custom `Strategy` implementation wraps the trained Meridian model:
+Next-step return prediction generates one gradient signal per timestep. With 1,695 real rows and 100 assets, that's 169,500 gradient signals. TCP generates N² pairwise signals from the same data — temporally adjacent windows are positive pairs, distant or different-regime windows are negative pairs. Over the 100-asset universe, this yields approximately 100× more gradient signal from the same data, giving the backbone dramatically richer representation learning on limited data.
+
+```
+Contrastive objective:
+
+For a batch of B sequence windows {W_1, ..., W_B}:
+  
+  1. Augmentation:
+     For each window W_i, create two augmented views:
+       W_i^a: original window [t-64, t]
+       W_i^b: temporally adjacent window [t-60, t+4] (±4 day offset)
+     These are "positive pairs" — same market event, slightly shifted.
+     
+     Negative pairs: any window W_j^a or W_j^b where j ≠ i
+     Hard negatives: windows from same asset but different regime (HMM label differs)
+  
+  2. Encoder:
+     z_i^a = MLP(pool(backbone(W_i^a)))   ∈ ℝ^128
+     z_i^b = MLP(pool(backbone(W_i^b)))   ∈ ℝ^128
+     Normalize: z = z / ||z||
+  
+  3. NT-Xent loss (InfoNCE):
+     L_contrastive = -log( exp(z_i^a · z_i^b / τ) / Σ_j exp(z_i^a · z_j^b / τ) )
+     τ = 0.1 (temperature)
+  
+  4. Auxiliary prediction head (kept from v3.0):
+     L_pred = MSE(predict_return(backbone(W_i^a)), actual_return_{t+1})
+  
+  Total Phase 1 loss:
+     L = λ_c × L_contrastive + λ_p × L_pred
+     λ_c = 0.7, λ_p = 0.3  (contrastive dominates)
+
+Multi-asset positive pairs:
+  Additional positive pairs: (window of asset i at time t, window of 
+  asset j at time t) when both assets are in the same sector AND same
+  regime AND their price correlation over the window is > 0.6.
+  
+  This teaches the backbone that AAPL and MSFT in a bull tech regime
+  should have similar representations — improving cross-asset fusion.
+```
+
+**Training setup:**
+
+```
+Data mixture:
+  Real windows:      163,100 (100 assets × 1,631 windows)
+  FDA synthetic:     50,000 validated windows
+  Total:             213,100 windows
+  
+  FDA synthetic weight in loss: 0.5 (half weight of real data)
+  Rationale: real data is more reliable; synthetic supplements it
+
+Optimizer: AdamW, lr=3e-4, cosine decay to 1e-5
+Batch size: 128 windows
+Training steps: ~20,000 (early stop on held-out contrastive accuracy)
+Backbone: 8 hybrid blocks (RA-GDN + SWA) with shared weights
+Gradient clip: 1.0
+```
+
+**Phase 1 validation criteria:**
+
+```
+Minimum to proceed to Phase 2:
+  - Contrastive accuracy (positive pair > all negatives) > 0.60
+  - Auxiliary return prediction R² > 0.01 (non-trivial but low is expected)
+  - Regime separation: t-SNE of representations shows 4 visible clusters
+  - SWA attention entropy < 0.8 (attending to specific positions, not uniform)
+```
+
+---
+
+### 11.4 Phase 2 — Portfolio Optimization with Augmentation
+
+**Duration:** ~50–70 H100-hours  
+**v4.0 changes:** (a) Portfolio-Theoretic Augmentation applied at batch level; (b) FDA sequences used for head training with regime-balanced sampling; (c) Cross-asset pretraining for backbone
+
+#### 11.4a Backbone Cross-Asset Pretraining (Phase 2 warm-up)
+
+Before portfolio head training, the backbone is fine-tuned on the cross-asset correlation prediction task across all 100 assets simultaneously. This is the step that was described as "learned nothing" in v3.0 (N=1 pretraining).
+
+```
+Duration: ~10 H100-hours
+Task: Given 100-asset feature window W_t ∈ ℝ^(T × 100 × 184),
+      predict the 100×100 realized correlation matrix Σ̂_{t, t+20}
+      (over the next 20 days)
+Loss: Frobenius norm of (Σ̂ − Σ_realized)
+Data: Real 100-asset joint windows + FDA joint windows
+      100-asset joint windows: ℝ^(64 × 100 × 184)
+      These are large — ~4.7M floats per window. Batch size = 8.
+```
+
+#### 11.4b Portfolio-Theoretic Augmentation (PTA)
+
+Applied at the batch level during Phase 2 head training. For each real or synthetic training batch, PTA generates additional augmented batches using symmetry-preserving transformations.
+
+```
+PTA transformations (applied with probability p_aug = 0.5 per batch):
+
+Transformation 1: Asset permutation preserving sector structure
+  For each sector s, randomly permute asset indices within sector s.
+  Portfolio weights are permuted accordingly.
+  Covariance structure is approximately preserved within sectors.
+  
+  Example: AAPL ↔ MSFT in Tech sector, with weights swapped.
+  Returns: w_augmented = permute(w_real), r_augmented = permute(r_real)
+  Valid because: within-sector assets share similar factor loadings.
+  Expected multiplier: ~12× (12 permutations per batch)
+
+Transformation 2: Return sign + weight sign coupling
+  negate: x_augmented = −x_real, w_augmented = −w_real
+  P&L is unchanged: P&L = w^T × r = (−w)^T × (−r)
+  Valid only when allowing short positions.
+  Expected multiplier: 2× (original + negated)
+
+Transformation 3: Volatility scaling
+  Scale all returns and vol-dependent features by factor c ∈ [0.8, 1.2]:
+  r_augmented = c × r_real
+  Vol features (ATR, Bollinger %B) scaled accordingly
+  Allocation weights unchanged (relative positions preserved)
+  Expected multiplier: 4× (with c = 0.8, 0.9, 1.1, 1.2)
+
+Combined PTA multiplier: ~12 × 2 × 4 = ~96× on average
+Conservative effective sample size multiplier: ~8–12× (accounting for
+correlation between augmented samples)
+
+Implementation:
+  def pta_augment(batch_features, batch_weights, batch_returns):
+      augmented = [original]
+      if rand() < 0.5:
+          augmented += sector_permutations(batch, n=4)
+      if rand() < 0.5:
+          augmented += [sign_flip(batch)]
+      if rand() < 0.7:
+          augmented += vol_scales(batch, scales=[0.8, 0.9, 1.1, 1.2])
+      return concat(augmented)
+```
+
+#### 11.4c Portfolio Head Training
+
+```
+Data:
+  Real sequences:         1,695 days → 1,695 portfolio training steps
+  FDA sequences:          50,000 windows (regime-balanced)
+  PTA-augmented:          ~8–12× effective multiplier
+  
+  Total effective steps: ~1,695 × 8 (PTA) + 50,000 × 0.5 × 8 (FDA+PTA)
+                       ≈ 13,560 + 200,000 ≈ 213,560 effective steps
+  
+Loss (unchanged from v3.0):
+  L = −DSR + λ_r × L_return + λ_v × L_vol + λ_t × L_turnover
+  
+  DSR: Differentiable Sharpe Ratio
+  L_return: next-period portfolio return
+  L_vol: auxiliary volatility prediction
+  L_turnover: L1 penalty on weight changes (prevents overtrading)
+  
+FDA data weighting:
+  Real data: weight 1.0
+  FDA data: weight 0.6
+  
+  Validation set: real data only (no synthetic in validation)
+  
+Regime-balanced sampling:
+  Ensure each training batch contains at least one window from each
+  of the 4 regimes. This prevents the head from optimizing only for
+  the dominant (low-vol trending) regime.
+
+Early stopping:
+  Monitor: val_DSR on real-data-only validation split
+  Patience: 200 steps
+  Expected: convergence at 1,000–3,000 steps (vs. 2,000 in v3.0)
+```
+
+---
+
+### 11.5 Phase 3 — Meta-Learning for Plasticity
+
+Identical to v3.0. Regime transition episodes now use FDA-generated regime transition sequences (low-vol → crisis transitions are now plentiful due to crisis oversampling). This gives the meta-learning phase more realistic "sudden regime change" episodes to train adaptation on.
+
+**Estimated duration:** ~40 H100-hours.
+
+---
+
+### 11.6 Phase 4 — Quantization-Aware Training
+
+Unchanged from v3.0. QAT for ternary backbone weights, INT8 activations, FP16 states. SWA projection weights are INT8-quantized in this phase.
+
+**Estimated duration:** ~20 H100-hours.
+
+**Total Phase 0–4: ~210–280 H100-hours** (within 500-hour budget, including FDA training).
+
+---
+
+## 12. Known Limitations & Expected Performance Bounds
+
+This section is new in v4.0. It documents the honest constraints on Meridian's performance given the data environment, to prevent overclaiming and to set appropriate expectations before live deployment.
+
+### 12.1 The Fundamental Data Constraint
+
+**Problem:** The spec's original architecture (95M parameters) was designed for ~490,000 minute-bar training rows per asset. The finance-query-only constraint provides 1,695 daily rows — a 290× shortfall. No augmentation technique fully compensates for this gap.
+
+**Current state (v3.0 baseline, validated on real OOS data):**
+
+| Metric | Value |
+|---|---|
+| OOS Sharpe (2024+, daily) | 0.57 |
+| OOS Total Return | +15.18% |
+| OOS Max Drawdown | 13.05% |
+| Win Rate | 67.25% |
+| vs. Buy-and-Hold | +24.39 ppt |
+
+**v4.0 expected improvement ranges:**
+
+| Mechanism | Estimated Sharpe Contribution | Confidence |
+|---|---|---|
+| Contrastive pretraining (TCP) | +0.05 to +0.15 | Medium |
+| SWA hybrid backbone | +0.05 to +0.12 | Medium |
+| FDA synthetic augmentation | +0.10 to +0.25 | Low–Medium |
+| Portfolio-theoretic augmentation | +0.05 to +0.15 | Medium |
+| All combined (estimated) | +0.25 to +0.67 | Low |
+| **v4.0 expected Sharpe range** | **0.82–1.24** | Low–Medium |
+
+Confidence is "Low" for combined estimates due to interaction effects and the known limitations of synthetic data. The Sharpe > 1.0 target is achievable in the optimistic scenario but is **not guaranteed** from daily data alone.
+
+### 12.2 The Stylized Fact Gap
+
+FDA-generated sequences preserve 9 measurable stylized facts. However, there are known properties of financial time series that are difficult to capture:
+
+- **Structural breaks:** Real markets have discrete regime changes driven by regulatory shifts, geopolitical events, and technology disruptions. FDA cannot generate sequences conditioned on events outside its training window.
+- **Cross-sectional factor evolution:** Factor exposures (value, momentum, quality) drift over time in ways the FDA's 10-year training window does not fully capture.
+- **Microstructure effects:** Daily bars smooth over intraday liquidity patterns that affect institutional execution. This is irrelevant at daily resolution but limits the model's future adaptability to higher frequencies.
+
+### 12.3 The Single Data Source Constraint
+
+Training exclusively on finance-query data ensures no distribution mismatch at inference. However, finance-query (Yahoo Finance backend) has known data quality issues:
+
+- **Dividend adjustment timing:** Yahoo sometimes delays split/dividend adjustments, creating apparent price jumps that are data artifacts.
+- **Volume data for ETFs:** Yahoo consolidated volume may differ from true primary exchange volume during pre/post-market periods.
+- **Historical indicator data:** Rolling z-scores computed during training use the same normalization pipeline as inference, but the training distribution covers 2014–2024 while inference sees 2024 onward. Distributions may shift.
+
+**Mitigation:** The z-score normalization uses rolling 252-day windows that are recomputed fresh at each inference step, anchoring to the current market environment rather than the historical training baseline.
+
+### 12.4 The FDA Cannot Generate the Future
+
+The FDA is trained on 2014–2024 data. It generates variations of what it saw. Performance claims based on backtests that include FDA-augmented training data are slightly optimistic because the FDA has indirectly seen the test period's market character (it's in the training data distribution, even if not the specific test sequences).
+
+**Mitigation for backtesting:** When running the final backtest:
+1. Split data: train/val on 2014–2021, OOS on 2022+
+2. Train FDA only on 2014–2021 data
+3. Evaluate Meridian on 2022+ data that neither the main model nor the FDA has seen
+4. This is the cleanest possible test given the data constraints
+
+---
+
+## 13. Two-Head Strategy (Meridian-R / Meridian-S)
+
+Unchanged from v3.0. Shared backbone, two output heads:
+- **Meridian-R:** Return-maximizing head, DSR loss weighted toward return
+- **Meridian-S:** Sharpe-maximizing head, DSR loss weighted toward risk-adjusted return
+
+Both heads are trained with PTA augmentation in Phase 2. The backbone, pre-trained with TCP, is shared and frozen during the first 500 head training steps, then fine-tuned with a 10× lower learning rate.
+
+Head blending at inference (regime-dependent):
+
+```
+active_weight_S = regime_posterior[crisis] + regime_posterior[high_vol]
+active_weight_R = regime_posterior[low_vol] + regime_posterior[mean_rev]
+
+final_weights = active_weight_S × weights_S + active_weight_R × weights_R
+```
+
+---
+
+## 14. Historical Backtesting Framework
+
+### 14.1 Meridian as a Backtesting Strategy
+
+Unchanged from v3.0, with one critical addition — the **data contamination check**:
 
 ```rust
-// Conceptual — the actual model runs in Python/C, bridged via FFI or shared memory
-struct MeridianStrategy {
-    model: MeridianInference,  // Quantized model instance
-    head: HeadType,             // R or S
+// IMPORTANT: Before running the backtest, verify that:
+// 1. FDA was trained on data BEFORE the OOS split date
+// 2. No synthetic data from after the split date is in training shards
+// 3. The OOS period uses only real finance-query data for evaluation
+
+struct BacktestDataAudit {
+    train_end_date: NaiveDate,
+    oos_start_date: NaiveDate,
+    fda_train_end_date: NaiveDate,
 }
 
-impl Strategy for MeridianStrategy {
-    fn on_bar(&mut self, context: &StrategyContext) -> Vec<Signal> {
-        // 1. Build feature vector from context (OHLCV + indicators available in backtest)
-        let features = self.build_features(context);
-        
-        // 2. Run model forward pass
-        let weights = self.model.forward(features, self.head);
-        
-        // 3. Convert weight changes to signals
-        let current_weights = context.current_positions();
-        let mut signals = vec![];
-        
-        for (i, (target, current)) in weights.iter().zip(current_weights).enumerate() {
-            let delta = target - current;
-            if delta.abs() > MIN_TRADE_THRESHOLD {
-                if delta > 0.0 {
-                    signals.push(Signal::buy(context.symbol(i), delta));
-                } else {
-                    signals.push(Signal::sell(context.symbol(i), delta.abs()));
-                }
-            }
-        }
-        signals
+impl BacktestDataAudit {
+    fn verify(&self) -> Result<()> {
+        assert!(self.fda_train_end_date <= self.train_end_date,
+            "FDA must be trained on data no newer than main model training cutoff");
+        assert!(self.oos_start_date > self.train_end_date,
+            "OOS period must not overlap with training period");
+        Ok(())
     }
 }
 ```
 
-**Running the backtest:**
+The full `MeridianStrategy` implementation is unchanged from v3.0.
 
-```rust
-// Using finance-query's portfolio backtesting engine
-let config = PortfolioConfig::new(
-    BacktestConfig::default()
-        .initial_capital(1_000_000.0)
-        .commission_pct(0.001)     // 10 bps
-        .slippage_pct(0.0005)      // 5 bps
-        .allow_short(true)
-        .risk_free_rate(0.05)
-        .reinvest_dividends(true)
-        .max_positions(Some(100))
-        .bars_per_year(252.0 * 390.0)  // minute bars
-)
-    .max_total_positions(100)
-    .rebalance(RebalanceMode::CustomWeights(meridian_weights));
+### 14.2–14.5: Benchmark Comparisons, Walk-Forward, Monte Carlo, Regime Analysis
 
-let symbol_data: Vec<SymbolData> = symbols.iter()
-    .map(|s| SymbolData::new(s, candles[s].clone()).with_dividends(dividends[s].clone()))
-    .collect();
+Unchanged from v3.0. All benchmark comparisons, walk-forward configuration, MC analysis, and regime-segmented analysis procedures carry forward unchanged.
 
-let result = PortfolioEngine::new(config)
-    .run(&symbol_data, |sym| MeridianStrategy::new(model.clone(), HeadType::Sharpe))?;
-```
+**v4.0 addition — ablation backtests:**
 
-### 12.2 Benchmark Comparisons
+The following additional backtests are required to validate each v4.0 contribution:
 
-Using finance-query's `BacktestComparison`:
-
-```rust
-// Run benchmarks
-let spy_result = BacktestEngine::run("SPY", &spy_candles, &BuyAndHold::new())?;
-let equal_weight = PortfolioEngine::new(equal_config).run(&symbol_data, |_| BuyAndHold::new())?;
-let sma_cross = PortfolioEngine::new(sma_config).run(&symbol_data, |_| SmaCrossover::new(10, 50))?;
-
-// Compare
-let comparison = BacktestComparison::new()
-    .add("Meridian-R", meridian_r_result)
-    .add("Meridian-S", meridian_s_result)
-    .add("SPY Buy & Hold", spy_result)
-    .add("Equal Weight", equal_weight)
-    .add("SMA Crossover", sma_cross)
-    .ranked_by(OptimizeMetric::SharpeRatio);
-
-// Output: ranked table with all PerformanceMetrics fields
-// including: sharpe, sortino, calmar, max_drawdown, win_rate, profit_factor, etc.
-```
-
-**Required benchmarks:**
-
-| Benchmark | Strategy | Purpose |
+| Ablation | What's Removed | Purpose |
 |---|---|---|
-| SPY Buy & Hold | Passive index | "Can Meridian beat the market?" |
-| Equal Weight Rebalance | Monthly equal weight across universe | "Does active allocation add value?" |
-| Risk Parity | Inverse-volatility weighted | "Does Meridian's risk management add value?" |
-| SMA Crossover | `SmaCrossover::new(50, 200)` per asset | "Does ML beat simple technical?" |
-| RSI Reversal | `RsiReversal::new(14, 30.0, 70.0)` | "Does ML beat momentum?" |
-| Ensemble | `EnsembleStrategy` (SMA + RSI + Bollinger) | "Does ML beat classical ensemble?" |
+| No FDA | Train without synthetic data | Quantify FDA contribution to Sharpe |
+| No TCP | Use next-step prediction in Phase 1 | Quantify contrastive pretraining value |
+| No SWA | Pure RA-GDN backbone | Quantify hybrid attention contribution |
+| No PTA | No portfolio augmentation | Quantify PTA contribution |
+| No FDA + no PTA | Equivalent to v3.0 | Verify v3.0 baseline reproducible |
 
-### 12.3 Walk-Forward Validation
-
-The most rigorous test — simulates realistic deployment with periodic refit:
-
-```rust
-// Using finance-query's walk-forward framework
-// In-sample: 1 year, Out-of-sample: 3 months, rolling forward
-let wf_config = WalkForwardConfig::new(
-    GridSearch::new()
-        .param("head", ParamRange::int_range(0, 1, 1))  // R vs S
-        .param("leverage", ParamRange::float_range(1.0, 2.0, 0.5))
-        .optimize_for(OptimizeMetric::SharpeRatio),
-    backtest_config
-)
-    .in_sample_bars(252 * 390)   // 1 year of minute bars
-    .out_of_sample_bars(63 * 390) // 3 months OOS
-    .run(&symbols, &all_candles, |params| {
-        MeridianStrategy::new(model.clone(), params.head, params.leverage)
-    })?;
-
-// Key outputs:
-// wf_report.aggregate_metrics — OOS-only performance (the real test)
-// wf_report.consistency_ratio — fraction of OOS windows that are profitable
-// wf_report.windows — per-window breakdown
-```
-
-**Consistency ratio > 0.6** is the minimum threshold for deployment consideration. Professional quant funds target > 0.7.
-
-### 12.4 Monte Carlo Confidence Intervals
-
-```rust
-let mc = MonteCarloConfig::new()
-    .seed(42)
-    .num_simulations(10_000)
-    .method(MonteCarloMethod::BlockBootstrap)  // preserves autocorrelation
-    .run(&meridian_result);
-
-// Outputs:
-// mc.total_return: p5, p25, p50, p75, p95
-// mc.max_drawdown: p5, p25, p50, p75, p95
-// mc.sharpe_ratio: p5, p25, p50, p75, p95
-
-// Deployment criteria:
-// mc.total_return.p5 > 0  (95% CI positive)
-// mc.sharpe_ratio.p25 > 0.5  (75% CI above 0.5 Sharpe)
-// mc.max_drawdown.p95 < 0.30 (95% CI max DD under 30%)
-```
-
-### 12.5 Regime-Segmented Analysis
-
-Using backtest result analysis methods to understand performance across market conditions:
-
-```rust
-// Time-segmented analysis
-let yearly = meridian_result.by_year();      // Per-year returns
-let monthly = meridian_result.by_month();    // Per-month returns
-let daily = meridian_result.by_day_of_week(); // Day-of-week patterns
-
-// Drawdown analysis
-let dd_series = meridian_result.drawdown_series();
-let rolling_sharpe = meridian_result.rolling_sharpe(252 * 390); // 1-year rolling
-
-// Regime-segmented (custom analysis):
-// Tag trades by regime during backtest, then:
-let crisis_trades = meridian_result.trades_by_tag("crisis");
-let crisis_metrics = meridian_result.metrics_by_tag("crisis");
-let trending_trades = meridian_result.trades_by_tag("trending");
-let trending_metrics = meridian_result.metrics_by_tag("trending");
-// etc. for all 4 regimes
-```
-
-**Key questions the backtest must answer:**
-1. Does Meridian outperform passive strategies after transaction costs?
-2. Does Meridian's Sharpe ratio exceed 1.0 in walk-forward OOS testing?
-3. Does Meridian's max drawdown stay under 25% with 95% MC confidence?
-4. Does Meridian's adaptation (Tiers 1–3) measurably improve OOS performance vs. a frozen model?
-5. Is Meridian's performance consistent across regimes, or does it concentrate in one?
-6. Does the event stream (insider trades, analyst changes) add alpha beyond price-only features?
+Each ablation runs the full backtest pipeline and produces a Sharpe/Drawdown/Return table. Results guide future architectural decisions.
 
 ---
 
-## 13. Paper Trading System
+## 15. Paper Trading System
 
-After backtesting validation, Meridian runs in paper trading mode to test real-time performance before live capital deployment.
+Unchanged from v3.0, with one addition to the graduation criteria:
 
-### 13.1 Architecture
+### 15.1–15.3: Architecture, Performance Tracking, Adaptation Monitoring
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    PAPER TRADING ENGINE                  │
-│                                                         │
-│  ┌───────────┐   ┌─────────────┐   ┌────────────────┐  │
-│  │ DataBus   │──▶│  Meridian   │──▶│  Paper Broker  │  │
-│  │(live data)│   │  (inference)│   │  (simulated)   │  │
-│  └───────────┘   └─────────────┘   └────────────────┘  │
-│       │                │                    │           │
-│       │          ┌─────▼─────┐        ┌────▼────────┐  │
-│       │          │ Adaptation│        │  Portfolio   │  │
-│       │          │ System    │        │  Tracker     │  │
-│       │          │(Tiers 1-3)│        │  (P&L, risk) │  │
-│       │          └───────────┘        └─────────────┘  │
-│       │                                     │           │
-│       │               ┌─────────────────────▼────────┐  │
-│       └──────────────▶│  Performance Logger          │  │
-│                       │  (SQLite on NVMe SSD)        │  │
-│                       └──────────────────────────────┘  │
-└─────────────────────────────────────────────────────────┘
-```
+Identical to v3.0 Sections 13.1–13.3.
 
-**Paper Broker:** Simulates trade execution with realistic friction:
+### 15.4 Graduation Criteria (Paper → Live)
 
-```
-For each minute:
-  1. Meridian produces target weights w_target
-  2. Compare with current paper portfolio weights w_current
-  3. For each asset where |w_target - w_current| > MIN_TRADE_THRESHOLD (0.5%):
-     a. Simulate execution at next minute's open price
-     b. Apply slippage: 5 bps (configurable)
-     c. Apply commission: 10 bps (configurable)
-     d. Update paper portfolio
-  4. Log: timestamp, all weights, all prices, portfolio value, all model internals
-```
-
-**Constraint:** Rebalancing at most once per minute. In practice, the model's turnover penalty in the loss function means most minutes produce very small weight changes that fall below the trade threshold.
-
-### 13.2 Performance Tracking
-
-The paper trading engine logs everything needed for analysis:
-
-**Per-minute log (SQLite):**
-
-| Field | Type | Notes |
-|---|---|---|
-| timestamp | u64 | Epoch minutes |
-| target_weights | f32[100] | Model output |
-| executed_weights | f32[100] | After trade simulation |
-| prices | f32[100] | Execution prices |
-| portfolio_value | f64 | NAV |
-| daily_return | f64 | |
-| regime_posteriors | f32[4] | |
-| aggregate_surprise | f32 | |
-| active_head | u8 | R=0, S=1 |
-| event_count | u16 | Events this minute |
-| inference_latency_us | u32 | Microseconds |
-
-**Daily summary (computed from per-minute log):**
-
-| Metric | Computation |
-|---|---|
-| Daily return | `(NAV_close - NAV_open) / NAV_open` |
-| Daily Sharpe | Return / vol (annualized from daily) |
-| Max intraday drawdown | Peak-to-trough within day |
-| Turnover | Sum of absolute weight changes |
-| Transaction costs | Sum of slippage + commissions |
-| Number of trades | Count of threshold-exceeding rebalances |
-| Dominant regime | Mode of regime posteriors over the day |
-| Surprise frequency | Fraction of minutes with surprise > 2σ |
-| Model confidence | Average output head confidence scores |
-| Feature importance top-5 | Top VSN gate values |
-| Active experts | MoE expert utilization distribution |
-
-**Rolling analytics (computed from daily summaries):**
-
-| Window | Metrics |
-|---|---|
-| 5-day | Return, Sharpe, max DD, turnover |
-| 20-day | Return, Sharpe, Sortino, max DD, beta to SPY |
-| 60-day | Return, Sharpe, Sortino, Calmar, max DD, information ratio vs SPY |
-| Since inception | All PerformanceMetrics fields from finance-query |
-
-### 13.3 Adaptation Monitoring
-
-During paper trading, the adaptation system's health is tracked in detail:
-
-**Tier 1 (Surprise-gated dynamics):**
-- Plot: surprise signal over time, with regime labels
-- Alert: if surprise EMA trends upward for 5+ consecutive days → market structure may be changing in a way the model can't handle with Tier 1 alone
-
-**Tier 2 (Normalization adaptation):**
-- Plot: RMSNorm parameter drift from checkpoint over time
-- Alert: if drift exceeds 20% → parameters approaching instability
-
-**Tier 3 (EWC + LoRA consolidation):**
-- Plot: consolidation loss trajectory each night
-- Plot: Fisher diagonal magnitude distribution (which parameters are most constrained?)
-- Alert: if consolidation loss fails to decrease → data may be too noisy or regimes too mixed
-
-**State health:**
-- Plot: GDN hidden state norms across layers over time
-- Plot: per-asset state norms (identify assets with unusual state dynamics)
-- Alert: monotonically increasing state norms → drift problem (see Risk #1)
-
-**Comparison to frozen model:**
-- Run a second Meridian instance with all adaptation disabled
-- Track the performance gap: `Sharpe_adaptive - Sharpe_frozen`
-- This directly measures the value of the continuous learning system
-- Target: adaptive Sharpe > frozen Sharpe by at least 0.1 after 3 months
-
-### 13.4 Graduation Criteria (Paper → Live)
-
-Before deploying real capital, the paper trading system must pass all of the following:
+All v3.0 criteria are retained:
 
 | Criterion | Threshold | Measurement Period |
 |---|---|---|
@@ -1311,23 +1611,28 @@ Before deploying real capital, the paper trading system must pass all of the fol
 | Inference latency p99 | < 100 ms | Since inception |
 | Data pipeline reliability | < 1% missed minutes | 6 months |
 
-**Only after ALL criteria are met should the system be considered for live trading.** Even then, start with minimal capital (e.g., $10K) and scale gradually.
+**v4.0 addition:**
+
+| Criterion | Threshold | Measurement Period | Rationale |
+|---|---|---|---|
+| Real data Sharpe ≥ FDA-only backtest Sharpe × 0.70 | Within 30% of backtest | 3 months | Validates FDA didn't overfit to training distribution |
+| FDA monthly MMD | < 0.3 vs current real data | Monthly check | Validates FDA stays calibrated |
+
+**Revised Sharpe threshold rationale:** The > 1.0 Sharpe threshold in paper trading is retained. Given that v4.0 targets 0.82–1.24 from backtest, and paper trading adds realistic execution friction not fully captured in backtests, a 1.0 paper trading Sharpe is achievable in the optimistic scenario. If paper trading Sharpe settles around 0.8–0.9 after 6 months, the graduation criteria require reassessment before live deployment — not blind acceptance.
 
 ---
 
-## 14. Inference Runtime on Pi 5
+## 16. Inference Runtime on Pi 5
 
-Expanded from v2.0 to reflect the richer data pipeline:
-
-### Per-Minute Pipeline
+Updated from v3.0 to account for SWA layers:
 
 ```
 Time 0ms: New minute tick (PriceStream)
   │
   ├─ [Core 3, ASYNC] Data pipeline:
-  │   ├── Fetch prices for 100 tickers (PriceStream — already subscribed)
+  │   ├── Fetch prices for 100 tickers (PriceStream — subscribed)
   │   ├── Compute 42 technical indicators per asset
-  │   ├── Process any new RSS headlines (batch, ~20 articles/5min avg)
+  │   ├── Process any new RSS headlines (batch)
   │   ├── Check for new events (insider tx, filings, ratings)
   │   ├── Update rolling statistics (z-scores, EMAs, correlations)
   │   ├── Assemble 100 × 184 per-asset features
@@ -1338,72 +1643,81 @@ Time 0ms: New minute tick (PriceStream)
   ├─ [Cores 0-2] Model inference:
   │   ├── Input projection + VSN gating: 0.5ms
   │   ├── Regime detection: 0.1ms
-  │   ├── RA-GDN backbone (8 blocks × 100 assets): 4ms
-  │   ├── FMoE (3 blocks × 100 assets): 1ms
-  │   ├── Event token processing (~5 assets with events): 0.3ms
+  │   ├── RA-GDN blocks 1-2 (100 assets): 1.0ms
+  │   ├── RA-GDN block 3 + SWA(W=64) [NEW]: 1.5ms
+  │   ├── RA-GDN blocks 4-6 (100 assets): 1.5ms
+  │   ├── RA-GDN block 7 + SWA(W=64) [NEW]: 1.5ms
+  │   ├── RA-GDN block 8 + FMoE: 1.0ms
+  │   ├── Event token processing (~5 assets): 0.3ms
   │   ├── Temporal cascade (when active): 0.2ms
   │   ├── Cross-asset fusion (110 tokens, 2 layers): 0.5ms
   │   ├── FAISS episodic memory: 0.5ms
   │   ├── Output head: 0.05ms
-  │   └── TOTAL: ~7ms
+  │   └── TOTAL: ~8.65ms  (vs. ~7ms in v3.0)
   │
   ├─ [Core 2, ASYNC] Post-inference:
+  │   ├── Update SWA KV caches (100 assets × 2 layers): 0.2ms
   │   ├── Observe actual returns from t-1
   │   ├── Compute surprise signal
   │   ├── Tier 2 norm adaptation (every 60 min): 0.1ms
   │   ├── Log to SQLite: 0.5ms
   │   └── Paper broker simulation: 0.1ms
   │
-  └─ Budget: 60,000ms available. Total used: ~510ms. CPU util: ~0.85%
+  └─ Budget: 60,000ms available. Total used: ~512ms. CPU util: ~0.85%
 ```
+
+SWA adds ~1.65 ms of inference latency (well within the 60,000 ms per-minute budget). The KV cache update is the most expensive part of SWA at inference — appending new (k, v) pairs and evicting the oldest — but this is a simple O(W) memory operation.
 
 ---
 
-## 15. Memory Budget
+## 17. Memory Budget
 
 ### Static Allocation
 
 | Component | Size | Notes |
 |---|---|---|
-| Ternary weights (backbone + MoE + cascade) | 18.5 MB | 2-bit packed + FP16 scales |
+| Ternary weights (backbone RA-GDN + MoE + cascade) | 18.5 MB | 2-bit packed + FP16 scales |
+| INT8 weights (SWA projections, 2 layers) | 3.0 MB | New in v4.0 |
 | INT8 weights (regime detector + MarketReader) | 3.8 MB | |
-| FP16 weights (output heads + projections + VSN) | 1.5 MB | Expanded input projections |
+| FP16 weights (SWA attention logits, output heads, projections, VSN) | 2.5 MB | |
 | GDN hidden states (100 assets × 8 layers) | 75.5 MB | FP16 |
+| SWA KV caches (100 assets × 2 layers × W=64 × D=768) | 37.7 MB | FP16 — new in v4.0 |
 | Temporal cascade states | 16.4 MB | |
 | Conv1d caches | 3.9 MB | |
 | Episodic memory buffer (50K entries) | 13.0 MB | |
 | FAISS index | 6.4 MB | |
-| Rolling statistics + feature caches | 8.0 MB | Expanded: 42 indicators × 100 assets |
-| Event state buffer | 2.0 MB | Per-asset event history |
-| Text embedding cache (100 assets × 64 dims × recent) | 1.0 MB | |
+| Rolling statistics + feature caches | 8.0 MB | |
+| Event state buffer | 2.0 MB | |
+| Text embedding cache | 1.0 MB | |
 | HMM parameters | 0.1 MB | |
-| **Total static** | **~150 MB** | |
+| **Total static** | **~192 MB** | |
 
 ### Dynamic Allocation
 
 | Component | Size |
 |---|---|
 | Activation buffers | ~3.0 MB |
+| SWA attention computation buffer | 0.8 MB |
 | Cross-asset attention KV | 0.2 MB |
-| Feature assembly buffer | 0.19 MB (100 × 184 × 4 bytes) |
+| Feature assembly buffer | 0.19 MB |
 | RSS/news processing queue | 2.0 MB |
-| **Total dynamic** | **~5.5 MB** |
+| **Total dynamic** | **~6.2 MB** |
 
 ### Periodic Allocation (Tier 3)
 
 | Component | Size |
 |---|---|
 | Fisher diagonal | 60 MB |
-| Parameter checkpoint | 23 MB |
-| Replay buffer | 15 MB (expanded features) |
+| Parameter checkpoint | 24 MB |
+| Replay buffer | 15 MB |
 | LoRA adapters + gradients | 1.5 MB |
-| **Total Tier 3** | **~100 MB** |
+| **Total Tier 3** | **~100.5 MB** |
 
 ### SQLite Logging
 
 | Component | Size per day | Notes |
 |---|---|---|
-| Per-minute log | ~20 MB/day | 390 rows × ~50 KB/row (compressed) |
+| Per-minute log | ~20 MB/day | 390 rows |
 | Daily summaries | ~10 KB/day | |
 | Event log | ~1 MB/day | |
 | NVMe budget | 256 GB | ~3.5 years of logs |
@@ -1412,131 +1726,156 @@ Time 0ms: New minute tick (PriceStream)
 
 | Scenario | Memory |
 |---|---|
-| Normal inference | ~156 MB |
-| During Tier 3 consolidation | ~256 MB |
+| Normal inference | ~198 MB |
+| During Tier 3 consolidation | ~299 MB |
 | OS + Rust data pipeline + Python bridge | ~500 MB |
-| **Peak usage** | **~756 MB** |
+| **Peak usage** | **~799 MB** |
 | **Available (8GB Pi 5)** | **8,192 MB** |
-| **Headroom** | **~7,436 MB (91%)** |
+| **Headroom** | **~7,393 MB (90%)** |
+
+The SWA KV caches add ~37.7 MB to static allocation — a meaningful increase but still well within the Pi 5's 8GB. Headroom remains 90%.
 
 ---
 
-## 16. Development Roadmap
+## 18. Development Roadmap
 
-### Phase 0: Data Infrastructure (Weeks 1–4)
+### Phase 0: Data Infrastructure & FDA (Weeks 1–5)
 
 - [ ] Build DataBus in Rust using finance-query as library dependency
 - [ ] Implement all 42 indicator computations with rolling z-score normalization
 - [ ] Implement RSS feed polling across all 31 sources with deduplication
 - [ ] Implement event detection (diff-based) for insider tx, ratings, filings
-- [ ] Build historical data download pipeline for training corpus
+- [ ] Build historical data download pipeline (finance-query only — no external providers)
 - [ ] Implement SQLite logging schema
 - [ ] Build feature assembly pipeline (184 per-asset + 96 market-wide)
 - [ ] Verify all finance-query API integrations end-to-end
 - [ ] Train BPE tokenizer on financial text corpus
 - [ ] Pre-fit 4-state HMM on historical regime data
+- [ ] **[NEW] Implement FDA score network (8M param U-Net)**
+- [ ] **[NEW] Train FDA for 200 epochs on finance-query daily data**
+- [ ] **[NEW] Implement 9-point stylized fact validation gate**
+- [ ] **[NEW] Implement cross-asset correlation validation**
+- [ ] **[NEW] Generate and validate 50,000 synthetic training windows**
+- [ ] **[NEW] Run FDA quality verification — sign off before proceeding**
 
-### Phase 1: Core Model (Weeks 5–10)
+### Phase 1: Core Model (Weeks 6–12)
 
 - [ ] Implement RA-GDN block in PyTorch (extending FLA Gated DeltaNet)
 - [ ] Implement regime conditioning (α bias, β scaling)
+- [ ] **[MODIFIED] Implement SWA layer with rolling KV cache (W=64)**
+- [ ] **[MODIFIED] Assemble hybrid backbone (RA-GDN + SWA at blocks 3, 7)**
 - [ ] Implement EventEncoder
 - [ ] Implement FMoE with external regime routing
 - [ ] Implement temporal cascade
 - [ ] Implement cross-asset attention with sector bias
 - [ ] Implement VSN with regime-conditioned gating
 - [ ] Train MarketReader text encoder (3-tier)
-- [ ] Run Phase 1 self-supervised pre-training
-- [ ] Validate prediction accuracy on held-out data
+- [ ] **[MODIFIED] Implement TCP (temporal contrastive) loss**
+- [ ] **[MODIFIED] Run Phase 1 TCP pretraining on real + FDA data (mixed 1.0/0.5 weight)**
+- [ ] Validate: contrastive accuracy > 0.60, regime cluster separation visible
 
-### Phase 2: Portfolio Training (Weeks 11–14)
+### Phase 2: Portfolio Training (Weeks 13–17)
 
 - [ ] Implement portfolio output heads with leverage normalization
-- [ ] Implement DSR loss, return loss, volatility auxiliary loss
-- [ ] Run Phase 2a (return head) and Phase 2b (Sharpe head)
+- [ ] **[MODIFIED] Implement DSR loss + PTA augmentation pipeline**
+- [ ] **[NEW] Implement sector-permutation, sign-flip, vol-scale transforms**
+- [ ] Run Phase 2a cross-asset correlation pretraining (backbone fine-tune)
+- [ ] Run Phase 2b return head training (Meridian-R) with PTA
+- [ ] Run Phase 2c Sharpe head training (Meridian-S) with PTA
 - [ ] Build MeridianStrategy wrapper for finance-query backtesting
-- [ ] Run backtests vs all benchmarks (Section 12.2)
-- [ ] Run walk-forward validation (Section 12.3)
-- [ ] Run Monte Carlo analysis (Section 12.4)
-- [ ] Run regime-segmented analysis (Section 12.5)
+- [ ] **[NEW] Run ablation backtests (no-FDA, no-TCP, no-SWA, no-PTA)**
+- [ ] Run full backtests vs all benchmarks (Section 14.2)
+- [ ] Run walk-forward validation (Section 14.3)
+- [ ] Run Monte Carlo analysis (Section 14.4)
+- [ ] Run regime-segmented analysis (Section 14.5)
 - [ ] Iterate: if backtest fails criteria, diagnose and retrain
 
-### Phase 3: Adaptation & QAT (Weeks 15–20)
+### Phase 3: Adaptation & QAT (Weeks 18–23)
 
 - [ ] Implement 3-tier continuous learning system
-- [ ] Run Phase 3 meta-learning training
-- [ ] Run Phase 4 QAT
+- [ ] **[MODIFIED] Run Phase 3 meta-learning with FDA-generated regime transition episodes**
+- [ ] Run Phase 4 QAT (including INT8 SWA projections)
 - [ ] Validate quantized model performance within tolerance
-- [ ] Ablation study: adaptation value (adaptive vs frozen backtest comparison)
-- [ ] Ablation study: event stream value (with vs without events)
-- [ ] Ablation study: text value (with vs without MarketReader)
+- [ ] Ablation study: adaptation value vs frozen
+- [ ] Ablation study: event stream value
+- [ ] Ablation study: text value
 
-### Phase 4: Deployment (Weeks 21–26)
+### Phase 4: Deployment (Weeks 24–30)
 
 - [ ] Implement NEON ternary inference kernel (bitnet.cpp adapted)
+- [ ] **[NEW] Implement SWA inference with rolling KV cache on ARM**
 - [ ] Implement FAISS episodic memory on ARM
 - [ ] Port full inference pipeline to Pi 5
 - [ ] Run 10M+ step state drift test
+- [ ] **[NEW] Run SWA cache overflow test (ensure W=64 eviction works correctly)**
 - [ ] Implement paper trading engine
 - [ ] Deploy to Pi 5 with monitoring dashboard
 - [ ] 72-hour continuous operation stress test
 - [ ] Begin 6-month paper trading period
 
-### Phase 5: Paper Trading & Iteration (Weeks 27–52)
+### Phase 5: Paper Trading & Iteration (Weeks 31–57)
 
-- [ ] Monitor all graduation criteria (Section 13.4)
+- [ ] Monitor all graduation criteria (Section 15.4)
+- [ ] **[NEW] Monthly FDA MMD check — retrain FDA if MMD > 0.3**
 - [ ] Weekly review of adaptation health metrics
 - [ ] Monthly comparison to benchmarks
 - [ ] Iterate on model if needed (retrain specific phases)
 - [ ] After 6 months: evaluate graduation criteria
-- [ ] If passed: proceed to minimal live trading
+- [ ] If passed: proceed to minimal live trading ($10K initial capital)
 
 ---
 
-## 17. Risk Analysis & Mitigations
+## 19. Risk Analysis & Mitigations
 
-All risks from v2.0 (state drift, catastrophic forgetting, regime miscalibration, overfitting, data pipeline latency, insufficient capacity) remain with their mitigations.
+All risks from v3.0 are retained. The following risks are new or modified in v4.0:
 
-**Additional risks from expanded data ingestion:**
+### Risk #1–#10: Carried Forward from v3.0
 
-### Risk #7: Feature Bloat / Noise Injection
+State drift, catastrophic forgetting, regime miscalibration, overfitting, data pipeline latency, insufficient model capacity, feature bloat, RSS feed reliability, event misclassification, options data sparsity — all with their v3.0 mitigations.
 
-**Risk:** With 184 per-asset features, some features may be pure noise that degrades the signal-to-noise ratio.
+### Risk #11: FDA Distribution Collapse (New — High Priority)
 
-**Mitigation:**
-1. The VSN dynamically gates features to zero — noisy features will receive near-zero gate weights
-2. During training, monitor VSN gate distributions. Features with consistently near-zero gates across all regimes can be removed to simplify the pipeline.
-3. L1 regularization on VSN gate logits encourages sparsity
-4. Ablation study: train with reduced feature sets and compare. If 184 dims doesn't improve over a smaller set, prune accordingly.
+**Risk:** The FDA generates sequences that replicate training data statistics superficially but contain no genuine predictive signal. The main model trains on "realistic-looking noise" that degrades rather than improves generalization.
 
-### Risk #8: RSS Feed Reliability
+**Indicators:**
+- Stylized fact pass rate is high (sequences look realistic) but validation Sharpe on real data is lower than the no-FDA ablation
+- FDA-trained model's feature importance (VSN gates) differs dramatically from real-data-only model
 
-**Risk:** Third-party RSS feeds may go down, change format, or produce duplicate/stale content.
+**Mitigations:**
+1. The 9-point validation gate is a necessary but not sufficient condition. Also validate: does adding FDA data improve or degrade real-data-only validation Sharpe?
+2. Run the no-FDA ablation as a required step (Section 14.2). If FDA degrades performance, do not use it.
+3. FDA data weight 0.5 (half real data weight) limits damage if FDA is low quality.
+4. Hard stop: if no-FDA ablation shows Sharpe ≥ FDA Sharpe, drop FDA from the training pipeline entirely and revert to real-data-only training. A 0.57 Sharpe with clean data is more trustworthy than a 0.62 Sharpe with potentially contaminated data.
 
-**Mitigation:**
-1. finance-query's `feeds::fetch_all()` already deduplicates
-2. Staleness detection: if a feed hasn't produced new content in 24h, flag it
-3. Graceful degradation: if all RSS fails, the 12 market-wide news features default to their EMA baselines
-4. Multiple overlapping sources reduce single-source dependency
+### Risk #12: SWA Cache Staleness (New — Medium Priority)
 
-### Risk #9: Event Misclassification
-
-**Risk:** Events detected by diffing API snapshots may have incorrect timestamps or magnitudes.
+**Risk:** At inference, the SWA KV cache contains the last 64 trading days of features. If the system experiences downtime > 64 trading days (unlikely but possible), the cache is stale when resumed. The SWA layers will attend to an outdated context.
 
 **Mitigation:**
-1. Event timestamps are coarsened to the nearest minute, reducing precision requirements
-2. Event magnitudes are z-scored against historical distribution, limiting outlier impact
-3. The model's event tokens have learned time decay, so even if an event is slightly mistimed, its impact fades naturally
-4. Worst case: a misclassified event looks like a noise token and the backbone learns to downweight it
+1. On startup, detect if last log entry is > W=64 trading days ago
+2. If stale: warm up the SWA cache by running the model in inference-only mode (no portfolio decisions) on the most recent 64 days of price data before resuming live operation
+3. Implementation: `if days_since_last_inference > 64: warm_swa_cache(last_64_days_of_data)`
 
-### Risk #10: Options Data Sparsity
+### Risk #13: PTA Asset Permutation Breaking Fundamental Features (New — Medium Priority)
 
-**Risk:** Not all 100 assets have liquid options markets. Illiquid options produce unreliable IV and flow signals.
+**Risk:** PTA's asset permutation transformation swaps features between assets. This is valid for price/indicator features (which are already normalized cross-sectionally) but may produce inconsistent fundamental features — swapping AAPL's PE ratio into MSFT's slot while keeping MSFT's price momentum creates a chimera asset that no real security resembles.
 
 **Mitigation:**
-1. The learned 12-dim default embedding per asset class handles assets without any options
-2. For assets with illiquid options: apply a confidence weight based on bid-ask spread and volume. If confidence is below threshold, replace with the default embedding.
-3. The model's VSN can learn to gate options features to zero for assets where they're unreliable
+1. Permutation is applied only within sectors (assets share similar fundamental profiles)
+2. Blocks 3–5 of per-asset features (options, fundamentals, ownership) are **not permuted** — only Blocks 1–2 (price/volume/indicators) are swapped
+3. The asset identity embedding (sector + market cap) is updated to match the permuted asset
+4. Validation: PTA-augmented batches should not produce VSN gate patterns that gate out all fundamental features. Monitor during training.
+
+### Risk #14: Known Performance Ceiling with Daily Data (Acknowledged — Not Mitigated)
+
+**Risk:** Even with FDA, TCP, SWA, and PTA, the model may not reach Sharpe > 1.0 from daily data alone. The graduation criteria require 6 months of paper trading before live deployment. If paper trading Sharpe is consistently 0.7–0.9, the graduation criteria (Sharpe > 1.0) will not be met.
+
+**This is not a bug — it is an honest constraint.**
+
+**Options if this occurs:**
+1. Accept a lower graduation Sharpe threshold (e.g., 0.80) with tighter max drawdown constraints (< 15%)
+2. Acquire daily data for a longer historical window (some free sources offer 20+ years of daily data vs. Yahoo's 10 years) — this is still finance-query compatible if finance-query can source it
+3. Re-evaluate whether Sharpe > 1.0 is the right metric for a daily-bar system operating on a Pi 5, or whether risk-adjusted alpha over passive is a more appropriate target
 
 ---
 
@@ -1548,6 +1887,7 @@ All risks from v2.0 (state drift, catastrophic forgetting, regime miscalibration
 | EventEncoder | 50K | 50K | FP16 | 100 KB |
 | Regime detector (expanded) | 55K | 55K | INT8 | 55 KB |
 | RA-GDN blocks (8) | 17.4M | 17.4M | Ternary | 4.3 MB |
+| SWA layers (2 × 4 projections) | 4.7M | 4.7M | INT8 | 4.7 MB |
 | FMoE blocks (3 × 4 experts) | 42.5M | 21.3M | Ternary | 10.6 MB |
 | Temporal cascade (3 GDN + projections) | 4.2M | 4.2M | Ternary | 1.1 MB |
 | Cross-asset attention (2 layers) | 11.8M | 11.8M | Ternary + FP16 | 3.0 MB |
@@ -1557,11 +1897,14 @@ All risks from v2.0 (state drift, catastrophic forgetting, regime miscalibration
 | Sector bias matrix | 121 | 121 | FP32 | 484 B |
 | MarketReader text encoder | 3.5M | 3.5M (async) | INT8 | 3.5 MB |
 | RMSNorm parameters | ~25K | ~25K | FP32 | 100 KB |
-| **Total** | **~80.6M** | **~35.2M** | **Mixed** | **~24.2 MB** |
+| **Total (Meridian main model)** | **~85.3M** | **~36.5M** | **Mixed** | **~29.0 MB** |
+| FDA model (offline only, never deployed) | ~8M | N/A | FP32 training | ~32 MB (H100 only) |
 
 ---
 
 ## Appendix B — Complete finance-query Integration Map
+
+**Training data note:** All API calls in this map are used for both training data collection and live inference. This is the key v4.0 principle — no external training data sources.
 
 ### Every Minute (via PriceStream + compute)
 
@@ -1665,29 +2008,18 @@ All risks from v2.0 (state drift, catastrophic forgetting, regime miscalibration
 | `ticker.financials(CashFlow, Quarterly)` × 100 | Cash flow statement |
 | `edgar::company_facts(cik)` × 100 | XBRL data (us-gaap facts) |
 
-### On-Demand / Once
+### Historical Data Collection (Training Pipeline Only)
 
-| API Call | Purpose |
-|---|---|
-| `ticker.asset_profile()` × 100 | Sector, industry, description (static) |
-| `ticker.quote_type()` × 100 | Exchange, quote type metadata |
-| `ticker.summary_profile()` × 100 | Company address, website |
-| `finance::search(query, options)` | Ticker lookup/discovery |
-| `finance::lookup(query, options)` | Asset type filtering |
-| `finance::exchanges()` | Exchange list |
-| `finance::currencies()` | Currency reference data |
-| `finance::hours(Region::US)` | Market hours schedule |
-| `edgar::resolve_cik(symbol)` × 100 | CIK mapping (cached) |
-| `edgar::submissions(cik)` × 100 | Filing history |
-| `edgar::search(query, ...)` | Filing search |
+| API Call | Granularity | Lookback | Purpose |
+|---|---|---|---|
+| `ticker.chart(1d, 10y)` × 100 | Daily | 10 years | Primary OHLCV training data |
+| `ticker.dividends(10y)` × 100 | Event | 10 years | Dividend-adjusted returns |
+| `ticker.splits(10y)` × 100 | Event | 10 years | Split-adjusted prices |
 
 ### Backtesting Integration
 
 | API Call | Purpose |
 |---|---|
-| `ticker.chart(interval, range)` | Historical candle data |
-| `ticker.dividends(range)` | Dividend history for adjusted returns |
-| `ticker.splits(range)` | Split-adjusted prices |
 | `Tickers::backtest(interval, range, config, factory)` | Portfolio-level backtesting |
 | `BacktestEngine::run_with_benchmark(...)` | Alpha/beta vs SPY |
 | `WalkForwardConfig::new(...).run(...)` | Walk-forward validation |
@@ -1706,86 +2038,128 @@ All risks from v2.0 (state drift, catastrophic forgetting, regime miscalibration
 |---|---|---|
 | D (model dim) | 768 | Main backbone hidden size |
 | Per-asset input dim | 184 | 120 continuous + 64 text |
-| Market-wide input dim | 96 | Expanded from 24 |
+| Market-wide input dim | 96 | |
 | RA-GDN blocks | 8 | Core temporal layers |
+| SWA layers | 2 | At blocks 3 and 7 |
+| SWA window size | 64 | Trading days of exact recall |
+| SWA heads / d_head | 4 / 192 | INT8 projections, FP16 logits |
 | FMoE blocks | 3 | After blocks 2, 5, 8 |
 | GDN heads / d_head / d_v | 4 / 64 / 192 | |
 | MoE experts / active | 4 / 2 | Regime-routed |
 | Regime embedding dim | 64 | |
 | Regime classes | 4 | Low-vol, high-vol, mean-rev, crisis |
-| Event types | 18 | Discrete event categories |
-| Event embedding dim | 64 | Per component (type, magnitude, asset) |
+| Event types | 18 | |
+| Event embedding dim | 64 | Per component |
 | Temporal cascade dims | 512, 512, 384 | Hourly, daily, weekly |
 | Cross-asset attention heads/layers | 8 / 2 | |
 | Episodic memory slots | 50,000 | |
 | MarketReader dim / layers | 256 / 4 | |
 | MarketReader vocab | 4,096 | BPE |
 | Text embedding output | 64 | Per-asset |
-| RSS feed sources | 31 | All finance-query FeedSource variants |
+| RSS feed sources | 31 | |
 | FRED macro series tracked | 12 | |
-| Technical indicators used | 42 | All finance-query indicators |
+| Technical indicators used | 42 | |
 
-### Training (same as v2.0)
+### FDA Architecture
 
-### Online Adaptation (same as v2.0, plus adaptation feedback loop thresholds)
+| Parameter | Value | Notes |
+|---|---|---|
+| Window size | 64 trading days | T dimension |
+| Asset count | 100 | N dimension |
+| Feature dims | 280 | 184 per-asset + 96 market-wide |
+| Diffusion steps | 1000 | Linear noise schedule |
+| Score network | 4-layer U-Net | 8M parameters |
+| Regime conditioning | 4-class one-hot | AdaRMSNorm |
+| Training epochs | 200 | |
+| Validation gate points | 9 | See Appendix E |
+| Target synthetic windows | 50,000 | After gate filtering |
+| Crisis regime fraction | 20% | Oversampled vs ~10% real |
+
+### Training
+
+| Parameter | Value | Notes |
+|---|---|---|
+| Phase 0 (FDA) epochs | 200 | AdamW lr=3e-4 |
+| Phase 1 (TCP) steps | ~20,000 | Early stop on contrastive acc |
+| Phase 1 batch size | 128 windows | |
+| TCP temperature τ | 0.1 | NT-Xent |
+| TCP loss weights | λ_c=0.7, λ_p=0.3 | Contrastive + prediction |
+| FDA data weight (Phase 1) | 0.5 | Half weight vs real |
+| FDA data weight (Phase 2) | 0.6 | Slightly higher for portfolio |
+| PTA permutations per batch | 4 | Within-sector permutations |
+| PTA sign flip probability | 0.5 | |
+| PTA vol scale values | 0.8, 0.9, 1.1, 1.2 | |
+| Phase 2 early stop patience | 200 steps | Real-data-only val DSR |
 
 ### Backtesting
 
 | Parameter | Value | Notes |
 |---|---|---|
-| Initial capital | $1,000,000 | Paper/backtest default |
-| Commission | 10 bps | Per trade |
-| Slippage | 5 bps | Per trade |
-| Min trade threshold | 0.5% | Weight change required to trigger trade |
-| Leverage limit | 2.0× | Sum of |weights| |
-| Walk-forward in-sample | 1 year | Minute bars |
-| Walk-forward out-of-sample | 3 months | |
+| Initial capital | $1,000,000 | |
+| Commission | 10 bps | |
+| Slippage | 5 bps | |
+| Min trade threshold | 0.5% | |
+| Leverage limit | 2.0× | |
+| Walk-forward in-sample | 1 year | Daily bars |
+| Walk-forward OOS | 3 months | |
 | Monte Carlo simulations | 10,000 | Block bootstrap |
-| Consistency ratio target | > 0.6 | Fraction of OOS windows profitable |
-| Sharpe ratio target | > 1.0 | Annualized, OOS |
+| Consistency ratio target | > 0.6 | |
+| Sharpe ratio target | > 1.0 | OOS, annualized |
 | Max drawdown target | < 20% | 95% MC CI |
-
-### Paper Trading Graduation Criteria
-
-| Criterion | Threshold | Period |
-|---|---|---|
-| Cumulative return | > 0% | 6 months |
-| Annualized Sharpe | > 1.0 | 6 months |
-| Max drawdown | < 20% | Since inception |
-| MC 5th pctl return | > 0% | 10K sims |
-| Consistency ratio | > 0.6 | Rolling 3-month OOS |
-| Adaptive > Frozen Sharpe | > 0.1 | 3 months |
-| State stability | No monotonic growth | 6 months |
-| Uptime | > 99.5% | 6 months |
-| p99 latency | < 100 ms | Since inception |
+| OOS split date for clean backtest | 2021-12-31 | FDA trained on ≤ this date |
 
 ---
 
 ## Appendix D — Event Type Catalog
 
+Unchanged from v3.0:
+
 | Event Type | Source API | Detection Method | Magnitude Encoding | Typical Frequency |
 |---|---|---|---|---|
 | INSIDER_BUY | `insider_transactions()` | Diff consecutive polls | Dollar value (log) | ~2/week per asset |
 | INSIDER_SELL | `insider_transactions()` | Diff | Dollar value (log) | ~5/week per asset |
-| ANALYST_UPGRADE | `grading_history()` | Diff | Grade delta (e.g., hold→buy = +1) | ~1/month per asset |
+| ANALYST_UPGRADE | `grading_history()` | Diff | Grade delta | ~1/month per asset |
 | ANALYST_DOWNGRADE | `grading_history()` | Diff | Grade delta | ~1/month per asset |
 | EARNINGS_BEAT | `earnings_history()` | Actual > estimate | Surprise % | Quarterly |
 | EARNINGS_MISS | `earnings_history()` | Actual < estimate | Surprise % | Quarterly |
 | SEC_FILING_10K | `sec_filings()` / `edgar::submissions()` | New filing detected | Binary | Annual |
 | SEC_FILING_10Q | Same | New filing | Binary | Quarterly |
-| SEC_FILING_8K | Same | New filing | Binary (high priority — unscheduled) | ~4/year per asset |
+| SEC_FILING_8K | Same | New filing | Binary (high priority) | ~4/year per asset |
 | SEC_FILING_OTHER | Same | New filing | Binary | Variable |
-| FOMC_DECISION | `feeds::fetch(FederalReserve)` | RSS new entry matching pattern | Rate change bps | 8/year (global) |
-| MACRO_RELEASE | FRED series update | New data point for tracked series | Surprise vs consensus | Variable |
-| NEWS_HIGH_IMPACT | MarketReader score | Sentiment magnitude > threshold | Sentiment score | ~1/day per asset |
-| DIVIDEND_ANNOUNCED | `calendar_events()` | New dividend date appears | Yield change | Quarterly |
+| FOMC_DECISION | `feeds::fetch(FederalReserve)` | RSS pattern match | Rate change bps | 8/year (global) |
+| MACRO_RELEASE | FRED series update | New data point | Surprise vs consensus | Variable |
+| NEWS_HIGH_IMPACT | MarketReader score | Magnitude > threshold | Sentiment score | ~1/day per asset |
+| DIVIDEND_ANNOUNCED | `calendar_events()` | New dividend date | Yield change | Quarterly |
 | SPLIT_ANNOUNCED | `splits()` | New split detected | Split ratio | Rare |
-| OPTIONS_UNUSUAL | Options chain polling | Volume > 2σ AND volume/OI > threshold | Volume ratio | ~1/week per asset |
-| TRENDING_ENTRY | `finance::trending()` | Ticker appears in trending list | Binary | Variable |
-| RATING_CHANGE | `recommendation_trend()` | Distribution shift | Net change in consensus score | Monthly |
+| OPTIONS_UNUSUAL | Options chain polling | Volume > 2σ AND vol/OI > threshold | Volume ratio | ~1/week per asset |
+| TRENDING_ENTRY | `finance::trending()` | Ticker appears in list | Binary | Variable |
+| RATING_CHANGE | `recommendation_trend()` | Distribution shift | Net consensus change | Monthly |
 
 ---
 
-*Meridian v3.0 — Harvey, March 2026*
-*Built on Gated DeltaNet (ICLR 2025), BitNet b1.58, and the full finance-query ecosystem.*
-*"Every signal matters. Every event counts. The market never sleeps, and neither does Meridian."*
+## Appendix E — FDA Stylized Fact Checklist
+
+This checklist is implemented as an automated validation function run on every batch of synthetic sequences before admission to the training pool.
+
+| # | Stylized Fact | Test Statistic | Pass Threshold | Implementation |
+|---|---|---|---|---|
+| 1 | Fat tails | Excess kurtosis of daily log-returns | > 1.0 | `scipy.stats.kurtosis(returns) - 3 > 1.0` |
+| 2 | Volatility clustering | Autocorrelation of squared returns at lag 1 | > 0.10 | `np.corrcoef(r²[:-1], r²[1:])[0,1] > 0.10` |
+| 3 | Negative skewness | Skewness of return distribution | < -0.05 | `scipy.stats.skew(returns) < -0.05` |
+| 4 | No return autocorrelation | Ljung-Box test on raw returns, lag 10 | p-value > 0.05 | `statsmodels.stats.diagnostic.acorr_ljungbox(returns, lags=10).pvalue.min() > 0.05` |
+| 5 | Leverage effect | Corr(r_t, σ_{t+1}) | < -0.05 | `np.corrcoef(returns[:-1], vol_estimate[1:])[0,1] < -0.05` |
+| 6 | Volume-volatility correlation | Corr(log_volume, |return|) | > 0.15 | `np.corrcoef(np.log(volume), np.abs(returns))[0,1] > 0.15` |
+| 7 | Cross-asset correlations | Mean pairwise corr vs real baseline | Within ±0.10 | `abs(synthetic_mean_corr - real_mean_corr) < 0.10` |
+| 8 | Tail co-movement | Joint >2σ event fraction vs real | Within ±0.05 | `abs(synthetic_joint_tail_freq - real_joint_tail_freq) < 0.05` |
+| 9 | Indicator consistency | RSI(computed from OHLCV) vs RSI(feature) | MAE < 0.01 | `mean_abs_error(rsi_from_ohlcv, rsi_feature) < 0.01` |
+
+A synthetic batch (1,000 windows) must achieve >85% pass rate on each individual check and >90% overall pass rate to be admitted. Batches below these thresholds are discarded and the FDA is queried for replacement sequences.
+
+---
+
+*Meridian v4.0 — Harvey, April 2026*
+*Built on Gated DeltaNet (ICLR 2025), BitNet b1.58, Samba hybrid architecture, FinDiff, and the full finance-query ecosystem.*
+
+*"The market is not short of data — it is short of the right data, correctly sourced, honestly evaluated."*
+
+*v4.0 key principle: train/inference distribution alignment is non-negotiable. All training data is sourced from finance-query. The FDA augments but does not replace real data. Performance claims are validated on real OOS data only. Known limitations are documented, not papered over.*

@@ -1,27 +1,40 @@
 # Meridian
 
-Meridian is a regime-adaptive portfolio model designed for CPU-native inference on a Raspberry Pi 5 with H100-based training. It ingests **every available data stream** from finance-query — price, volume, 42 technical indicators, 31 RSS/news feeds, full options chains, EDGAR filings, XBRL fundamentals, earnings transcripts, analyst ratings, insider transactions, institutional ownership, macro series, yield curves, sector/industry data, Fear & Greed, world indices, trending tickers, and crypto market data — producing allocation weights every minute for up to 100 US-listed assets (equities, ETFs, crypto).
+Meridian is a regime-adaptive portfolio model designed for CPU-native inference on a Raspberry Pi 5 with H100-based training. It ingests **every available data stream** from finance-query — price, volume, 42 technical indicators, RSS/news feeds, options chains, EDGAR/XBRL fundamentals, transcripts, analyst/insider/ownership data, macro series, yield curves, sector data, world indices, and crypto market context — producing allocation weights every minute for up to 100 US-listed assets (equities, ETFs, crypto).
 
-The backbone is a **Regime-Aware Gated DeltaNet (RA-GDN)** with regime-conditioned dynamics, surprise-gated online plasticity, and ternary-native quantization. The model makes **proactive decisions** by processing discrete events (insider buys, analyst upgrades, SEC filings, earnings surprises, FOMC announcements) as first-class inputs the moment they arrive.
+The canonical architecture is now **v4.0** and is constrained by train/inference source alignment: training data is sourced from finance-query (daily history), not paid external minute-bar vendors. To address reduced data volume, v4 introduces FDA (diffusion augmentation), TCP (contrastive pretraining), PTA (portfolio-theoretic augmentation), and a hybrid RA-GDN + SWA backbone.
 
-For the full architectural specification, see [`meridian-spec.md`](meridian-spec.md).
+For the full canonical specification, see [`meridian-spec.md`](meridian-spec.md) (v4.0). `meridian-spec4.md` is retained as a reference draft artifact.
+
+## Validation snapshot (v4)
+
+| Area | Current status |
+|---|---|
+| Data-source fidelity (finance-query only) | Validated and aligned with current daily data paths |
+| Arithmetic and assumptions in v4 spec | Validated with corrections applied in `meridian-spec.md` |
+| RA-GDN core | Implemented |
+| SWA hybrid blocks | Implemented |
+| FDA / TCP / PTA | Implemented in training pipelines |
+| Performance range (Sharpe 0.82-1.24) | Projected, not guaranteed |
 
 ## Key metrics
 
 | Metric | Value |
 |---|---|
-| Total parameters | ~80.6M (~35M active per forward pass) |
+| Total parameters | ~95-96M target architecture; ~60.9M currently implemented |
 | Per-asset features | 120 continuous + 64 text = 184 |
 | Market-wide features | 96 |
 | Portfolio state features | 201 |
 | Event types tracked | 18 discrete categories |
-| Text sources ingested | 31 RSS feeds + per-ticker news + transcripts |
-| Quantized model size | ~24.2 MB |
-| Normal inference RAM | ~156 MB |
-| Inference latency (100 assets) | ~7 ms |
+| Training source / granularity | finance-query only / daily history |
+| v3 validated OOS Sharpe baseline | 0.57 |
+| v4 projected OOS Sharpe range | 0.82-1.24 (projected) |
+| Quantized model size (target) | ~23 MB |
+| Runtime memory footprint (target) | ~185 MB |
+| Inference latency (100 assets, target) | ~6-11 ms |
 | Data pipeline latency | ~200–500 ms (network-bound) |
 | Adaptation tiers | 3 (sub-second / hourly / daily) |
-| Training compute budget | ~250–400 H100-hours |
+| Training compute budget (v4 target) | ~180-280 H100-hours |
 
 ## Repository layout
 
@@ -38,12 +51,12 @@ For the full architectural specification, see [`meridian-spec.md`](meridian-spec
 ├── python/
 │   ├── cli.py                                     # `meridian` CLI entrypoint (stub)
 │   ├── train/
-│   │   ├── feature_schema.py                      # Feature dimension contracts (288/96)
+│   │   ├── feature_schema.py                      # Feature dimension contracts (184/96)
 │   │   ├── spec.py                                # Architecture hyperparameter contracts
 │   │   ├── splits.py                              # Deterministic train/validation/test splits
-│   │   ├── pretrain.py                            # Phase 1 self-supervised pre-training entry point
-│   │   ├── portfolio_train.py                     # Phase 2 portfolio optimization training (Meridian-R/S)
-│   │   └── qat.py                                 # Phase 4 quantization-aware training (stub)
+│   │   ├── pretrain.py                            # Self-supervised pre-training entry point
+│   │   ├── portfolio_train.py                     # Portfolio optimization training (Meridian-R/S)
+│   │   └── qat.py                                 # Quantization-aware training (stub)
 │   ├── market_data/
 │   │   ├── environment.py                         # H100 environment validation
 │   │   ├── workspace.py                           # Data workspace management
@@ -56,7 +69,7 @@ For the full architectural specification, see [`meridian-spec.md`](meridian-spec
 │   ├── core/
 │   │   ├── regime_aware_backbone.py               # RA-GDN blocks + regime-routed FMoE
 │   │   ├── event_encoder.py                       # EventEncoder: 18 event types → D-dim tokens with time decay
-│   │   ├── self_supervised_pretraining.py         # Return/volatility/correlation predictive objectives
+│   │   ├── self_supervised_pretraining.py         # TCP + auxiliary return objective (Phase 1)
 │   │   ├── temporal_cascade.py                    # Hourly/daily/weekly GDN stack with surprise injection
 │   │   ├── cross_asset_fusion.py                  # 2-layer MHA with sector bias prior (110+ tokens)
 │   │   └── episodic_memory.py                     # FAISS-backed financial episodic memory
@@ -79,7 +92,7 @@ For the full architectural specification, see [`meridian-spec.md`](meridian-spec
 ├── scripts/
 │   └── setup_h100_env.sh                          # H100 node bootstrap
 ├── pyproject.toml
-└── meridian-spec.md                               # Architectural Specification v3.0
+└── meridian-spec.md                               # Architectural Specification v4.0 (canonical)
 ```
 
 ## Quick start (project setup before training)
@@ -91,6 +104,34 @@ pip install -e ".[train,dev]"
 cp .env.example .env
 meridian data init --root .
 ```
+
+### Makefile workflow (clean targets)
+
+```bash
+make stats                         # verify existing split shards
+make data-ready FDA_DEVICE=cuda    # collect + FDA + augmentation + stats
+make pretrain
+make portfolio-return
+make portfolio-sharpe
+make backtest
+```
+
+Training targets default to `data/mmaps_aug`; override with `TRAIN_DATA=data/mmaps` when needed.
+`make collect` performs a fresh rebuild of `data/mmaps/{train,validation,test}` shards before recollecting.
+Portfolio head training uses the 100 real per-asset shards, enforces an exact 100-asset universe for train/validation, and skips synthetic non-asset shards (e.g., `FDA_SYNTH_*`) in that stage.
+Both portfolio heads mix FDA synthetic window batches (`fda_loss_weight=0.6`, `fda_mix_prob=0.5` by default) with real joint-asset batches.
+Checkpoint selection uses validation DSR, with batch-level four-regime coverage enforced by default.
+PTA uses batch-level view expansion with sector-preserving permutations derived from `symbols.txt` (default: `pta_prob=0.5`, `pta_permutations=4`, `pta_sign_flip_prob=0.5`, `pta_vol_scale_prob=0.7`, scales `0.8/0.9/1.1/1.2`).
+Cross-asset warm-up is run before return-head training by default (`--cross-asset-warmup-steps 1000`, `--cross-asset-corr-window 20`, `--cross-asset-warmup-batch-size 8`) and saves a stage-boundary checkpoint (`*_cross_asset_warmup.pt`).
+Both portfolio heads use staged backbone fine-tuning: freeze for the first 500 steps, then unfreeze at 0.1× head LR.
+Phase-2 early stopping uses step-based patience (`--patience-steps`, default `200`) on the real-data validation monitor.
+Spec-aligned pretrain defaults are `PRETRAIN_STEPS=20000`, `PRETRAIN_BATCH=128`, `temperature=0.1`, and loss weights `lambda_contrastive=0.7` / `lambda_prediction=0.3` with `fda_loss_weight=0.5`. Override `PRETRAIN_BATCH` for smaller GPUs.
+Portfolio defaults remain tuned for 24GB GPUs (RTX 3090): `BATCH_PORT=4`, dedicated `WARMUP_BATCH=8`, and gradient checkpointing enabled for portfolio training.
+Enable pretrain compilation with `PRETRAIN_COMPILE=1` (example: `make pretrain PRETRAIN_COMPILE=1`).
+`make pretrain`, `make portfolio-return`, and `make portfolio-sharpe` automatically resume from their stage-best checkpoints when those files exist.
+`make backtest` automatically uses blended return/sharpe inference when `checkpoints/portfolio/sharpe_head_best.pt` exists.
+Those training targets run in `tmux` under `systemd-inhibit` (sleep/idle blocked during runs).
+Attach with `tmux attach -t pretrain` or `tmux attach -t portfolio`.
 
 Run setup checks:
 
@@ -162,7 +203,9 @@ Override with `--command-template` for a custom collector command.
 
 ## Development Roadmap
 
-### Phase 0: Data Infrastructure (Weeks 1–4)
+> v4 implementation status: core training pipelines include FDA/TCP/PTA/SWA support; remaining work is full-scale training, evaluation, and ablations.
+
+### Data infrastructure
 
 - [x] Build DataBus in Rust using finance-query as library dependency
 - [x] Implement all 42 indicator computations with rolling z-score normalization
@@ -175,7 +218,7 @@ Override with `--command-template` for a custom collector command.
 - [x] Pre-fit 4-state HMM on historical regime data
 - [x] Verify all finance-query API integrations end-to-end
 
-### Phase 1: Core Model (Weeks 5–10)
+### Core model
 
 - [x] RA-GDN block in PyTorch with regime conditioning (α bias, β scaling)
 - [x] FMoE with external regime-posterior routing
@@ -187,29 +230,29 @@ Override with `--command-template` for a custom collector command.
 - [x] Cross-asset fusion: 2-layer MHA with sector bias prior (110+ tokens)
 - [x] EventEncoder: 18 event types → D-dim tokens with time decay
 - [x] MarketReader text encoder (3-tier: headline / summary / deep)
-- [ ] Run Phase 1 self-supervised pre-training on H100 (~80 GPU-hours)
+- [ ] Run self-supervised backbone pre-training on H100 (~80 GPU-hours)
 - [ ] Validate: prediction accuracy, recurrent state stability, regime detection quality
 
-### Phase 2: Portfolio Training (Weeks 11–14)
+### Portfolio training
 
 - [x] Portfolio output heads: Meridian-R (return) and Meridian-S (Sharpe) with leverage normalization
 - [x] DSR (Differential Sharpe Ratio) loss function, turnover penalty, volatility auxiliary task
 - [x] Build MeridianStrategy wrapper for finance-query backtesting engine
-- [ ] Run Phase 2a (return head, ~50K steps) and Phase 2b (Sharpe head, ~30K steps)
+- [ ] Run return-head (~50K steps) and sharpe-head (~30K steps) training
 - [ ] Run backtests vs all benchmarks (buy-and-hold SPY, equal-weight, risk parity)
 - [ ] Run walk-forward validation, Monte Carlo analysis, regime-segmented analysis
 
-### Phase 3: Adaptation & QAT (Weeks 15–20)
+### Adaptation and QAT
 
 - [ ] Tier 1 — Surprise-gated plasticity (SGP): surprise signal modulates β update strength
 - [ ] Tier 2 — Normalization adaptation: online running stats update
 - [ ] Tier 3 — EWC + Ternary LoRA periodic consolidation
-- [ ] Run Phase 3 meta-learning training (~40 GPU-hours)
-- [ ] Run Phase 4 QAT training (~20 GPU-hours)
+- [ ] Run meta-learning training (~40 GPU-hours)
+- [ ] Run QAT training (~20 GPU-hours)
 - [ ] Validate: quantized model performance within tolerance of full-precision
 - [ ] Ablation studies: event stream value, text value, adaptation value
 
-### Phase 4: Deployment (Weeks 21–26)
+### Deployment
 
 - [ ] NEON ternary inference kernel in C
 - [ ] FAISS-backed episodic memory on ARM
@@ -220,12 +263,12 @@ Override with `--command-template` for a custom collector command.
 - [ ] 72-hour continuous thermal and power stress test
 - [ ] Begin 6-month paper trading period
 
-### Phase 5: Paper Trading & Iteration (Weeks 27–52)
+### Paper trading and iteration
 
-- [ ] Monitor all graduation criteria continuously (Section 13.4 of spec)
+- [ ] Monitor all graduation criteria continuously (Section 15.4 of spec)
 - [ ] Weekly review of adaptation health metrics (surprise signal, norm drift, consolidation loss)
 - [ ] Monthly benchmark comparison (Meridian-R and Meridian-S vs SPY)
-- [ ] Iterate on model if needed (retrain specific phases)
+- [ ] Iterate on model if needed (retrain specific training components)
 - [ ] After 6 months: evaluate all graduation criteria
 - [ ] If passed: proceed to minimal live trading (~$10K initial capital)
 
