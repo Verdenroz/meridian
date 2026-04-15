@@ -285,14 +285,38 @@ impl DataStore {
             splits: Arc::new(DashMap::new()),
             calendar: Arc::new(DashMap::new()),
             event_state: Arc::new(DashMap::new()),
-            world_indices: Arc::new(RwLock::new(CachedValue { value: WorldIndices::default(), last_updated: now })),
-            crypto: Arc::new(RwLock::new(CachedValue { value: CryptoMarket::default(), last_updated: now })),
-            fear_greed: Arc::new(RwLock::new(CachedValue { value: FearGreedData::default(), last_updated: now })),
-            sector: Arc::new(RwLock::new(CachedValue { value: SectorData::default(), last_updated: now })),
-            yield_curve: Arc::new(RwLock::new(CachedValue { value: YieldCurveData::default(), last_updated: now })),
-            fred_macro: Arc::new(RwLock::new(CachedValue { value: MacroData::default(), last_updated: now })),
-            rss_feed: Arc::new(RwLock::new(CachedValue { value: RssFeedState::default(), last_updated: now })),
-            market_summary: Arc::new(RwLock::new(CachedValue { value: MarketSummaryData::default(), last_updated: now })),
+            world_indices: Arc::new(RwLock::new(CachedValue {
+                value: WorldIndices::default(),
+                last_updated: now,
+            })),
+            crypto: Arc::new(RwLock::new(CachedValue {
+                value: CryptoMarket::default(),
+                last_updated: now,
+            })),
+            fear_greed: Arc::new(RwLock::new(CachedValue {
+                value: FearGreedData::default(),
+                last_updated: now,
+            })),
+            sector: Arc::new(RwLock::new(CachedValue {
+                value: SectorData::default(),
+                last_updated: now,
+            })),
+            yield_curve: Arc::new(RwLock::new(CachedValue {
+                value: YieldCurveData::default(),
+                last_updated: now,
+            })),
+            fred_macro: Arc::new(RwLock::new(CachedValue {
+                value: MacroData::default(),
+                last_updated: now,
+            })),
+            rss_feed: Arc::new(RwLock::new(CachedValue {
+                value: RssFeedState::default(),
+                last_updated: now,
+            })),
+            market_summary: Arc::new(RwLock::new(CachedValue {
+                value: MarketSummaryData::default(),
+                last_updated: now,
+            })),
             rolling_stats,
             symbols,
         })

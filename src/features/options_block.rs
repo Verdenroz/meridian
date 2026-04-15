@@ -44,15 +44,39 @@ pub fn assemble(
 
     // ── Volume / OI metrics ───────────────────────────────────────────────────
 
-    let call_vol: f64 = all_calls.iter().filter_map(|c| c.volume).map(|v| v as f64).sum();
-    let put_vol: f64 = all_puts.iter().filter_map(|c| c.volume).map(|v| v as f64).sum();
-    let call_oi: f64 = all_calls.iter().filter_map(|c| c.open_interest).map(|v| v as f64).sum();
-    let put_oi: f64 = all_puts.iter().filter_map(|c| c.open_interest).map(|v| v as f64).sum();
+    let call_vol: f64 = all_calls
+        .iter()
+        .filter_map(|c| c.volume)
+        .map(|v| v as f64)
+        .sum();
+    let put_vol: f64 = all_puts
+        .iter()
+        .filter_map(|c| c.volume)
+        .map(|v| v as f64)
+        .sum();
+    let call_oi: f64 = all_calls
+        .iter()
+        .filter_map(|c| c.open_interest)
+        .map(|v| v as f64)
+        .sum();
+    let put_oi: f64 = all_puts
+        .iter()
+        .filter_map(|c| c.open_interest)
+        .map(|v| v as f64)
+        .sum();
     let total_vol = call_vol + put_vol;
     let total_oi = call_oi + put_oi;
 
-    let pc_vol = if call_vol > 0.0 { (put_vol / call_vol).ln().clamp(-3.0, 3.0) as f32 } else { 0.0 };
-    let pc_oi = if call_oi > 0.0 { (put_oi / call_oi).ln().clamp(-3.0, 3.0) as f32 } else { 0.0 };
+    let pc_vol = if call_vol > 0.0 {
+        (put_vol / call_vol).ln().clamp(-3.0, 3.0) as f32
+    } else {
+        0.0
+    };
+    let pc_oi = if call_oi > 0.0 {
+        (put_oi / call_oi).ln().clamp(-3.0, 3.0) as f32
+    } else {
+        0.0
+    };
 
     // Total OI change (z-scored day-over-day)
     let oi_z = stats.zscore(symbol, "total_oi", total_oi);
@@ -67,7 +91,11 @@ pub fn assemble(
     // Unusual volume flag (binary)
     let vol_mean = stats.get(symbol, "opt_vol_mean").mean;
     let vol_std = stats.get(symbol, "opt_vol_mean").std_dev();
-    let unusual_vol: f32 = if vol_std > 0.0 && (total_vol - vol_mean) / vol_std > 2.0 { 1.0 } else { 0.0 };
+    let unusual_vol: f32 = if vol_std > 0.0 && (total_vol - vol_mean) / vol_std > 2.0 {
+        1.0
+    } else {
+        0.0
+    };
     stats.update(symbol, "opt_vol_mean", total_vol);
 
     // Max pain proximity (stub: 0 without current price)
@@ -78,17 +106,17 @@ pub fn assemble(
 
     [
         atm_iv.clamp(0.0, 2.0) as f32, // 30-day ATM IV
-        iv_pct,                          // IV percentile (z-scored)
-        term_slope,                      // IV term structure slope
-        put_skew,                        // 25-delta put skew
-        call_skew,                       // 25-delta call skew
-        pc_vol,                          // Put/call volume ratio (log)
-        pc_oi,                           // Put/call OI ratio (log)
-        oi_z,                            // Total OI change z-score
-        vol_oi_ratio,                    // Volume/OI ratio
-        max_pain_prox,                   // Max pain proximity
-        unusual_vol,                     // Unusual volume flag
-        iv_crush_prox,                   // IV crush proximity
+        iv_pct,                        // IV percentile (z-scored)
+        term_slope,                    // IV term structure slope
+        put_skew,                      // 25-delta put skew
+        call_skew,                     // 25-delta call skew
+        pc_vol,                        // Put/call volume ratio (log)
+        pc_oi,                         // Put/call OI ratio (log)
+        oi_z,                          // Total OI change z-score
+        vol_oi_ratio,                  // Volume/OI ratio
+        max_pain_prox,                 // Max pain proximity
+        unusual_vol,                   // Unusual volume flag
+        iv_crush_prox,                 // IV crush proximity
     ]
 }
 
@@ -99,7 +127,11 @@ fn atm_implied_vol(calls: &[&OptionContract], puts: &[&OptionContract]) -> f64 {
         .filter_map(|c| c.implied_volatility)
         .filter(|&iv| iv > 0.0 && iv < 10.0)
         .collect();
-    if ivs.is_empty() { 0.0 } else { ivs.iter().sum::<f64>() / ivs.len() as f64 }
+    if ivs.is_empty() {
+        0.0
+    } else {
+        ivs.iter().sum::<f64>() / ivs.len() as f64
+    }
 }
 
 /// Approximate 25-delta skew using lower/upper quartile of strikes by IV.

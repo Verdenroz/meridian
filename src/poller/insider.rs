@@ -15,7 +15,9 @@ pub async fn poll_insider_tx(store: &Arc<DataStore>) -> anyhow::Result<()> {
                 tokio::spawn(async move { poll_one_insider(&sym, &store).await })
             })
             .collect();
-        for t in tasks { let _ = t.await; }
+        for t in tasks {
+            let _ = t.await;
+        }
     }
 
     tracing::debug!("Insider transactions updated");
@@ -33,13 +35,17 @@ async fn poll_one_insider(symbol: &str, store: &Arc<DataStore>) {
 
     // Returns Result<Option<InsiderTransactions>> — private type, use type inference
     let new_txs: Vec<OurInsiderTx> = match ticker.insider_transactions().await {
-        Ok(Some(it)) => it.transactions.iter().map(|t| OurInsiderTx {
-            filer_name: t.filer_name.clone(),
-            transaction_text: t.transaction_text.clone(),
-            start_date_ts: t.start_date.as_ref().and_then(|v| v.raw),
-            shares: t.shares.as_ref().and_then(|v| v.raw),
-            value: t.value.as_ref().and_then(|v| v.raw),
-        }).collect(),
+        Ok(Some(it)) => it
+            .transactions
+            .iter()
+            .map(|t| OurInsiderTx {
+                filer_name: t.filer_name.clone(),
+                transaction_text: t.transaction_text.clone(),
+                start_date_ts: t.start_date.as_ref().and_then(|v| v.raw),
+                shares: t.shares.as_ref().and_then(|v| v.raw),
+                value: t.value.as_ref().and_then(|v| v.raw),
+            })
+            .collect(),
         Ok(None) => vec![],
         Err(e) => {
             tracing::warn!(symbol = %symbol, err = %e, "insider_transactions poll failed");
@@ -60,5 +66,7 @@ async fn poll_one_insider(symbol: &str, store: &Arc<DataStore>) {
         *es = es.with_event(&event);
     }
 
-    store.insider_tx.insert(symbol.to_string(), CachedValue::new(new_txs));
+    store
+        .insider_tx
+        .insert(symbol.to_string(), CachedValue::new(new_txs));
 }

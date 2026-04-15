@@ -69,9 +69,9 @@ pub async fn poll_fred_macro(store: &Arc<DataStore>) -> anyhow::Result<()> {
 
                     // Detect macro release event
                     let hist_std = store.rolling_stats.get(series_id, "value").std_dev();
-                    if let Some(event) =
-                        detect_macro_release(series_id, old_date, &new_date, new_value, old_value, hist_std)
-                    {
+                    if let Some(event) = detect_macro_release(
+                        series_id, old_date, &new_date, new_value, old_value, hist_std,
+                    ) {
                         tracing::info!(series = %series_id, "MacroRelease event");
                         for sym in &store.symbols {
                             let mut es = store.event_state.entry(sym.clone()).or_default();
@@ -92,7 +92,10 @@ pub async fn poll_fred_macro(store: &Arc<DataStore>) -> anyhow::Result<()> {
         }
     }
 
-    let macro_data = MacroData { values, last_observation_dates: dates };
+    let macro_data = MacroData {
+        values,
+        last_observation_dates: dates,
+    };
     *store.fred_macro.write() = CachedValue::new(macro_data);
     tracing::debug!("FRED macro updated");
     Ok(())

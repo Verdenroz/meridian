@@ -4,7 +4,11 @@ use std::sync::Arc;
 /// Block 1: Price & Volume — 10 features.
 ///
 /// All log-return features. Volume is normalized relative to a rolling SMA.
-pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbol: &str) -> [f32; 10] {
+pub fn assemble(
+    buf: Option<&PriceBuffer>,
+    stats: &Arc<RollingStatsStore>,
+    symbol: &str,
+) -> [f32; 10] {
     let Some(buf) = buf else {
         return [0.0f32; 10];
     };
@@ -70,15 +74,15 @@ pub fn assemble(buf: Option<&PriceBuffer>, stats: &Arc<RollingStatsStore>, symbo
     stats.update(symbol, "vol_norm", vol_norm as f64);
 
     [
-        ln_ret(open_price, prev),   // open (normalized vs prev close)
+        ln_ret(open_price, prev),       // open (normalized vs prev close)
         ln_ret(high_price, open_price), // high vs open
         ln_ret(low_price, open_price),  // low vs open
-        ln_ret(last, prev),         // close vs prev close
-        vol_norm,                   // volume vs SMA20
-        ln_ret(last, prev),         // return 1m (same as close)
-        ret_n(5),                   // return 5m
-        ret_n(15),                  // return 15m
-        ret_n(60),                  // return 60m
-        ret_n(390),                 // return 1d (390 minute bars)
+        ln_ret(last, prev),             // close vs prev close
+        vol_norm,                       // volume vs SMA20
+        ln_ret(last, prev),             // return 1m (same as close)
+        ret_n(5),                       // return 5m
+        ret_n(15),                      // return 15m
+        ret_n(60),                      // return 60m
+        ret_n(390),                     // return 1d (390 minute bars)
     ]
 }

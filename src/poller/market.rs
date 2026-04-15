@@ -1,11 +1,11 @@
+use crate::events::{EventRecord, detector::detect_trending_events};
 use crate::store::{
     CachedValue, CryptoMarket, DataStore, FearGreedData, MarketSummaryData, SectorData,
     WorldIndices,
 };
 use finance_query::{IndicesRegion, Region, Sector, crypto, finance};
-use std::sync::Arc;
 use std::collections::HashSet;
-use crate::events::{detector::detect_trending_events, EventRecord};
+use std::sync::Arc;
 
 pub async fn poll_world_indices(store: &Arc<DataStore>) -> anyhow::Result<()> {
     let americas = finance::indices(Some(IndicesRegion::Americas)).await;
@@ -17,7 +17,8 @@ pub async fn poll_world_indices(store: &Arc<DataStore>) -> anyhow::Result<()> {
     for result in [americas, europe, asia] {
         if let Ok(batch) = result {
             for (sym, quote) in &batch.quotes {
-                let ret = quote.regular_market_change_percent
+                let ret = quote
+                    .regular_market_change_percent
                     .as_ref()
                     .and_then(|v| v.raw)
                     .unwrap_or(0.0)
@@ -50,7 +51,11 @@ pub async fn poll_crypto_market(store: &Arc<DataStore>) -> anyhow::Result<()> {
 
     let total_mktcap: f64 = coins.iter().filter_map(|c| c.market_cap).sum();
     let btc_mktcap = btc.market_cap.unwrap_or(0.0);
-    let btc_dominance = if total_mktcap > 0.0 { btc_mktcap / total_mktcap } else { 0.0 };
+    let btc_dominance = if total_mktcap > 0.0 {
+        btc_mktcap / total_mktcap
+    } else {
+        0.0
+    };
 
     let prev = store.crypto.read().value.btc_price;
     let btc_price = btc.current_price.unwrap_or(prev);
@@ -74,7 +79,10 @@ pub async fn poll_crypto_market(store: &Arc<DataStore>) -> anyhow::Result<()> {
 pub async fn poll_fear_greed(store: &Arc<DataStore>) -> anyhow::Result<()> {
     let fg = finance::fear_and_greed().await?;
     let classification = classify_fear_greed(fg.value);
-    let data = FearGreedData { value: fg.value as f64, classification };
+    let data = FearGreedData {
+        value: fg.value as f64,
+        classification,
+    };
     *store.fear_greed.write() = CachedValue::new(data);
     tracing::debug!(value = fg.value, "Fear & Greed updated");
     Ok(())
@@ -187,11 +195,23 @@ pub async fn poll_market_summary(store: &Arc<DataStore>) -> anyhow::Result<()> {
     // Compute advance/decline ratio: regular_market_change is FormattedValue<f64>
     let adv = summary
         .iter()
-        .filter(|q| q.regular_market_change.as_ref().and_then(|v| v.raw).unwrap_or(0.0) > 0.0)
+        .filter(|q| {
+            q.regular_market_change
+                .as_ref()
+                .and_then(|v| v.raw)
+                .unwrap_or(0.0)
+                > 0.0
+        })
         .count() as f64;
     let dec = summary
         .iter()
-        .filter(|q| q.regular_market_change.as_ref().and_then(|v| v.raw).unwrap_or(0.0) < 0.0)
+        .filter(|q| {
+            q.regular_market_change
+                .as_ref()
+                .and_then(|v| v.raw)
+                .unwrap_or(0.0)
+                < 0.0
+        })
         .count() as f64;
     let total = (adv + dec).max(1.0);
 

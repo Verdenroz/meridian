@@ -9,8 +9,8 @@ pub mod risk_block;
 pub mod technical;
 
 use chrono::{DateTime, Utc};
-use serde::ser::SerializeMap;
 use serde::Serialize;
+use serde::ser::SerializeMap;
 
 /// One JSONL row: a complete feature vector for one asset at one minute.
 ///

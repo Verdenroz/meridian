@@ -21,7 +21,7 @@ pub fn assemble(
         (d.sharpe as f32).clamp(-3.0, 3.0),
         (d.sortino as f32).clamp(-3.0, 3.0),
         d.beta as f32,
-        d.max_drawdown as f32,                           // [0,1]
+        d.max_drawdown as f32,                          // [0,1]
         (d.max_dd_recovery.ln() as f32).max(0.0) / 5.0, // log-scaled recovery periods
     ]
 }

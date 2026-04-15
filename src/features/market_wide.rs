@@ -77,11 +77,21 @@ pub fn assemble_market_vector(store: &Arc<DataStore>, now: DateTime<Utc>) -> [f3
         let wi = store.world_indices.read();
         let w = &wi.value;
         // SPX, IXIC, RUT, DJI, FTSE, DAX, N225, HSI, SSEC returns
-        let idx_order = ["^GSPC", "^IXIC", "^RUT", "^DJI", "^FTSE", "^GDAXI", "^N225", "^HSI", "000001.SS"];
+        let idx_order = [
+            "^GSPC",
+            "^IXIC",
+            "^RUT",
+            "^DJI",
+            "^FTSE",
+            "^GDAXI",
+            "^N225",
+            "^HSI",
+            "000001.SS",
+        ];
         for (i, sym) in idx_order.iter().enumerate() {
             out[52 + i] = w.returns.get(*sym).copied().unwrap_or(0.0) as f32;
         }
-        out[61] = w.dxy as f32;   // DXY proxy (UUP return)
+        out[61] = w.dxy as f32; // DXY proxy (UUP return)
         out[62] = w.eurusd as f32;
         out[63] = w.usdjpy as f32;
         out[64] = w.gold as f32;

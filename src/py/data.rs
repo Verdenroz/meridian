@@ -6,10 +6,10 @@
 
 use std::collections::HashMap;
 
-use numpy::{PyArray2, IntoPyArray, ndarray::Array2};
+use numpy::{IntoPyArray, PyArray2, ndarray::Array2};
 use pyo3::prelude::*;
 
-use finance_query::{Interval, TimeRange, Ticker};
+use finance_query::{Interval, Ticker, TimeRange};
 
 fn parse_interval(s: &str) -> PyResult<Interval> {
     match s {
@@ -21,9 +21,10 @@ fn parse_interval(s: &str) -> PyResult<Interval> {
         "1d" => Ok(Interval::OneDay),
         "1wk" => Ok(Interval::OneWeek),
         "1mo" => Ok(Interval::OneMonth),
-        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("unknown interval '{}'. Valid: 1m, 5m, 15m, 30m, 1h, 1d, 1wk, 1mo", s),
-        )),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "unknown interval '{}'. Valid: 1m, 5m, 15m, 30m, 1h, 1d, 1wk, 1mo",
+            s
+        ))),
     }
 }
 
@@ -40,9 +41,10 @@ fn parse_range(s: &str) -> PyResult<TimeRange> {
         "10y" => Ok(TimeRange::TenYears),
         "ytd" => Ok(TimeRange::YearToDate),
         "max" => Ok(TimeRange::Max),
-        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-            format!("unknown range '{}'. Valid: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max", s),
-        )),
+        _ => Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
+            "unknown range '{}'. Valid: 1d, 5d, 1mo, 3mo, 6mo, 1y, 2y, 5y, 10y, ytd, max",
+            s
+        ))),
     }
 }
 
@@ -63,9 +65,8 @@ pub fn fetch_candles(
     let iv = parse_interval(interval)?;
     let tr = parse_range(range)?;
 
-    let rt = tokio::runtime::Runtime::new().map_err(|e| {
-        PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())
-    })?;
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
     let results: Vec<(String, Vec<[f64; 6]>)> = py.allow_threads(|| {
         rt.block_on(async {
@@ -92,18 +93,26 @@ pub fn fetch_candles(
     Ok(candles)
 }
 
-async fn fetch_one(symbol: &str, interval: Interval, range: TimeRange) -> anyhow::Result<Vec<[f64; 6]>> {
+async fn fetch_one(
+    symbol: &str,
+    interval: Interval,
+    range: TimeRange,
+) -> anyhow::Result<Vec<[f64; 6]>> {
     let ticker = Ticker::new(symbol).await?;
     let chart = ticker.chart(interval, range).await?;
-    let rows: Vec<[f64; 6]> = chart.candles.iter().map(|c| {
-        [
-            c.timestamp as f64,
-            c.open,
-            c.high,
-            c.low,
-            c.close,
-            c.volume as f64,
-        ]
-    }).collect();
+    let rows: Vec<[f64; 6]> = chart
+        .candles
+        .iter()
+        .map(|c| {
+            [
+                c.timestamp as f64,
+                c.open,
+                c.high,
+                c.low,
+                c.close,
+                c.volume as f64,
+            ]
+        })
+        .collect();
     Ok(rows)
 }

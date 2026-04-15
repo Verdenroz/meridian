@@ -14,7 +14,9 @@ pub async fn poll_risk_analytics(store: &Arc<DataStore>) -> anyhow::Result<()> {
                 tokio::spawn(async move { poll_one_risk(&sym, &store).await })
             })
             .collect();
-        for t in tasks { let _ = t.await; }
+        for t in tasks {
+            let _ = t.await;
+        }
     }
 
     tracing::debug!("Risk analytics updated");
@@ -30,7 +32,10 @@ async fn poll_one_risk(symbol: &str, store: &Arc<DataStore>) {
         }
     };
 
-    match ticker.risk(Interval::OneDay, TimeRange::OneYear, None).await {
+    match ticker
+        .risk(Interval::OneDay, TimeRange::OneYear, None)
+        .await
+    {
         Ok(metrics) => {
             let data = RiskData {
                 var_95: metrics.var_95,
@@ -42,7 +47,9 @@ async fn poll_one_risk(symbol: &str, store: &Arc<DataStore>) {
                 max_drawdown: metrics.max_drawdown.abs(),
                 max_dd_recovery: metrics.max_drawdown_recovery_periods.unwrap_or(1) as f64,
             };
-            store.risk.insert(symbol.to_string(), CachedValue::new(data));
+            store
+                .risk
+                .insert(symbol.to_string(), CachedValue::new(data));
         }
         Err(e) => tracing::warn!(symbol = %symbol, err = %e, "risk poll failed"),
     }

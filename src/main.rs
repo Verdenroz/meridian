@@ -46,7 +46,9 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         _ => {
-            tracing::warn!("FRED_API_KEY not set — macro series (FEDFUNDS, CPI, etc.) will be skipped");
+            tracing::warn!(
+                "FRED_API_KEY not set — macro series (FEDFUNDS, CPI, etc.) will be skipped"
+            );
         }
     }
 
@@ -122,9 +124,8 @@ fn load_symbols(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
 
 fn default_symbols() -> Vec<String> {
     [
-        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "JPM", "UNH",
-        "XOM", "LLY", "V", "AVGO", "JNJ", "PG", "MA", "HD", "CVX", "MRK",
-        "SPY", "QQQ", "IWM",
+        "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL", "META", "TSLA", "BRK-B", "JPM", "UNH", "XOM",
+        "LLY", "V", "AVGO", "JNJ", "PG", "MA", "HD", "CVX", "MRK", "SPY", "QQQ", "IWM",
     ]
     .iter()
     .map(|s| s.to_string())
@@ -132,7 +133,7 @@ fn default_symbols() -> Vec<String> {
 }
 
 fn install_tracing() {
-    use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+    use tracing_subscriber::{EnvFilter, fmt, prelude::*};
     tracing_subscriber::registry()
         .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(fmt::layer().with_writer(std::io::stderr)) // logs to stderr; JSONL goes to stdout

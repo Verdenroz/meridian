@@ -7,9 +7,7 @@
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use finance_query::backtesting::{
-    BacktestComparison, OptimizeMetric,
-};
+use finance_query::backtesting::{BacktestComparison, OptimizeMetric};
 
 use super::results::PyBacktestResult;
 
@@ -93,7 +91,9 @@ impl PyComparisonReport {
     fn __repr__(&self) -> String {
         format!(
             "ComparisonReport(metric={}, winner={}, count={})",
-            self.metric, self.winner_label, self.rows.len()
+            self.metric,
+            self.winner_label,
+            self.rows.len()
         )
     }
 }

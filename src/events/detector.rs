@@ -186,11 +186,7 @@ pub fn detect_trending_events(
 
 // ── Analyst rating consensus shift ───────────────────────────────────────────
 
-pub fn detect_rating_change(
-    symbol: &str,
-    old_score: f64,
-    new_score: f64,
-) -> Option<EventRecord> {
+pub fn detect_rating_change(symbol: &str, old_score: f64, new_score: f64) -> Option<EventRecord> {
     let delta = new_score - old_score;
     if delta.abs() < 0.1 {
         return None;
@@ -217,7 +213,11 @@ pub fn detect_options_unusual(
         return None;
     }
     let zscore = (total_vol - vol_mean) / vol_std;
-    let vol_oi_ratio = if total_oi > 0.0 { total_vol / total_oi } else { 0.0 };
+    let vol_oi_ratio = if total_oi > 0.0 {
+        total_vol / total_oi
+    } else {
+        0.0
+    };
 
     if zscore > 2.0 && vol_oi_ratio > 0.1 {
         Some(EventRecord {
@@ -225,7 +225,9 @@ pub fn detect_options_unusual(
             symbol: Some(symbol.to_string()),
             magnitude: zscore as f32,
             detected_at: Utc::now(),
-            description: format!("Vol {total_vol:.0} ({zscore:.1}σ above avg), V/OI={vol_oi_ratio:.2}"),
+            description: format!(
+                "Vol {total_vol:.0} ({zscore:.1}σ above avg), V/OI={vol_oi_ratio:.2}"
+            ),
         })
     } else {
         None
@@ -244,7 +246,9 @@ fn is_fomc_title(title: &str) -> bool {
         || lower.contains("basis point")
 }
 
-pub fn detect_fomc_from_articles(new_articles: &[super::super::store::RssArticle]) -> Vec<EventRecord> {
+pub fn detect_fomc_from_articles(
+    new_articles: &[super::super::store::RssArticle],
+) -> Vec<EventRecord> {
     new_articles
         .iter()
         .filter(|a| is_fomc_title(&a.title))

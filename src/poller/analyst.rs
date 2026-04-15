@@ -15,7 +15,9 @@ pub async fn poll_analyst_ratings(store: &Arc<DataStore>) -> anyhow::Result<()> 
                 tokio::spawn(async move { poll_one_analyst(&sym, &store).await })
             })
             .collect();
-        for t in tasks { let _ = t.await; }
+        for t in tasks {
+            let _ = t.await;
+        }
     }
 
     tracing::debug!("Analyst ratings updated");
@@ -86,7 +88,11 @@ async fn poll_one_analyst(symbol: &str, store: &Arc<DataStore>) {
 
     // Detect consensus rating change
     let old_consensus = compute_consensus(
-        store.analyst.get(symbol).as_ref().and_then(|c| c.value.recommendation_period.as_ref()),
+        store
+            .analyst
+            .get(symbol)
+            .as_ref()
+            .and_then(|c| c.value.recommendation_period.as_ref()),
     );
     let new_consensus = compute_consensus(rec_period.as_ref());
     if let Some(event) = detect_rating_change(symbol, old_consensus, new_consensus) {
@@ -95,8 +101,13 @@ async fn poll_one_analyst(symbol: &str, store: &Arc<DataStore>) {
         *es = es.with_event(&event);
     }
 
-    let data = AnalystData { grading_history: our_grading, recommendation_period: rec_period };
-    store.analyst.insert(symbol.to_string(), CachedValue::new(data));
+    let data = AnalystData {
+        grading_history: our_grading,
+        recommendation_period: rec_period,
+    };
+    store
+        .analyst
+        .insert(symbol.to_string(), CachedValue::new(data));
 }
 
 fn compute_consensus(period: Option<&OurRecoPeriod>) -> f64 {

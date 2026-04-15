@@ -118,14 +118,20 @@ fn update_aggregate_signals(
         .iter()
         .filter(|a| a.fetched_at > cutoff_1h)
         .count()
-        + new_articles.iter().filter(|a| a.fetched_at > cutoff_1h).count();
+        + new_articles
+            .iter()
+            .filter(|a| a.fetched_at > cutoff_1h)
+            .count();
 
     let count_24h = state
         .recent_articles
         .iter()
         .filter(|a| a.fetched_at > cutoff_24h)
         .count()
-        + new_articles.iter().filter(|a| a.fetched_at > cutoff_24h).count();
+        + new_articles
+            .iter()
+            .filter(|a| a.fetched_at > cutoff_24h)
+            .count();
 
     state.volume_1h = count_1h as f64;
     state.volume_24h = count_24h as f64;
@@ -138,7 +144,10 @@ fn update_aggregate_signals(
         .iter()
         .filter(|a| a.fetched_at > cutoff_24h && is_source(a, "federal"))
         .count() as f64
-        + new_articles.iter().filter(|a| is_source(a, "federal")).count() as f64;
+        + new_articles
+            .iter()
+            .filter(|a| is_source(a, "federal"))
+            .count() as f64;
 
     state.sec_count_24h = state
         .recent_articles

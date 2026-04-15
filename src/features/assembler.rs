@@ -1,6 +1,6 @@
 use super::{
-    classify_asset, cross_asset, event_block, fundamental_block, market_wide, options_block,
-    price_volume, risk_block, technical, FeatureRow,
+    FeatureRow, classify_asset, cross_asset, event_block, fundamental_block, market_wide,
+    options_block, price_volume, risk_block, technical,
 };
 use crate::store::DataStore;
 use chrono::Utc;

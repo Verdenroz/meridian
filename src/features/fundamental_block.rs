@@ -44,16 +44,21 @@ pub fn assemble(
         // ── Financial Fundamentals (12) ───────────────────────────────────────
         pct("trailing_pe", d.trailing_pe),
         pct("forward_pe", d.forward_pe),
-        cl(opt(d.peg_ratio, 2.5) / 5.0, 0.0, 1.0),           // PEG [0,5]→[0,1]
+        cl(opt(d.peg_ratio, 2.5) / 5.0, 0.0, 1.0), // PEG [0,5]→[0,1]
         pct("ev_to_ebitda", d.ev_to_ebitda),
-        cl(opt(d.dividend_yield, 0.0), 0.0, 0.2),              // raw yield
-        cl(opt(d.profit_margins, 0.0), -1.0, 1.0),             // raw [-1,1]
-        cl(opt(d.revenue_growth, 0.0), -1.0, 1.0),             // winsorized ±100%
+        cl(opt(d.dividend_yield, 0.0), 0.0, 0.2), // raw yield
+        cl(opt(d.profit_margins, 0.0), -1.0, 1.0), // raw [-1,1]
+        cl(opt(d.revenue_growth, 0.0), -1.0, 1.0), // winsorized ±100%
         cl(opt(d.earnings_growth, 0.0), -1.0, 1.0),
         pct("debt_to_equity", d.debt_to_equity),
-        zs("fcf_yield", d.free_cashflow.zip(d.market_cap).map(|(f, m)| if m > 0.0 { f / m } else { 0.0 })),
+        zs(
+            "fcf_yield",
+            d.free_cashflow
+                .zip(d.market_cap)
+                .map(|(f, m)| if m > 0.0 { f / m } else { 0.0 }),
+        ),
         cl(opt(d.return_on_equity, 0.0), -1.0, 1.0),
-        cl(opt(d.current_ratio, 0.0) / 5.0, 0.0, 1.0),        // [0,5]→[0,1]
+        cl(opt(d.current_ratio, 0.0) / 5.0, 0.0, 1.0), // [0,5]→[0,1]
         // ── Earnings Intelligence (6) ─────────────────────────────────────────
         zs("earnings_surprise", d.last_earnings_surprise_pct),
         cl(d.earnings_surprise_streak as f32 / 5.0, -1.0, 1.0),
@@ -68,13 +73,17 @@ pub fn assemble(
         cl(d.recent_grade_direction as f32, -1.0, 1.0),
         // ── Ownership & Insider Activity (6) ─────────────────────────────────
         zs("net_insider_shares", d.net_insider_shares_90d),
-        cl((d.insider_buy_count_90d.ln() as f32).max(0.0) / 5.0, 0.0, 1.0),
+        cl(
+            (d.insider_buy_count_90d.ln() as f32).max(0.0) / 5.0,
+            0.0,
+            1.0,
+        ),
         zs("net_insider_value", d.net_insider_value_90d),
         cl(opt(d.insider_ownership_pct, 0.0), 0.0, 1.0),
         cl(opt(d.institutional_pct, 0.0), 0.0, 1.0),
         zs("inst_delta", d.institutional_delta_qtr),
         // ── Asset Identity (2) ───────────────────────────────────────────────
-        cl(d.sector_idx as f32 / 10.0, 0.0, 1.0),              // sector scalar
-        cl(d.mktcap_log_rank as f32, 0.0, 1.0),                 // log-rank percentile
+        cl(d.sector_idx as f32 / 10.0, 0.0, 1.0), // sector scalar
+        cl(d.mktcap_log_rank as f32, 0.0, 1.0),   // log-rank percentile
     ]
 }

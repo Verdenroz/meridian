@@ -14,8 +14,8 @@ use finance_query::Indicator;
 use finance_query::backtesting::{
     BacktestConfig, Signal,
     condition::HtfIndicatorSpec,
-    strategy::{Strategy, StrategyContext, SmaCrossover, RsiReversal, BollingerMeanReversion},
-    portfolio::{PortfolioEngine, PortfolioConfig, RebalanceMode, SymbolData},
+    portfolio::{PortfolioConfig, PortfolioEngine, RebalanceMode, SymbolData},
+    strategy::{BollingerMeanReversion, RsiReversal, SmaCrossover, Strategy, StrategyContext},
 };
 
 use super::results::PyPortfolioResult;
@@ -31,10 +31,16 @@ use super::types::PyPortfolioConfig;
 struct BuyAndHold;
 
 impl Strategy for BuyAndHold {
-    fn name(&self) -> &str { "BuyAndHold" }
+    fn name(&self) -> &str {
+        "BuyAndHold"
+    }
 
-    fn required_indicators(&self) -> Vec<(String, Indicator)> { vec![] }
-    fn htf_requirements(&self) -> Vec<HtfIndicatorSpec> { vec![] }
+    fn required_indicators(&self) -> Vec<(String, Indicator)> {
+        vec![]
+    }
+    fn htf_requirements(&self) -> Vec<HtfIndicatorSpec> {
+        vec![]
+    }
 
     fn on_candle(&self, ctx: &StrategyContext) -> Signal {
         if ctx.index == 0 && !ctx.has_position() {
@@ -57,10 +63,16 @@ fn parse_candle_dict(
         let a = arr.as_array();
         let rows = a.dim().0;
         let parsed: Vec<Candle> = (0..rows)
-            .map(|i| make_candle(
-                a[[i, 0]] as i64, a[[i, 1]], a[[i, 2]],
-                a[[i, 3]], a[[i, 4]], a[[i, 5]] as i64,
-            ))
+            .map(|i| {
+                make_candle(
+                    a[[i, 0]] as i64,
+                    a[[i, 1]],
+                    a[[i, 2]],
+                    a[[i, 3]],
+                    a[[i, 4]],
+                    a[[i, 5]] as i64,
+                )
+            })
             .collect();
         data.push(SymbolData::new(sym.clone(), parsed));
     }
@@ -95,16 +107,18 @@ pub fn run_buy_and_hold(
     config: Option<PyPortfolioConfig>,
 ) -> PyResult<PyPortfolioResult> {
     let symbol_data = parse_candle_dict(&candles)?;
-    let cfg = config.map(|c| c.inner).unwrap_or_else(default_portfolio_config);
+    let cfg = config
+        .map(|c| c.inner)
+        .unwrap_or_else(default_portfolio_config);
     let engine = PortfolioEngine::new(cfg);
 
-    let result = py.allow_threads(move || {
-        engine.run(&symbol_data, |_sym: &str| BuyAndHold)
-    });
+    let result = py.allow_threads(move || engine.run(&symbol_data, |_sym: &str| BuyAndHold));
 
     match result {
         Ok(r) => Ok(PyPortfolioResult { inner: r }),
-        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        )),
     }
 }
 
@@ -119,7 +133,9 @@ pub fn run_sma_crossover(
     config: Option<PyPortfolioConfig>,
 ) -> PyResult<PyPortfolioResult> {
     let symbol_data = parse_candle_dict(&candles)?;
-    let cfg = config.map(|c| c.inner).unwrap_or_else(default_portfolio_config);
+    let cfg = config
+        .map(|c| c.inner)
+        .unwrap_or_else(default_portfolio_config);
     let engine = PortfolioEngine::new(cfg);
 
     let result = py.allow_threads(move || {
@@ -130,7 +146,9 @@ pub fn run_sma_crossover(
 
     match result {
         Ok(r) => Ok(PyPortfolioResult { inner: r }),
-        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        )),
     }
 }
 
@@ -146,7 +164,9 @@ pub fn run_rsi_reversal(
     config: Option<PyPortfolioConfig>,
 ) -> PyResult<PyPortfolioResult> {
     let symbol_data = parse_candle_dict(&candles)?;
-    let cfg = config.map(|c| c.inner).unwrap_or_else(default_portfolio_config);
+    let cfg = config
+        .map(|c| c.inner)
+        .unwrap_or_else(default_portfolio_config);
     let engine = PortfolioEngine::new(cfg);
 
     let result = py.allow_threads(move || {
@@ -160,7 +180,9 @@ pub fn run_rsi_reversal(
 
     match result {
         Ok(r) => Ok(PyPortfolioResult { inner: r }),
-        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        )),
     }
 }
 
@@ -175,7 +197,9 @@ pub fn run_bollinger(
     config: Option<PyPortfolioConfig>,
 ) -> PyResult<PyPortfolioResult> {
     let symbol_data = parse_candle_dict(&candles)?;
-    let cfg = config.map(|c| c.inner).unwrap_or_else(default_portfolio_config);
+    let cfg = config
+        .map(|c| c.inner)
+        .unwrap_or_else(default_portfolio_config);
     let engine = PortfolioEngine::new(cfg);
 
     let result = py.allow_threads(move || {
@@ -186,6 +210,8 @@ pub fn run_bollinger(
 
     match result {
         Ok(r) => Ok(PyPortfolioResult { inner: r }),
-        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string())),
+        Err(e) => Err(PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(
+            e.to_string(),
+        )),
     }
 }

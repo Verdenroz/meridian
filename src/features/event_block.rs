@@ -1,5 +1,5 @@
-use crate::store::{CachedValue, FundamentalData};
 use crate::events::EventState;
+use crate::store::{CachedValue, FundamentalData};
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use std::sync::Arc;
@@ -14,7 +14,10 @@ pub fn assemble(
     symbol: &str,
     now: DateTime<Utc>,
 ) -> [f32; 10] {
-    let state = event_state.get(symbol).map(|e| e.clone()).unwrap_or_default();
+    let state = event_state
+        .get(symbol)
+        .map(|e| e.clone())
+        .unwrap_or_default();
 
     // Earnings proximity: exp(-days_to_earnings / 14)
     let earnings_proximity = fundamentals

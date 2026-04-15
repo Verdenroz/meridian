@@ -39,18 +39,18 @@ impl EventKind {
     /// Decay time constant τ in minutes for Block 6 exponential decay.
     pub fn decay_tau_minutes(self) -> f64 {
         match self {
-            Self::InsiderBuy | Self::InsiderSell => 1440.0,        // 1 day
+            Self::InsiderBuy | Self::InsiderSell => 1440.0, // 1 day
             Self::AnalystUpgrade | Self::AnalystDowngrade => 43200.0, // 30 days
             Self::EarningsBeat | Self::EarningsMiss => 1440.0,
             Self::SecFiling10K | Self::SecFiling10Q => 43200.0,
-            Self::SecFiling8K => 10080.0,                          // 7 days
+            Self::SecFiling8K => 10080.0, // 7 days
             Self::SecFilingOther => 43200.0,
             Self::FomcDecision => 43200.0,
             Self::MacroRelease => 10080.0,
-            Self::NewsHighImpact => 60.0,                          // 1 hour
+            Self::NewsHighImpact => 60.0, // 1 hour
             Self::DividendAnnounced => 10080.0,
             Self::SplitAnnounced => 10080.0,
-            Self::OptionsUnusualActivity => 15.0,                  // 15 minutes
+            Self::OptionsUnusualActivity => 15.0, // 15 minutes
             Self::TrendingEntry => 60.0,
             Self::RatingChange => 43200.0,
         }

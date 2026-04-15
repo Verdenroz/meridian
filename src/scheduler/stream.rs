@@ -30,15 +30,20 @@ pub async fn run_price_stream(store: Arc<DataStore>) {
                     let sym = &update.id;
 
                     // Update forming bar
-                    let prev_forming = store.forming.get(sym).map(|f| f.clone()).unwrap_or_default();
+                    let prev_forming = store
+                        .forming
+                        .get(sym)
+                        .map(|f| f.clone())
+                        .unwrap_or_default();
                     let new_forming = prev_forming.tick(price, day_volume, ts);
 
                     // Detect minute boundary: if the minute changed, commit the previous bar
                     if prev_forming.open.is_some() && new_forming.minute != prev_forming.minute {
                         if let Some(bar) = prev_forming.to_bar() {
-                            let mut price_buf = store.prices.entry(sym.clone()).or_insert_with(|| {
-                                crate::store::PriceBuffer::new(98_280)
-                            });
+                            let mut price_buf = store
+                                .prices
+                                .entry(sym.clone())
+                                .or_insert_with(|| crate::store::PriceBuffer::new(98_280));
                             price_buf.push(bar);
                         }
                     }

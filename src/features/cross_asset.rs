@@ -63,7 +63,9 @@ fn compute_return_nd(
     symbol: &str,
     n_bars: usize,
 ) -> f64 {
-    let Some(buf) = prices.get(symbol) else { return 0.0 };
+    let Some(buf) = prices.get(symbol) else {
+        return 0.0;
+    };
     let closes = buf.closes(n_bars + 1);
     let n = closes.len();
     if n < 2 {
@@ -71,7 +73,11 @@ fn compute_return_nd(
     }
     let first = closes[0];
     let last = closes[n - 1];
-    if first <= 0.0 { 0.0 } else { (last / first).ln() }
+    if first <= 0.0 {
+        0.0
+    } else {
+        (last / first).ln()
+    }
 }
 
 /// Pearson correlation over the last `n_bars` bars between two symbols.
@@ -81,8 +87,12 @@ fn rolling_corr(
     sym_b: &str,
     n_bars: usize,
 ) -> f32 {
-    let Some(a_buf) = prices.get(sym_a) else { return 0.0 };
-    let Some(b_buf) = prices.get(sym_b) else { return 0.0 };
+    let Some(a_buf) = prices.get(sym_a) else {
+        return 0.0;
+    };
+    let Some(b_buf) = prices.get(sym_b) else {
+        return 0.0;
+    };
 
     let a_closes = a_buf.closes(n_bars);
     let b_closes = b_buf.closes(n_bars);
@@ -111,5 +121,9 @@ fn rolling_corr(
     }
 
     let denom = (da2 * db2).sqrt();
-    if denom < 1e-10 { 0.0 } else { (num / denom).clamp(-1.0, 1.0) as f32 }
+    if denom < 1e-10 {
+        0.0
+    } else {
+        (num / denom).clamp(-1.0, 1.0) as f32
+    }
 }

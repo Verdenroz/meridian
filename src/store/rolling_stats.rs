@@ -13,7 +13,7 @@ use std::sync::Arc;
 #[derive(Serialize, Deserialize, Clone, Default, Debug)]
 pub struct RollingStats {
     pub mean: f64,
-    pub m2: f64,   // Welford's M2 accumulator
+    pub m2: f64, // Welford's M2 accumulator
     pub count: u64,
 }
 
@@ -29,7 +29,11 @@ impl RollingStats {
     }
 
     pub fn variance(&self) -> f64 {
-        if self.count < 2 { 1.0 } else { self.m2 / self.count as f64 }
+        if self.count < 2 {
+            1.0
+        } else {
+            self.m2 / self.count as f64
+        }
     }
 
     pub fn std_dev(&self) -> f64 {
@@ -60,7 +64,9 @@ pub struct RollingStatsStore {
 
 impl RollingStatsStore {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self { inner: DashMap::new() })
+        Arc::new(Self {
+            inner: DashMap::new(),
+        })
     }
 
     /// Update the stats for `(symbol, feature)` with a new sample, returning the updated stats.

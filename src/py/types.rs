@@ -12,7 +12,7 @@ use finance_query::backtesting::portfolio::{PortfolioConfig, RebalanceMode};
 // -- Spec defaults (Section 12) --
 const DEFAULT_CAPITAL: f64 = 1_000_000.0;
 const DEFAULT_COMMISSION_PCT: f64 = 0.0010; // 10 bps
-const DEFAULT_SLIPPAGE_PCT: f64 = 0.0005;   // 5 bps
+const DEFAULT_SLIPPAGE_PCT: f64 = 0.0005; // 5 bps
 const DEFAULT_BARS_PER_YEAR: f64 = 252.0 * 390.0; // minute bars
 const DEFAULT_MAX_POSITIONS: usize = 100;
 
@@ -59,9 +59,7 @@ impl PyBacktestConfig {
     fn __repr__(&self) -> String {
         format!(
             "BacktestConfig(capital={}, commission={:.4}, slippage={:.4})",
-            self.inner.initial_capital,
-            self.inner.commission_pct,
-            self.inner.slippage_pct,
+            self.inner.initial_capital, self.inner.commission_pct, self.inner.slippage_pct,
         )
     }
 }
@@ -88,14 +86,17 @@ impl PyPortfolioConfig {
     ) -> PyResult<Self> {
         let base_config = match base {
             Some(b) => b.inner,
-            None => PyBacktestConfig::new(
-                DEFAULT_CAPITAL,
-                DEFAULT_COMMISSION_PCT,
-                DEFAULT_SLIPPAGE_PCT,
-                DEFAULT_BARS_PER_YEAR,
-                0.0,
-                false,
-            )?.inner,
+            None => {
+                PyBacktestConfig::new(
+                    DEFAULT_CAPITAL,
+                    DEFAULT_COMMISSION_PCT,
+                    DEFAULT_SLIPPAGE_PCT,
+                    DEFAULT_BARS_PER_YEAR,
+                    0.0,
+                    false,
+                )?
+                .inner
+            }
         };
 
         let mut config = PortfolioConfig::new(base_config)

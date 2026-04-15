@@ -14,17 +14,23 @@ use pyo3::prelude::*;
 use finance_query::Candle;
 use finance_query::Indicator;
 use finance_query::backtesting::{
-    Signal,
+    BacktestConfig, Signal,
+    condition::HtfIndicatorSpec,
+    portfolio::{PortfolioConfig, PortfolioEngine, RebalanceMode, SymbolData},
     strategy::Strategy,
     strategy::StrategyContext,
-    condition::HtfIndicatorSpec,
-    portfolio::{PortfolioEngine, SymbolData, PortfolioConfig, RebalanceMode},
-    BacktestConfig,
 };
 
 /// Construct a Candle from raw values.
 /// Candle is #[non_exhaustive] so we deserialize via serde_json.
-pub(super) fn make_candle(timestamp: i64, open: f64, high: f64, low: f64, close: f64, volume: i64) -> Candle {
+pub(super) fn make_candle(
+    timestamp: i64,
+    open: f64,
+    high: f64,
+    low: f64,
+    close: f64,
+    volume: i64,
+) -> Candle {
     serde_json::from_value(serde_json::json!({
         "timestamp": timestamp,
         "open": open,
@@ -76,7 +82,11 @@ impl Strategy for MeridianStrategy {
         // When flat, position is None and current = 0.
         let current = ctx.position.map_or(0.0, |pos| {
             let pos_value = pos.quantity * ctx.close();
-            if ctx.equity > 0.0 { pos_value / ctx.equity } else { 0.0 }
+            if ctx.equity > 0.0 {
+                pos_value / ctx.equity
+            } else {
+                0.0
+            }
         });
 
         if current <= 0.0 && target > self.min_weight {
@@ -136,16 +146,15 @@ pub fn run_backtest(
     let mut symbol_data: Vec<SymbolData> = Vec::with_capacity(n_assets);
 
     for (col, sym) in symbols.iter().enumerate() {
-        let col_weights: Vec<f64> = (0..t_bars)
-            .map(|row| weight_arr[[row, col]])
-            .collect();
+        let col_weights: Vec<f64> = (0..t_bars).map(|row| weight_arr[[row, col]]).collect();
         symbol_weights.insert(sym.clone(), col_weights);
 
         let candle_arr = candles
             .get(sym)
             .ok_or_else(|| {
                 PyErr::new::<pyo3::exceptions::PyValueError, _>(format!(
-                    "no candle data for symbol '{}'", sym
+                    "no candle data for symbol '{}'",
+                    sym
                 ))
             })?
             .as_array();
@@ -159,14 +168,16 @@ pub fn run_backtest(
         }
 
         let parsed_candles: Vec<Candle> = (0..candle_rows)
-            .map(|i| make_candle(
-                candle_arr[[i, 0]] as i64,
-                candle_arr[[i, 1]],
-                candle_arr[[i, 2]],
-                candle_arr[[i, 3]],
-                candle_arr[[i, 4]],
-                candle_arr[[i, 5]] as i64,
-            ))
+            .map(|i| {
+                make_candle(
+                    candle_arr[[i, 0]] as i64,
+                    candle_arr[[i, 1]],
+                    candle_arr[[i, 2]],
+                    candle_arr[[i, 3]],
+                    candle_arr[[i, 4]],
+                    candle_arr[[i, 5]] as i64,
+                )
+            })
             .collect();
 
         symbol_data.push(SymbolData::new(sym.clone(), parsed_candles));

@@ -27,12 +27,30 @@ pub struct PyPercentileStats {
 
 #[pymethods]
 impl PyPercentileStats {
-    #[getter] fn p5(&self) -> f64 { self.inner.p5 }
-    #[getter] fn p25(&self) -> f64 { self.inner.p25 }
-    #[getter] fn p50(&self) -> f64 { self.inner.p50 }
-    #[getter] fn p75(&self) -> f64 { self.inner.p75 }
-    #[getter] fn p95(&self) -> f64 { self.inner.p95 }
-    #[getter] fn mean(&self) -> f64 { self.inner.mean }
+    #[getter]
+    fn p5(&self) -> f64 {
+        self.inner.p5
+    }
+    #[getter]
+    fn p25(&self) -> f64 {
+        self.inner.p25
+    }
+    #[getter]
+    fn p50(&self) -> f64 {
+        self.inner.p50
+    }
+    #[getter]
+    fn p75(&self) -> f64 {
+        self.inner.p75
+    }
+    #[getter]
+    fn p95(&self) -> f64 {
+        self.inner.p95
+    }
+    #[getter]
+    fn mean(&self) -> f64 {
+        self.inner.mean
+    }
 
     fn to_dict<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
         let d = PyDict::new(py);
@@ -69,34 +87,43 @@ pub struct PyMonteCarloResult {
 
 #[pymethods]
 impl PyMonteCarloResult {
-    #[getter] fn num_simulations(&self) -> usize { self.num_simulations }
+    #[getter]
+    fn num_simulations(&self) -> usize {
+        self.num_simulations
+    }
 
     #[getter]
     fn total_return(&self) -> PyPercentileStats {
-        PyPercentileStats { inner: self.total_return.clone() }
+        PyPercentileStats {
+            inner: self.total_return.clone(),
+        }
     }
 
     #[getter]
     fn max_drawdown(&self) -> PyPercentileStats {
-        PyPercentileStats { inner: self.max_drawdown.clone() }
+        PyPercentileStats {
+            inner: self.max_drawdown.clone(),
+        }
     }
 
     #[getter]
     fn sharpe_ratio(&self) -> PyPercentileStats {
-        PyPercentileStats { inner: self.sharpe_ratio.clone() }
+        PyPercentileStats {
+            inner: self.sharpe_ratio.clone(),
+        }
     }
 
     #[getter]
     fn profit_factor(&self) -> PyPercentileStats {
-        PyPercentileStats { inner: self.profit_factor.clone() }
+        PyPercentileStats {
+            inner: self.profit_factor.clone(),
+        }
     }
 
     /// Check deployment criteria from Section 12 of the spec:
     /// P5 return > 0, P25 Sharpe > 0.5, P95 max drawdown < 0.30
     fn passes_deployment_criteria(&self) -> bool {
-        self.total_return.p5 > 0.0
-            && self.sharpe_ratio.p25 > 0.5
-            && self.max_drawdown.p95 < 0.30
+        self.total_return.p5 > 0.0 && self.sharpe_ratio.p25 > 0.5 && self.max_drawdown.p95 < 0.30
     }
 
     fn __repr__(&self) -> String {

@@ -78,7 +78,10 @@ pub struct PriceBuffer {
 
 impl PriceBuffer {
     pub fn new(capacity: usize) -> Self {
-        Self { bars: VecDeque::with_capacity(capacity.min(1024)), capacity }
+        Self {
+            bars: VecDeque::with_capacity(capacity.min(1024)),
+            capacity,
+        }
     }
 
     pub fn push(&mut self, bar: Bar) {
@@ -129,7 +132,11 @@ impl PriceBuffer {
     /// Extract the most recent `n` volume values.
     pub fn volumes(&self, n: usize) -> Vec<f64> {
         let start = self.bars.len().saturating_sub(n);
-        self.bars.iter().skip(start).map(|b| b.volume as f64).collect()
+        self.bars
+            .iter()
+            .skip(start)
+            .map(|b| b.volume as f64)
+            .collect()
     }
 
     /// Build from a slice of `finance_query::models::Candle` (for historical mode).
@@ -176,10 +183,22 @@ pub trait HasOhlcv {
 }
 
 impl HasOhlcv for finance_query::Candle {
-    fn open(&self) -> f64 { self.open }
-    fn high(&self) -> f64 { self.high }
-    fn low(&self) -> f64 { self.low }
-    fn close(&self) -> f64 { self.close }
-    fn volume(&self) -> i64 { self.volume }
-    fn timestamp(&self) -> i64 { self.timestamp }
+    fn open(&self) -> f64 {
+        self.open
+    }
+    fn high(&self) -> f64 {
+        self.high
+    }
+    fn low(&self) -> f64 {
+        self.low
+    }
+    fn close(&self) -> f64 {
+        self.close
+    }
+    fn volume(&self) -> i64 {
+        self.volume
+    }
+    fn timestamp(&self) -> i64 {
+        self.timestamp
+    }
 }

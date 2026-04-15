@@ -7,12 +7,12 @@
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 
-pub mod types;
-pub mod strategy;
-pub mod results;
 pub mod benchmarks;
 pub mod comparison;
 pub mod data;
+pub mod results;
+pub mod strategy;
+pub mod types;
 pub mod validation;
 
 /// Python module registered as `meridian_py`.

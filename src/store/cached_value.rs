@@ -15,13 +15,19 @@ pub struct CachedValue<T: Clone> {
 #[allow(dead_code)]
 impl<T: Clone> CachedValue<T> {
     pub fn new(value: T) -> Self {
-        Self { value, last_updated: Utc::now() }
+        Self {
+            value,
+            last_updated: Utc::now(),
+        }
     }
 
     /// Returns a new `CachedValue` with the given value and the current timestamp.
     /// Never mutates — always returns a fresh instance.
     pub fn update(&self, value: T) -> Self {
-        Self { value, last_updated: Utc::now() }
+        Self {
+            value,
+            last_updated: Utc::now(),
+        }
     }
 
     pub fn is_stale(&self, max_age: Duration) -> bool {
