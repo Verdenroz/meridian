@@ -40,11 +40,19 @@ class ProjectionHead(nn.Module):
 
 
 class ReturnPredictionHead(nn.Module):
-    """Auxiliary next-return prediction head used in Phase-1 TCP training."""
+    """Auxiliary next-return prediction head used in Phase-1 TCP training.
+
+    Targets are per-bar log-returns at O(1e-3) magnitude. The head is
+    zero-initialised so early predictions start at ~0 instead of the
+    natural Linear init range (~O(1e-1)), avoiding 3-order-of-magnitude
+    MSE blow-up and catastrophic val R² during warmup.
+    """
 
     def __init__(self, d_model: int = 768) -> None:
         super().__init__()
         self.net = nn.Linear(d_model, 1)
+        nn.init.zeros_(self.net.weight)
+        nn.init.zeros_(self.net.bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.net(x).squeeze(-1)
@@ -795,6 +803,25 @@ class SelfSupervisedPretrainer:
         self.projection_head = ProjectionHead(d_model=d_model).to(self.device)
         self.prediction_head = ReturnPredictionHead(d_model=d_model).to(self.device)
 
+        # ── Asset-identity feature mask ──────────────────────────────────────
+        # The 184-dim per-asset vector contains ~110 dims that fingerprint the
+        # asset rather than market state — if fed to the contrastive branch
+        # unchanged, the encoder shortcuts on asset identity and reaches ~99%
+        # contrastive accuracy inside warmup without learning market state.
+        #
+        # Zero the fingerprint dims at input so both the contrastive and
+        # prediction heads see only genuinely time-varying signal. Kept:
+        #   price_volume   [0:10]     technical     [10:52]
+        #   options        [52:64]    event_state   [102:112]
+        #   market-wide    [184:280]
+        # Zeroed:
+        #   fundamental    [64:94]    risk_analytics      [94:102]
+        #   cross_asset    [112:120]  text (MarketReader) [120:184]
+        identity_mask = torch.ones(TOTAL_FEATURE_DIM, dtype=torch.float32)
+        identity_mask[64:102] = 0.0
+        identity_mask[112:184] = 0.0
+        self.identity_mask = identity_mask.to(self.device)
+
         self._all_modules = nn.ModuleList(
             [
                 backbone,
@@ -921,11 +948,18 @@ class SelfSupervisedPretrainer:
         self._all_modules.train()
         metrics = {k: v / max(n, 1) for k, v in totals.items()}
         if pred_values:
-            pred = torch.cat(pred_values)
-            target = torch.cat(target_values)
+            pred = torch.cat(pred_values).to(torch.float32)
+            target = torch.cat(target_values).to(torch.float32)
             sse = torch.sum((pred - target) ** 2)
             sst = torch.sum((target - target.mean()) ** 2)
             metrics["prediction_r2"] = (1.0 - (sse / sst)).item() if sst > 0 else 0.0
+            # Diagnostic: surface scale mismatches so catastrophic R² can be
+            # traced to pred/target distribution rather than modelling failure.
+            print(
+                f"  val pred  mean={pred.mean().item():+.3e} std={pred.std().item():.3e}  "
+                f"target mean={target.mean().item():+.3e} std={target.std().item():.3e}  "
+                f"SSE={sse.item():.4f}  SST={sst.item():.4f}"
+            )
         else:
             metrics["prediction_r2"] = 0.0
         return metrics
@@ -1013,8 +1047,14 @@ class SelfSupervisedPretrainer:
     ) -> dict[str, torch.Tensor]:
         features = features.to(self.device)
         positives = positives.to(self.device)
+        # Read the raw-return target before masking zeros it out (if ever).
         if next_returns is None:
             next_returns = positives[:, -1, RETURN_FEATURE_INDEX]
+        # Mask asset-identity dims (fundamental / risk_analytics / cross_asset /
+        # text) so the contrastive encoder cannot shortcut on asset fingerprints.
+        # RETURN_FEATURE_INDEX=3 is in price_volume [0:10] and remains unmasked.
+        features = features * self.identity_mask
+        positives = positives * self.identity_mask
         next_returns = next_returns.to(self.device).to(torch.float32)
         if asset_ids is not None:
             asset_ids = asset_ids.to(self.device)

@@ -574,40 +574,55 @@ class RAGDNBackbone(nn.Module):
         gdn_idx = fmoe_idx = swa_idx = 0
         new_gdn_states: list[torch.Tensor] = []
         new_swa_states: list[torch.Tensor] = []
-        gdn_ms = fmoe_ms = swa_ms = 0.0
-        total_t0 = time.perf_counter()
+        instrument = self._runtime_instrumentation or self._max_forward_ms is not None
 
-        for block_type in self.block_plan:
-            t0 = time.perf_counter()
-            if block_type == "gdn":
-                x, new_s = self.gdn_blocks[gdn_idx](x, gdn_states[gdn_idx], regime_emb)
-                new_gdn_states.append(new_s)
-                gdn_idx += 1
-                gdn_ms += (time.perf_counter() - t0) * 1e3
-            elif block_type == "fmoe":
-                x = self.fmoe_blocks[fmoe_idx](x, posteriors)
-                fmoe_idx += 1
-                fmoe_ms += (time.perf_counter() - t0) * 1e3
-            else:  # swa
-                x, new_cache = self.swa_blocks[swa_idx](x, swa_states[swa_idx])
-                new_swa_states.append(new_cache)
-                swa_idx += 1
-                swa_ms += (time.perf_counter() - t0) * 1e3
+        if instrument:
+            gdn_ms = fmoe_ms = swa_ms = 0.0
+            total_t0 = time.perf_counter()
+            for block_type in self.block_plan:
+                t0 = time.perf_counter()
+                if block_type == "gdn":
+                    x, new_s = self.gdn_blocks[gdn_idx](x, gdn_states[gdn_idx], regime_emb)
+                    new_gdn_states.append(new_s)
+                    gdn_idx += 1
+                    gdn_ms += (time.perf_counter() - t0) * 1e3
+                elif block_type == "fmoe":
+                    x = self.fmoe_blocks[fmoe_idx](x, posteriors)
+                    fmoe_idx += 1
+                    fmoe_ms += (time.perf_counter() - t0) * 1e3
+                else:  # swa
+                    x, new_cache = self.swa_blocks[swa_idx](x, swa_states[swa_idx])
+                    new_swa_states.append(new_cache)
+                    swa_idx += 1
+                    swa_ms += (time.perf_counter() - t0) * 1e3
+            total_ms = (time.perf_counter() - total_t0) * 1e3
+            if self._runtime_instrumentation:
+                self._last_runtime_metrics = {
+                    "gdn_ms": gdn_ms,
+                    "fmoe_ms": fmoe_ms,
+                    "swa_ms": swa_ms,
+                    "total_ms": total_ms,
+                    "n_gdn_blocks": float(self._n_gdn_states),
+                    "n_swa_blocks": float(self._n_swa_states),
+                }
+            if self._max_forward_ms is not None and total_ms > self._max_forward_ms:
+                raise RuntimeError(
+                    f"backbone forward time {total_ms:.3f} ms exceeded guardrail {self._max_forward_ms:.3f} ms"
+                )
+        else:
+            for block_type in self.block_plan:
+                if block_type == "gdn":
+                    x, new_s = self.gdn_blocks[gdn_idx](x, gdn_states[gdn_idx], regime_emb)
+                    new_gdn_states.append(new_s)
+                    gdn_idx += 1
+                elif block_type == "fmoe":
+                    x = self.fmoe_blocks[fmoe_idx](x, posteriors)
+                    fmoe_idx += 1
+                else:  # swa
+                    x, new_cache = self.swa_blocks[swa_idx](x, swa_states[swa_idx])
+                    new_swa_states.append(new_cache)
+                    swa_idx += 1
 
-        total_ms = (time.perf_counter() - total_t0) * 1e3
-        if self._runtime_instrumentation:
-            self._last_runtime_metrics = {
-                "gdn_ms": gdn_ms,
-                "fmoe_ms": fmoe_ms,
-                "swa_ms": swa_ms,
-                "total_ms": total_ms,
-                "n_gdn_blocks": float(self._n_gdn_states),
-                "n_swa_blocks": float(self._n_swa_states),
-            }
-        if self._max_forward_ms is not None and total_ms > self._max_forward_ms:
-            raise RuntimeError(
-                f"backbone forward time {total_ms:.3f} ms exceeded guardrail {self._max_forward_ms:.3f} ms"
-            )
         return x, new_gdn_states + new_swa_states
 
     def init_state(

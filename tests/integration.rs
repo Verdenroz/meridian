@@ -47,7 +47,10 @@ async fn test_ticker_quote() {
 async fn test_ticker_indicators() {
     use finance_query::{Interval, TimeRange};
     let ticker = finance_query::Ticker::new(TEST_SYMBOL).await.unwrap();
-    let summary = ticker.indicators(Interval::OneDay, TimeRange::OneYear).await.unwrap();
+    let summary = ticker
+        .indicators(Interval::OneDay, TimeRange::OneYear)
+        .await
+        .unwrap();
     // Check that at least some indicators were computed
     assert!(
         summary.sma_10.is_some() || summary.ema_20.is_some() || summary.rsi_14.is_some(),
@@ -66,7 +69,10 @@ async fn test_ticker_options() {
     let opts = ticker.options(None).await.unwrap();
     let calls = opts.calls();
     let puts = opts.puts();
-    assert!(!calls.is_empty() || !puts.is_empty(), "no options contracts returned");
+    assert!(
+        !calls.is_empty() || !puts.is_empty(),
+        "no options contracts returned"
+    );
     println!(
         "{TEST_SYMBOL} options: {} calls, {} puts",
         calls.len(),
@@ -79,7 +85,10 @@ async fn test_ticker_options() {
 async fn test_ticker_risk() {
     use finance_query::{Interval, TimeRange};
     let ticker = finance_query::Ticker::new(TEST_SYMBOL).await.unwrap();
-    let risk = ticker.risk(Interval::OneDay, TimeRange::OneYear, Some("SPY")).await.unwrap();
+    let risk = ticker
+        .risk(Interval::OneDay, TimeRange::OneYear, Some("SPY"))
+        .await
+        .unwrap();
     assert!(risk.max_drawdown >= 0.0 && risk.max_drawdown <= 1.0);
     assert!(risk.var_95 >= 0.0);
     println!(
@@ -96,19 +105,29 @@ async fn test_ticker_news() {
     let ticker = finance_query::Ticker::new(TEST_SYMBOL).await.unwrap();
     let news = ticker.news().await.unwrap();
     assert!(!news.is_empty(), "no news articles returned");
-    println!("{TEST_SYMBOL} news: {} articles, latest: {:?}", news.len(), news[0].title);
+    println!(
+        "{TEST_SYMBOL} news: {} articles, latest: {:?}",
+        news.len(),
+        news[0].title
+    );
 }
 
 #[tokio::test]
 #[ignore]
 async fn test_ticker_chart_range() {
-    use finance_query::{Interval, Ticker};
     use chrono::{Duration, Utc};
+    use finance_query::{Interval, Ticker};
     let ticker = Ticker::new(TEST_SYMBOL).await.unwrap();
     let end = Utc::now().timestamp();
     let start = (Utc::now() - Duration::days(5)).timestamp();
-    let chart = ticker.chart_range(Interval::OneHour, start, end).await.unwrap();
-    assert!(!chart.candles.is_empty(), "no candles returned for 5d/1h chart");
+    let chart = ticker
+        .chart_range(Interval::OneHour, start, end)
+        .await
+        .unwrap();
+    assert!(
+        !chart.candles.is_empty(),
+        "no candles returned for 5d/1h chart"
+    );
     println!("{TEST_SYMBOL} chart: {} 1h candles", chart.candles.len());
 }
 
@@ -121,7 +140,10 @@ async fn test_poller_market_world_indices() {
     market::poll_world_indices(&store).await.unwrap();
     let wi = store.world_indices.read();
     // At least some index values should be non-zero during market hours
-    println!("World indices spot-check: dxy={:.2} gold={:.2}", wi.value.dxy, wi.value.gold);
+    println!(
+        "World indices spot-check: dxy={:.2} gold={:.2}",
+        wi.value.dxy, wi.value.gold
+    );
 }
 
 #[tokio::test]
@@ -131,7 +153,10 @@ async fn test_poller_market_fear_greed() {
     market::poll_fear_greed(&store).await.unwrap();
     let fg = store.fear_greed.read();
     assert!(fg.value.value >= 0.0 && fg.value.value <= 100.0);
-    println!("Fear & Greed: {:.1} ({})", fg.value.value, fg.value.classification);
+    println!(
+        "Fear & Greed: {:.1} ({})",
+        fg.value.value, fg.value.classification
+    );
 }
 
 #[tokio::test]
@@ -171,7 +196,12 @@ async fn test_poller_macro_fred_series() {
     let store = make_store(TEST_SYMBOLS);
     macro_fred::poll_fred_macro(&store).await.unwrap();
     let macro_data = store.fred_macro.read();
-    let nonzero = macro_data.value.values.iter().filter(|&&v| v != 0.0).count();
+    let nonzero = macro_data
+        .value
+        .values
+        .iter()
+        .filter(|&&v| v != 0.0)
+        .count();
     assert!(nonzero > 0, "all FRED series returned zero");
     println!("FRED macro: {nonzero}/12 series non-zero");
 }
@@ -235,16 +265,19 @@ async fn test_poller_analyst() {
 #[tokio::test]
 #[ignore]
 async fn test_feature_assembly_shape() {
-    use meridian::features::FeatureRow;
     use finance_query::{Interval, Ticker, TimeRange};
-    use meridian::store::{PriceBuffer, Bar};
+    use meridian::features::FeatureRow;
+    use meridian::store::{Bar, PriceBuffer};
 
     let store = make_store(TEST_SYMBOLS);
 
     // Warm up price buffers from 1-day history
     for sym in TEST_SYMBOLS {
         let ticker = Ticker::new(*sym).await.unwrap();
-        let chart = ticker.chart(Interval::OneMinute, TimeRange::OneDay).await.unwrap();
+        let chart = ticker
+            .chart(Interval::OneMinute, TimeRange::OneDay)
+            .await
+            .unwrap();
         let mut buf = PriceBuffer::new(512);
         for c in &chart.candles {
             buf.push(Bar {
@@ -264,18 +297,30 @@ async fn test_feature_assembly_shape() {
 
     for row in &rows {
         // Every array dimension must match spec
-        assert_eq!(row.price_volume.len(),        10, "{} price_volume dim",    row.symbol);
-        assert_eq!(row.technical.len(),           42, "{} technical dim",       row.symbol);
-        assert_eq!(row.options.len(),             12, "{} options dim",         row.symbol);
-        assert_eq!(row.fundamental.len(),         30, "{} fundamental dim",     row.symbol);
-        assert_eq!(row.risk_analytics.len(),       8, "{} risk dim",            row.symbol);
-        assert_eq!(row.event_state.len(),         10, "{} event_state dim",     row.symbol);
-        assert_eq!(row.cross_asset_context.len(),  8, "{} cross_asset dim",     row.symbol);
-        assert_eq!(row.text.len(),                64, "{} text dim",            row.symbol);
-        assert_eq!(row.market.len(),              96, "{} market dim",          row.symbol);
+        assert_eq!(
+            row.price_volume.len(),
+            10,
+            "{} price_volume dim",
+            row.symbol
+        );
+        assert_eq!(row.technical.len(), 42, "{} technical dim", row.symbol);
+        assert_eq!(row.options.len(), 12, "{} options dim", row.symbol);
+        assert_eq!(row.fundamental.len(), 30, "{} fundamental dim", row.symbol);
+        assert_eq!(row.risk_analytics.len(), 8, "{} risk dim", row.symbol);
+        assert_eq!(row.event_state.len(), 10, "{} event_state dim", row.symbol);
+        assert_eq!(
+            row.cross_asset_context.len(),
+            8,
+            "{} cross_asset dim",
+            row.symbol
+        );
+        assert_eq!(row.text.len(), 64, "{} text dim", row.symbol);
+        assert_eq!(row.market.len(), 96, "{} market dim", row.symbol);
 
         // No NaN / Inf in any block
-        let all: Vec<f32> = row.price_volume.iter()
+        let all: Vec<f32> = row
+            .price_volume
+            .iter()
             .chain(row.technical.iter())
             .chain(row.options.iter())
             .chain(row.fundamental.iter())
@@ -285,16 +330,23 @@ async fn test_feature_assembly_shape() {
             .chain(row.market.iter())
             .copied()
             .collect();
-        let bad: Vec<(usize, f32)> = all.iter().enumerate()
+        let bad: Vec<(usize, f32)> = all
+            .iter()
+            .enumerate()
             .filter(|(_, v)| v.is_nan() || v.is_infinite())
             .map(|(i, v)| (i, *v))
             .collect();
-        assert!(bad.is_empty(), "{} has NaN/Inf at indices {:?}", row.symbol, bad);
+        assert!(
+            bad.is_empty(),
+            "{} has NaN/Inf at indices {:?}",
+            row.symbol,
+            bad
+        );
 
         println!(
             "{}: price={:.2} tech[0]={:.4} mkt[0]={:.4}",
             row.symbol,
-            row.price_volume[3],  // close return
+            row.price_volume[3], // close return
             row.technical[0],
             row.market[0]
         );
