@@ -78,11 +78,18 @@ def infer_regime_label(feature_seq: np.ndarray) -> int:
 
 
 def _shard_returns(path: Path) -> np.ndarray:
-    """Load the per-row log-return series from a .f32bin shard as float64."""
+    """Load [return, |return|] as 2-D HMM features for vol-regime separation.
+
+    A 1-D return-only feature collapses high-vol-bull and high-vol-bear into
+    ambiguous clusters, leaving the HMM unable to separate vol regimes from
+    directional bias. Adding |return| gives EM a clean volatility axis so all
+    four canonical regimes receive meaningful probability mass.
+    """
     raw = np.memmap(path, dtype="float32", mode="r")
     n_rows = raw.size // TOTAL_FEATURE_DIM
     data = raw.reshape(n_rows, TOTAL_FEATURE_DIM)
-    return data[:, RETURN_FEATURE_INDEX].reshape(-1, 1).astype(np.float64)
+    returns = data[:, RETURN_FEATURE_INDEX].astype(np.float64)
+    return np.column_stack([returns, np.abs(returns)])
 
 
 def _canonicalize_hmm(
@@ -90,26 +97,26 @@ def _canonicalize_hmm(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Map raw HMM state integers to the spec's canonical regime IDs.
 
-    Canonicalization rules (spec §11.3):
+    Canonicalization rules (spec §11.3) for 2-D [return, |return|] features:
       0 = low-vol bull      → highest mean return
-      1 = high-vol trending → higher vol of the two middle states
-      2 = mean-reverting    → lower vol of the two middle states
+      1 = high-vol trending → higher mean |return| of the two middle states
+      2 = mean-reverting    → lower mean |return| of the two middle states
       3 = crisis            → lowest mean return
 
     Returns (remap, canonical_labels) where remap[raw_state] = canonical_id.
     """
-    means = hmm.means_.flatten()  # type: ignore[attr-defined]
-    stds = np.sqrt(hmm.covars_.flatten())  # type: ignore[attr-defined]
-    n = len(means)
-    mean_order = np.argsort(-means)  # descending: index 0 = highest-mean state
+    means = hmm.means_  # type: ignore[attr-defined]  shape (n_states, 2)
+    mean_ret = means[:, 0]  # mean log-return per state
+    mean_abs = means[:, 1]  # mean |return| — volatility proxy
+    n = len(mean_ret)
+    mean_order = np.argsort(-mean_ret)  # descending: highest mean → index 0
 
     remap = np.empty(n, dtype=np.int64)
-    remap[mean_order[0]] = 0  # highest mean → bull
-    remap[mean_order[-1]] = 3  # lowest mean  → crisis
-    # Middle states: sort by vol desc → high-vol trending first
-    mid = sorted(mean_order[1:-1].tolist(), key=lambda s: -stds[s])
-    remap[mid[0]] = 1  # higher vol → high-vol trending
-    remap[mid[1]] = 2  # lower vol  → mean-reverting
+    remap[mean_order[0]] = 0   # highest mean return → bull
+    remap[mean_order[-1]] = 3  # lowest mean return  → crisis
+    mid = sorted(mean_order[1:-1].tolist(), key=lambda s: -mean_abs[s])
+    remap[mid[0]] = 1  # higher |return| → high-vol trending
+    remap[mid[1]] = 2  # lower  |return| → mean-reverting
 
     return remap, remap[raw_labels]
 
@@ -161,7 +168,7 @@ def build_spy_regime_labels(
     hmm = GaussianHMM(
         n_components=n_states,
         covariance_type="diag",
-        n_iter=200,
+        n_iter=500,
         random_state=42,
         verbose=False,
     )
