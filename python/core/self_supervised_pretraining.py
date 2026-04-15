@@ -417,6 +417,8 @@ def build_dataloader(
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
 
 
@@ -943,6 +945,32 @@ class SelfSupervisedPretrainer:
         episodic_tok = torch.zeros(B, 8, 768, device=self.device)
         states = self.backbone.init_state(B, n_assets, self.device)
 
+        # ── Vectorize InputProjection over T (#3) ────────────────────────────
+        # InputProjection is stateless across time, so we run all T steps in one
+        # call by flattening (B, T) → (B*T). Numerically identical to looping.
+        asset_in = asset_feats.reshape(B * T, n_assets, -1)  # (B*T, 1, 184)
+        market_in = market_feats.reshape(B * T, -1)  # (B*T, 96)
+        portfolio_in = portfolio_s.unsqueeze(1).expand(B, T, -1).reshape(B * T, -1)
+        calendar_in = calendar.unsqueeze(1).expand(B, T, -1).reshape(B * T, -1)
+        regime_in = regime_emb.unsqueeze(1).expand(B, T, -1).reshape(B * T, -1)
+        asset_tok_all, mkt_tok_all, port_tok_all, _ = self.input_projection(
+            asset_in, market_in, portfolio_in, calendar_in, regime_in
+        )
+        D = asset_tok_all.shape[-1]
+        asset_tok_all = asset_tok_all.view(B, T, n_assets, D)
+        mkt_tok_all = mkt_tok_all.view(B, T, D)
+        port_tok_all = port_tok_all.view(B, T, D)
+
+        # ── Precompute fusion sector bias once (#5) ──────────────────────────
+        # Sector bias is a function of constant sector_ids and N_total tokens.
+        # Compute once, reuse for all T fusion calls.
+        n_total = n_assets + 2 + episodic_tok.shape[1]  # assets + market + port + episodic
+        extra_ids = torch.full(
+            (n_total - n_assets,), -1, dtype=torch.long, device=self.device
+        )
+        full_ids = torch.cat([sector_ids, extra_ids], dim=0)
+        precomputed_bias = self.fusion.sector_bias.bias_matrix(full_ids, n_total)
+
         pooled_steps: list[torch.Tensor] = []
         for t in range(T):
             # Truncated BPTT: detach recurrent state every `bptt_horizon` steps
@@ -950,13 +978,18 @@ class SelfSupervisedPretrainer:
             # bptt_horizon=0 keeps the default full-sequence BPTT.
             if self.bptt_horizon > 0 and t > 0 and t % self.bptt_horizon == 0:
                 states = [s.detach() for s in states]
-            af_t = asset_feats[:, t]  # (B, 1, 184)
-            mf_t = market_feats[:, t]  # (B, 96)
-            asset_tok, mkt_tok, port_tok, _ = self.input_projection(
-                af_t, mf_t, portfolio_s, calendar, regime_emb
-            )
+            asset_tok = asset_tok_all[:, t]  # (B, 1, D)
+            mkt_tok = mkt_tok_all[:, t]  # (B, D)
+            port_tok = port_tok_all[:, t]  # (B, D)
             out, states = self.backbone(asset_tok, regime_emb, posteriors, states)
-            fused, _ = self.fusion(out, mkt_tok, port_tok, episodic_tok, sector_ids)
+            fused, _ = self.fusion(
+                out,
+                mkt_tok,
+                port_tok,
+                episodic_tok,
+                sector_ids,
+                precomputed_bias=precomputed_bias,
+            )
             pooled_steps.append(fused.squeeze(1))  # (B, D)
 
         return torch.stack(pooled_steps, dim=1).mean(dim=1)  # (B, D)
@@ -1041,7 +1074,10 @@ class SelfSupervisedPretrainer:
         resume_from: Path | None = None,
     ) -> None:
         optimizer = torch.optim.AdamW(
-            self._all_modules.parameters(), lr=cfg.lr, weight_decay=0.01
+            self._all_modules.parameters(),
+            lr=cfg.lr,
+            weight_decay=0.01,
+            fused=(self.device.type == "cuda"),
         )
         scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer, lr_lambda=lambda step: self._cosine_lr(step, cfg)

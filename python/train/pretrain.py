@@ -183,7 +183,7 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--eval-every", type=int, default=1_000)
     parser.add_argument("--save-every", type=int, default=5_000)
-    parser.add_argument("--eval-max-batches", type=int, default=50)
+    parser.add_argument("--eval-max-batches", type=int, default=25)
     parser.add_argument(
         "--temperature", type=float, default=DEFAULT_SPEC.tcp_temperature
     )
@@ -246,6 +246,10 @@ def main() -> None:
         args.workers = 0  # no multiprocessing in smoke mode
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if device.type == "cuda":
+        # TF32 for the fp32 matmul paths outside bf16 autocast (norms, residuals,
+        # some attention math). Free ~10–30% on Ampere/Hopper, no quality impact.
+        torch.set_float32_matmul_precision("high")
     spec = DEFAULT_SPEC
     spec.validate()
 
