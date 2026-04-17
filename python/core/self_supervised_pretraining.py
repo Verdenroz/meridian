@@ -1117,8 +1117,20 @@ class SelfSupervisedPretrainer:
         val_loader: DataLoader | None = None,
         resume_from: Path | None = None,
     ) -> None:
+        # Prediction head sits on near-unpredictable log-return targets; at the
+        # backbone lr it chases batch-mean drift and oscillates. Give it a 10×
+        # lower lr so it settles on the optimal constant (predict ≈ 0) and only
+        # moves off it when backbone features carry real signal.
+        pred_head_params = list(self.prediction_head.parameters())
+        pred_head_ids = {id(p) for p in pred_head_params}
+        other_params = [
+            p for p in self._all_modules.parameters() if id(p) not in pred_head_ids
+        ]
         optimizer = torch.optim.AdamW(
-            self._all_modules.parameters(),
+            [
+                {"params": other_params, "lr": cfg.lr},
+                {"params": pred_head_params, "lr": cfg.lr * 0.1},
+            ],
             lr=cfg.lr,
             weight_decay=0.01,
             fused=(self.device.type == "cuda"),
@@ -1135,8 +1147,31 @@ class SelfSupervisedPretrainer:
         if resume_from is not None and resume_from.exists():
             ckpt = load_checkpoint(resume_from)
             self._load_model_state(ckpt.model_state)
-            optimizer.load_state_dict(ckpt.optimizer_state)
-            scheduler.load_state_dict(ckpt.scheduler_state)
+            # Optimizer state may not fit if param groups changed between runs
+            # (e.g. prediction head moved to its own group). Skip cleanly so the
+            # run resumes with fresh Adam moments; model weights are unaffected.
+            groups_match = len(ckpt.optimizer_state.get("param_groups", [])) == len(
+                optimizer.param_groups
+            )
+            if groups_match:
+                try:
+                    optimizer.load_state_dict(ckpt.optimizer_state)
+                    scheduler.load_state_dict(ckpt.scheduler_state)
+                except (ValueError, RuntimeError) as e:
+                    print(
+                        f"Optimizer/scheduler state load failed ({e}); "
+                        f"continuing with fresh Adam moments."
+                    )
+            else:
+                print(
+                    f"Optimizer param groups changed since checkpoint "
+                    f"({len(ckpt.optimizer_state.get('param_groups', []))} "
+                    f"→ {len(optimizer.param_groups)}); continuing with "
+                    f"fresh Adam moments and scheduler state."
+                )
+                # Advance scheduler to match resume step so warmup/cosine align.
+                for _ in range(ckpt.step):
+                    scheduler.step()
             start_step = ckpt.step
             best_val_loss = ckpt.best_val_loss
             best_val_contrastive_acc = ckpt.best_val_contrastive_acc
