@@ -1056,6 +1056,10 @@ class SelfSupervisedPretrainer:
         features = features * self.identity_mask
         positives = positives * self.identity_mask
         next_returns = next_returns.to(self.device).to(torch.float32)
+        # Scale raw log-returns (~1e-2 std) by 10 so the prediction MSE carries
+        # a real gradient signal without overwhelming the contrastive term at
+        # spec-mandated λ_p=0.3. R² is scale-invariant.
+        next_returns = next_returns * 10.0
         if asset_ids is not None:
             asset_ids = asset_ids.to(self.device)
         if regime_ids is not None:
