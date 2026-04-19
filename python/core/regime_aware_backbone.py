@@ -275,22 +275,48 @@ class SlidingWindowAttention(nn.Module):
         residual = x
         x = self.norm(x)
         B, N, D = x.shape
+        H = self.attn.num_heads
+        Dh = D // H
 
         seq = torch.cat([cache, x.unsqueeze(2)], dim=2)  # (B, N, W+1, D)
         seq_flat = seq.reshape(B * N, self.window + 1, D)
-        q = x.reshape(B * N, 1, D)
+        q_in = x.reshape(B * N, 1, D)
 
-        # Early timesteps have zero-padded cache entries. Mask these so attention
-        # uses only populated history + current token.
-        key_padding_mask = seq_flat.abs().sum(dim=-1).eq(0.0)
-        out, _ = self.attn(
-            q,
-            seq_flat,
-            seq_flat,
-            key_padding_mask=key_padding_mask,
-            need_weights=False,
-        )
+        # Direct F.scaled_dot_product_attention call routes to Flash/efficient
+        # backends (nn.MultiheadAttention with key_padding_mask falls back to the
+        # slow math kernel). Reuses the same QKV / out_proj weights so training
+        # semantics are unchanged.
+        in_w = self.attn.in_proj_weight
+        in_b = self.attn.in_proj_bias
+        w_q, w_k, w_v = in_w[:D], in_w[D : 2 * D], in_w[2 * D :]
+        if in_b is not None:
+            b_q, b_k, b_v = in_b[:D], in_b[D : 2 * D], in_b[2 * D :]
+        else:
+            b_q = b_k = b_v = None
+
+        q = F.linear(q_in, w_q, b_q)            # (BN, 1, D)
+        k = F.linear(seq_flat, w_k, b_k)        # (BN, W+1, D)
+        v = F.linear(seq_flat, w_v, b_v)        # (BN, W+1, D)
+
+        q = q.view(B * N, 1, H, Dh).transpose(1, 2)                  # (BN, H, 1, Dh)
+        k = k.view(B * N, self.window + 1, H, Dh).transpose(1, 2)    # (BN, H, W+1, Dh)
+        v = v.view(B * N, self.window + 1, H, Dh).transpose(1, 2)
+
+        # Early timesteps have zero-padded cache entries. Boolean SDPA mask:
+        # True = attend. key_padding_mask is True where the key is padded, so
+        # invert.
+        key_pad = seq_flat.abs().sum(dim=-1).eq(0.0)                 # (BN, W+1)
+        attn_mask = (~key_pad).unsqueeze(1).unsqueeze(2)             # (BN, 1, 1, W+1)
+
+        dropout_p = self.attn.dropout if self.training else 0.0
+        out = F.scaled_dot_product_attention(
+            q, k, v, attn_mask=attn_mask, dropout_p=dropout_p
+        )  # (BN, H, 1, Dh)
+
+        out = out.transpose(1, 2).contiguous().view(B * N, 1, D)
+        out = F.linear(out, self.attn.out_proj.weight, self.attn.out_proj.bias)
         out = out.reshape(B, N, D)
+
         new_cache = torch.cat([cache[:, :, 1:, :], x.unsqueeze(2)], dim=2)
         return residual + self.drop(out), new_cache
 

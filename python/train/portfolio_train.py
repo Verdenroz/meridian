@@ -33,6 +33,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import math
 import re
 import struct
@@ -41,6 +42,8 @@ import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
+
+logger = logging.getLogger(__name__)
 
 import numpy as np
 import torch
@@ -644,6 +647,8 @@ def build_portfolio_loader(
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
 
 
@@ -745,6 +750,8 @@ def build_synthetic_portfolio_loader(
         batch_size=batch_size,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
     )
 
 
@@ -779,11 +786,18 @@ class PortfolioTrainConfig:
     save_every: int = 5_000
     checkpoint_dir: Path = field(default_factory=lambda: Path("checkpoints/portfolio"))
     bptt_chunk: int = 16  # truncated BPTT chunk length (0 = full seq)
+    # PTA §11.4b expands B up to 10× (1 orig + 4 perms + 1 sign + 4 vol scales).
+    # At N=100 this overflows 80GB. Micro-batching splits the expanded batch
+    # into groups, forward+backward each, and accumulates gradients — bit-exact
+    # identical to a single large forward because every loss term reduces
+    # independently along the PTA batch axis. 0 = no micro-batching.
+    pta_micro_batch_size: int = 0
     patience_steps: int = 200  # early stopping threshold measured in training steps
     freeze_backbone_steps: int = 500
     backbone_lr_scale: float = 0.1
     gradient_checkpointing: bool = False
     compile: bool = False  # torch.compile the backbone (2-4x faster, ~60s warmup)
+    debug: bool = False  # enable verbose diagnostics (memory traces, per-group peaks)
 
     @property
     def best_path(self) -> Path:
@@ -1202,17 +1216,15 @@ class PortfolioTrainer:
             B, self.spec.n_episodic_retrievals, self.spec.d_model, device=self.device
         )
 
-        # Regime detector state (updated each timestep)
+        # Regime detector state (updated each timestep). Initialize prev_regime_emb
+        # to zeros (instead of None) so it can be passed as a tensor through
+        # torch.utils.checkpoint — matches the cross-asset warm-up path.
         regime_ema = torch.zeros(B, self.spec.regime_emb_dim, device=self.device)
-        prev_regime_emb = None
+        prev_regime_emb = torch.zeros(B, self.spec.regime_emb_dim, device=self.device)
         prev_port_return = torch.zeros(B, device=self.device)
         portfolio_value = torch.ones(B, device=self.device)
 
         states = self.backbone.init_state(B, N, self.device)
-
-        all_weights: list[torch.Tensor] = []
-        all_vol_preds: list[torch.Tensor] = []
-        all_fused: list[torch.Tensor] = []
 
         # Validate and initialize portfolio-state buffers once per sequence.
         n_full = self.spec.n_assets  # 100
@@ -1239,86 +1251,191 @@ class PortfolioTrainer:
             full_ids = torch.cat([sector_ids, extra_ids], dim=0)
             precomputed_bias = self.fusion.sector_bias.bias_matrix(full_ids, n_total)
 
-        for t in range(T):
-            af_t = asset_feats[:, :, t, :]  # (B, N, 184)
-            mf_t = mkt_mean[:, t, :]  # (B, 96)
+        # Chunked T-loop with activation checkpointing. Each chunk rematerialises
+        # its per-step backbone/SWA/fusion/head activations during backward; only
+        # the per-step outputs (weights, vol preds, fused) are retained for the
+        # DSR loss. Semantically identical to the previous non-chunked loop with
+        # bptt_chunk-based state detach — we just move the detach and the
+        # checkpoint boundary to the same place. Memory saving scales with
+        # T / chunk_size.
+        def _run_chunk(
+            af_chunk: torch.Tensor,           # (B, N, K, 184)
+            mf_chunk: torch.Tensor,           # (B, K, 96)
+            portfolio_s_in: torch.Tensor,
+            regime_ema_in: torch.Tensor,
+            prev_regime_emb_in: torch.Tensor,
+            prev_port_return_in: torch.Tensor,
+            portfolio_value_in: torch.Tensor,
+            asset_cum_log_returns_in: torch.Tensor,
+            *state_tensors: torch.Tensor,
+        ) -> tuple[torch.Tensor, ...]:
+            local_states = list(state_tensors)
+            ps = portfolio_s_in
+            r_ema = regime_ema_in
+            prev_r = prev_regime_emb_in
+            prev_pr = prev_port_return_in
+            pv = portfolio_value_in
+            acum = asset_cum_log_returns_in
+            Bc, Nc, K, _ = af_chunk.shape
 
-            # Regime detection: market features + portfolio summary → regime_emb, posteriors
-            portfolio_value = portfolio_value * (1.0 + prev_port_return)
-            portfolio_summary = torch.stack(
-                [
-                    portfolio_value,
+            w_list: list[torch.Tensor] = []
+            v_list: list[torch.Tensor] = []
+            f_list: list[torch.Tensor] = []
+
+            # Hoist allocations that are constant across the T-loop.
+            ones_Bc = torch.ones(Bc, device=af_chunk.device, dtype=af_chunk.dtype)
+            no_pad = Nc == n_full  # skip F.pad no-ops (N==n_full in portfolio training)
+
+            for k in range(K):
+                af_t = af_chunk[:, :, k, :]
+                mf_t = mf_chunk[:, k, :]
+
+                pv = pv * (1.0 + prev_pr)
+                portfolio_summary = torch.stack(
+                    [pv, prev_pr, ones_Bc],
+                    dim=-1,
+                )
+                regime_emb, posteriors, _ = self.regime_detector(
+                    mf_t, portfolio_summary, r_ema, prev_r
+                )
+                r_ema = (0.98 * r_ema + 0.02 * regime_emb).detach()
+                prev_r = regime_emb.detach()
+
+                asset_tok, mkt_tok, port_tok, _ = self.input_projection(
+                    af_t, mf_t, ps, calendar, regime_emb
+                )
+                out, local_states = self.backbone(
+                    asset_tok, regime_emb, posteriors, local_states
+                )
+                fused, mkt_out = self.fusion(
+                    out,
+                    mkt_tok,
+                    port_tok,
+                    episodic,
+                    sector_ids,
+                    precomputed_bias=precomputed_bias,
+                )
+
+                if collect_fused:
+                    f_list.append(fused)
+
+                if head == "return":
+                    w_t = self.head_r(fused)
+                else:
+                    w_t = self.head_s(fused)
+                w_list.append(w_t)
+
+                if head == "return":
+                    v_list.append(self.vol_head(mkt_out))
+
+                w_det = w_t.detach()
+                asset_log_ret_det = af_t[:, :, 3].detach()
+                if no_pad:
+                    w_padded = w_det
+                    asset_step_log_returns = asset_log_ret_det
+                else:
+                    w_padded = F.pad(w_det, (0, n_full - Nc))
+                    asset_step_log_returns = F.pad(asset_log_ret_det, (0, n_full - Nc))
+                acum = acum + asset_step_log_returns
+                unrealized_pnl = torch.expm1(acum)
+                step_port_return = (w_t.detach() * af_t[:, :, 3]).sum(dim=-1)
+                next_pv = pv * (1.0 + step_port_return)
+                pv_log = next_pv.clamp(min=1e-6).log().unsqueeze(-1)
+                ps = torch.cat([w_padded, unrealized_pnl, pv_log], dim=-1)
+                prev_pr = step_port_return
+
+            w_stack = torch.stack(w_list, dim=1)  # (B, K, N)
+            v_stack = (
+                torch.stack(v_list, dim=1)
+                if v_list
+                else torch.zeros(0, device=w_stack.device, dtype=w_stack.dtype)
+            )
+            f_stack = (
+                torch.stack(f_list, dim=1)
+                if f_list
+                else torch.zeros(0, device=w_stack.device, dtype=w_stack.dtype)
+            )
+            return (
+                w_stack,
+                v_stack,
+                f_stack,
+                ps,
+                r_ema,
+                prev_r,
+                prev_pr,
+                pv,
+                acum,
+                *local_states,
+            )
+
+        chunk_size = bptt_chunk if bptt_chunk > 0 else T
+        use_checkpoint = bptt_chunk > 0 and torch.is_grad_enabled()
+
+        all_weights: list[torch.Tensor] = []
+        all_vol_preds: list[torch.Tensor] = []
+        all_fused: list[torch.Tensor] = []
+
+        for t0 in range(0, T, chunk_size):
+            t1 = min(t0 + chunk_size, T)
+            af_chunk = asset_feats[:, :, t0:t1, :]
+            mf_chunk = mkt_mean[:, t0:t1, :]
+
+            # Detach recurrent state at the chunk boundary so the backward graph
+            # covers at most one chunk — same semantics as the old bptt_chunk
+            # in-place detach, just hoisted out of the inner loop.
+            states = [s.detach() for s in states]
+            portfolio_s = portfolio_s.detach()
+            regime_ema = regime_ema.detach()
+            prev_regime_emb = prev_regime_emb.detach()
+            prev_port_return = prev_port_return.detach()
+            portfolio_value = portfolio_value.detach()
+            asset_cum_log_returns = asset_cum_log_returns.detach()
+
+            if use_checkpoint:
+                result = _activation_checkpoint(
+                    _run_chunk,
+                    af_chunk,
+                    mf_chunk,
+                    portfolio_s,
+                    regime_ema,
+                    prev_regime_emb,
                     prev_port_return,
-                    torch.ones(B, device=self.device),  # leverage (1.0 for long-only)
-                ],
-                dim=-1,
-            )  # (B, 3)
-            regime_emb, posteriors, _ = self.regime_detector(
-                mf_t,
-                portfolio_summary,
-                regime_ema,
-                prev_regime_emb,
-            )
-            regime_ema = (0.98 * regime_ema + 0.02 * regime_emb).detach()
-            prev_regime_emb = regime_emb.detach()
-
-            asset_tok, mkt_tok, port_tok, _ = self.input_projection(
-                af_t, mf_t, portfolio_s, calendar, regime_emb
-            )
-            out, states = self.backbone(asset_tok, regime_emb, posteriors, states)
-            fused, mkt_out = self.fusion(
-                out,
-                mkt_tok,
-                port_tok,
-                episodic,
-                sector_ids,
-                precomputed_bias=precomputed_bias,
-            )
-            if collect_fused:
-                all_fused.append(fused)
-
-            # Portfolio head
-            if head == "return":
-                w_t = self.head_r(fused)  # (B, N)
+                    portfolio_value,
+                    asset_cum_log_returns,
+                    *states,
+                    use_reentrant=False,
+                )
             else:
-                w_t = self.head_s(fused)  # (B, N)
+                result = _run_chunk(
+                    af_chunk,
+                    mf_chunk,
+                    portfolio_s,
+                    regime_ema,
+                    prev_regime_emb,
+                    prev_port_return,
+                    portfolio_value,
+                    asset_cum_log_returns,
+                    *states,
+                )
 
-            all_weights.append(w_t)
+            w_stack, v_stack, f_stack = result[0], result[1], result[2]
+            portfolio_s = result[3]
+            regime_ema = result[4]
+            prev_regime_emb = result[5]
+            prev_port_return = result[6]
+            portfolio_value = result[7]
+            asset_cum_log_returns = result[8]
+            states = list(result[9:])
 
-            # Volatility auxiliary: predict portfolio vol from market token
-            if head == "return":
-                all_vol_preds.append(self.vol_head(mkt_out))  # (B, horizon)
+            all_weights.append(w_stack)
+            if head == "return" and v_stack.numel() > 0:
+                all_vol_preds.append(v_stack)
+            if collect_fused and f_stack.numel() > 0:
+                all_fused.append(f_stack)
 
-            # Update portfolio state: [weights (100), unrealized P&L (100), value (1)] = 201
-            w_padded = F.pad(w_t.detach(), (0, n_full - N))  # (B, 100)
-            asset_step_log_returns = F.pad(af_t[:, :, 3].detach(), (0, n_full - N))
-            asset_cum_log_returns = asset_cum_log_returns + asset_step_log_returns
-            unrealized_pnl = torch.expm1(asset_cum_log_returns)
-            step_port_return = (w_t.detach() * af_t[:, :, 3]).sum(dim=-1)
-            next_portfolio_value = portfolio_value * (1.0 + step_port_return)
-            portfolio_value_log = next_portfolio_value.clamp(min=1e-6).log().unsqueeze(-1)
-            portfolio_s = torch.cat(
-                [
-                    w_padded,  # weights (100)
-                    unrealized_pnl,  # unrealised P&L (100)
-                    portfolio_value_log,  # log portfolio value (1)
-                ],
-                dim=-1,
-            )  # (B, 201)
-
-            # Track portfolio return for next step's regime detection
-            prev_port_return = step_port_return
-
-            # Truncated BPTT: detach GDN state every bptt_chunk steps so the
-            # backward graph covers at most bptt_chunk timesteps at a time.
-            if bptt_chunk > 0 and (t + 1) % bptt_chunk == 0:
-                states = [s.detach_() for s in states]
-
-        weights = torch.stack(all_weights, dim=1)  # (B, T, N)
-        pred_vol = (
-            torch.stack(all_vol_preds, dim=1) if all_vol_preds else None
-        )  # (B, T, horizon)
-        fused_seq = torch.stack(all_fused, dim=1) if collect_fused else None
+        weights = torch.cat(all_weights, dim=1)  # (B, T, N)
+        pred_vol = torch.cat(all_vol_preds, dim=1) if all_vol_preds else None
+        fused_seq = torch.cat(all_fused, dim=1) if all_fused else None
         return weights, pred_vol, fused_seq
 
     def evaluate(
@@ -1402,8 +1519,21 @@ class PortfolioTrainer:
             if cross_asset_warmup_synthetic_loader is not None
             else synthetic_loader
         )
-        if cfg.gradient_checkpointing:
+        # The chunked T-loop in _forward wraps each bptt_chunk-step window in
+        # activation checkpointing, which already covers backbone rematerialisation.
+        # Stacking backbone-level grad_checkpoint inside that outer checkpoint
+        # produces pathological nested-ckpt behaviour on recompute (observed
+        # 750MB+ phantom allocations at B=4). Disable the backbone's internal
+        # grad_ckpt whenever the chunk T-loop is active.
+        chunk_tloop_active = cfg.bptt_chunk > 0
+        if cfg.gradient_checkpointing and not chunk_tloop_active:
             self.backbone.enable_gradient_checkpointing()
+        elif cfg.gradient_checkpointing and chunk_tloop_active:
+            print(
+                "[portfolio_train] --gradient-checkpointing ignored: chunk "
+                "T-loop (bptt_chunk>0) already handles activation "
+                "rematerialisation."
+            )
 
         backbone_params = (
             list(self.backbone.parameters())
@@ -1467,11 +1597,21 @@ class PortfolioTrainer:
                     print("Skipping optimizer/scheduler restore due param-group mismatch")
             print(f"Resumed from step {start_step}  best_monitor={best_monitor:.4f}")
 
-        # Compile after checkpoint loading so state dict keys match (uncompiled backbone
-        # has plain keys; torch.compile wraps them under _orig_mod.* prefix)
+        # Compile after checkpoint loading so state dict keys match (uncompiled
+        # submodules have plain keys; torch.compile wraps them under _orig_mod.*
+        # prefix). We compile the T-loop hot sub-modules: backbone (8 GDN + 2
+        # SWA + 8 FMoE) plus the per-step modules called around it. Only useful
+        # with --pta-deterministic (stable shapes); stochastic PTA would force
+        # recompilation each step.
         if cfg.compile:
-            print("Compiling backbone (one-time, ~60s)...")
+            print("Compiling hot modules (one-time, ~60-120s)...")
             self.backbone = torch.compile(self.backbone)
+            self.regime_detector = torch.compile(self.regime_detector)
+            self.input_projection = torch.compile(self.input_projection)
+            self.fusion = torch.compile(self.fusion)
+            self.head_r = torch.compile(self.head_r)
+            self.head_s = torch.compile(self.head_s)
+            self.vol_head = torch.compile(self.vol_head)
             print("Compiled.")
 
         def _set_backbone_trainable(trainable: bool) -> None:
@@ -1619,28 +1759,77 @@ class PortfolioTrainer:
             optimizer.zero_grad(set_to_none=True)
             returns = prepare_return_targets(shifted_returns).to(self.device)
 
-            with torch.autocast(
-                "cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"
-            ):
-                weights, pred_vol, _ = self._forward(features, cfg.head, cfg)
+            # PTA-view gradient accumulation. Each PTA view is an independent
+            # sample along the batch axis, so splitting the expanded batch into
+            # micro-groups and accumulating grads is identical to one big batch.
+            B_eff = features.shape[0]
+            mbs = cfg.pta_micro_batch_size if cfg.pta_micro_batch_size > 0 else B_eff
+            mbs = max(1, min(mbs, B_eff))
+            num_groups = (B_eff + mbs - 1) // mbs
 
-                if cfg.head == "return":
-                    loss_dict = return_head_loss(
-                        weights,
-                        returns,
-                        pred_vol=pred_vol,
-                        lambda_ret=cfg.lambda_return,
-                        lambda_turn=cfg.lambda_turn,
-                        lambda_vol=cfg.lambda_vol,
-                        dsr_eta=cfg.dsr_eta,
+            mem_diag = cfg.debug and step - start_step < 3 and self.device.type == "cuda"
+            if mem_diag:
+                torch.cuda.reset_peak_memory_stats()
+                logger.debug(
+                    "[mem-diag] step=%d  B_eff=%d  micro_bs=%d  num_groups=%d  features.shape=%s",
+                    step, B_eff, mbs, num_groups, tuple(features.shape),
+                )
+
+            log_parts: dict[str, float] = {}
+
+            for g in range(num_groups):
+                s = g * mbs
+                e = min(s + mbs, B_eff)
+                feats_g = features[s:e]
+                rets_g = returns[s:e]
+                # Weight by fraction of full batch so grads sum to mean across
+                # all B_eff views (losses already reduce to per-group means).
+                group_scale = float(e - s) / float(B_eff)
+
+                with torch.autocast(
+                    "cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"
+                ):
+                    weights, pred_vol, _ = self._forward(feats_g, cfg.head, cfg)
+
+                    if cfg.head == "return":
+                        loss_dict = return_head_loss(
+                            weights,
+                            rets_g,
+                            pred_vol=pred_vol,
+                            lambda_ret=cfg.lambda_return,
+                            lambda_turn=cfg.lambda_turn,
+                            lambda_vol=cfg.lambda_vol,
+                            dsr_eta=cfg.dsr_eta,
+                        )
+                        loss = loss_dict["total"]
+                    else:
+                        loss = dsr_loss(weights, rets_g, eta=cfg.dsr_eta)
+                        loss_dict = {"dsr": loss, "total": loss}
+
+                if mem_diag:
+                    fwd_peak = torch.cuda.max_memory_allocated() / 1e9
+                    fwd_curr = torch.cuda.memory_allocated() / 1e9
+                    logger.debug(
+                        "[mem-diag] step=%d group=%d/%d FWD_DONE micro_B=%d peak=%.1fGB current=%.1fGB",
+                        step, g, num_groups, feats_g.shape[0], fwd_peak, fwd_curr,
                     )
-                    loss = loss_dict["total"]
-                else:
-                    loss = dsr_loss(weights, returns, eta=cfg.dsr_eta)
-                    loss_dict = {"dsr": loss, "total": loss}
 
-            loss = source_weight * loss
-            loss.backward()
+                (source_weight * group_scale * loss).backward()
+
+                if mem_diag:
+                    bwd_peak = torch.cuda.max_memory_allocated() / 1e9
+                    bwd_curr = torch.cuda.memory_allocated() / 1e9
+                    logger.debug(
+                        "[mem-diag] step=%d group=%d/%d BWD_DONE peak=%.1fGB current=%.1fGB",
+                        step, g, num_groups, bwd_peak, bwd_curr,
+                    )
+
+                for k, v in loss_dict.items():
+                    log_parts[k] = log_parts.get(k, 0.0) + group_scale * v.item()
+
+            loss_dict = {
+                k: torch.tensor(v, device=self.device) for k, v in log_parts.items()
+            }
             grad_params = [p for p in trainable_params if p.requires_grad]
             nn.utils.clip_grad_norm_(grad_params, cfg.grad_clip)
             optimizer.step()
@@ -1679,18 +1868,19 @@ class PortfolioTrainer:
         print(f"Training complete at step {step}. Best monitor: {best_monitor:.4f}")
 
     def _model_state(self) -> dict:
-        # torch.compile wraps the backbone under _orig_mod; unwrap so checkpoints
-        # use plain key names and can be loaded by an uncompiled model.
-        backbone_mod = getattr(self.backbone, "_orig_mod", self.backbone)
+        # torch.compile wraps modules under _orig_mod; unwrap so checkpoints use
+        # plain key names and can be loaded by an uncompiled model.
+        def _unwrap(m):
+            return getattr(m, "_orig_mod", m)
         return {
-            "backbone": backbone_mod.state_dict(),
-            "fusion": self.fusion.state_dict(),
-            "regime_detector": self.regime_detector.state_dict(),
-            "input_projection": self.input_projection.state_dict(),
-            "head_return": self.head_r.state_dict(),
-            "head_sharpe": self.head_s.state_dict(),
+            "backbone": _unwrap(self.backbone).state_dict(),
+            "fusion": _unwrap(self.fusion).state_dict(),
+            "regime_detector": _unwrap(self.regime_detector).state_dict(),
+            "input_projection": _unwrap(self.input_projection).state_dict(),
+            "head_return": _unwrap(self.head_r).state_dict(),
+            "head_sharpe": _unwrap(self.head_s).state_dict(),
             "aux_head": self.aux_head.state_dict(),
-            "vol_head": self.vol_head.state_dict(),
+            "vol_head": _unwrap(self.vol_head).state_dict(),
         }
 
     def _save(self, path: Path, step: int, optimizer, scheduler, best: float) -> None:
@@ -1823,6 +2013,13 @@ def main() -> None:
         help="Probability of adding volatility-scaled PTA batch views",
     )
     parser.add_argument(
+        "--pta-deterministic",
+        action="store_true",
+        help="Force all PTA view probabilities to 1.0. B_eff becomes constant "
+        "(1 + permutations + 1 + len(vol_scales) views), enabling torch.compile "
+        "with stable shapes. Strictly stronger augmentation than stochastic PTA.",
+    )
+    parser.add_argument(
         "--disable-regime-balance",
         action="store_true",
         help="Disable batch-level 4-regime coverage enforcement",
@@ -1846,6 +2043,14 @@ def main() -> None:
         help="Truncated BPTT chunk length — shorter = less memory, shorter gradient horizon (0 = full seq)",
     )
     parser.add_argument(
+        "--pta-micro-batch-size",
+        type=int,
+        default=0,
+        help="Split PTA-expanded batch into micro-groups of this size, with "
+        "gradient accumulation. Bit-exact identical to one big batch (every "
+        "loss reduces independently along the batch axis). 0 = off.",
+    )
+    parser.add_argument(
         "--checkpoint-dir", type=Path, default=Path("checkpoints/portfolio")
     )
     parser.add_argument(
@@ -1866,6 +2071,12 @@ def main() -> None:
         action="store_true",
         help="torch.compile the backbone for faster training (~60s warmup, "
         "then 2-4x faster per step). Recommended on A100/H100.",
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Enable verbose debug diagnostics (per-group GPU memory traces for "
+        "the first 3 training steps). Off by default.",
     )
     parser.add_argument(
         "--stride",
@@ -1891,6 +2102,11 @@ def main() -> None:
     )
     parser.add_argument("--smoke", action="store_true")
     args = parser.parse_args()
+    logging.basicConfig(
+        level=logging.DEBUG if args.debug else logging.INFO,
+        format="%(message)s",
+        force=True,
+    )
     if args.cross_asset_warmup_batch_size < 1:
         raise ValueError("--cross-asset-warmup-batch-size must be >= 1")
 
@@ -1908,12 +2124,20 @@ def main() -> None:
     if args.smoke and args.cross_asset_warmup_steps < 0:
         cross_asset_warmup_steps = 0
 
-    pta_cfg = PTAAugmentationConfig(
-        apply_prob=args.pta_prob,
-        permutations_per_batch=args.pta_permutations,
-        sign_flip_prob=args.pta_sign_flip_prob,
-        vol_scale_prob=args.pta_vol_scale_prob,
-    )
+    if args.pta_deterministic:
+        pta_cfg = PTAAugmentationConfig(
+            apply_prob=1.0,
+            permutations_per_batch=args.pta_permutations,
+            sign_flip_prob=1.0,
+            vol_scale_prob=1.0,
+        )
+    else:
+        pta_cfg = PTAAugmentationConfig(
+            apply_prob=args.pta_prob,
+            permutations_per_batch=args.pta_permutations,
+            sign_flip_prob=args.pta_sign_flip_prob,
+            vol_scale_prob=args.pta_vol_scale_prob,
+        )
     pta_cfg.validate()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1988,7 +2212,9 @@ def main() -> None:
                 regime_resample_attempts=args.regime_resample_attempts,
                 regime_pool_size=args.regime_pool_size,
                 bptt_chunk=args.bptt_chunk,
+                pta_micro_batch_size=args.pta_micro_batch_size,
                 pta_cfg=pta_cfg,
+                debug=args.debug,
                 warmup_steps=0,
                 log_every=min(args.log_every, 1),
                 eval_every=min(args.eval_every, 2),
@@ -2126,7 +2352,9 @@ def main() -> None:
             regime_resample_attempts=args.regime_resample_attempts,
             regime_pool_size=args.regime_pool_size,
             bptt_chunk=args.bptt_chunk,
+            pta_micro_batch_size=args.pta_micro_batch_size,
             pta_cfg=pta_cfg,
+            debug=args.debug,
             asset_sector_ids=train_sector_ids,
             log_every=args.log_every,
             eval_every=args.eval_every,
