@@ -46,6 +46,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint as _activation_checkpoint
 from core.cross_asset_fusion import CrossAssetFusion
 from core.regime_aware_backbone import InputProjection, RAGDNBackbone, RegimeDetector
 from core.self_supervised_pretraining import (
@@ -769,6 +770,7 @@ class PortfolioTrainConfig:
     fda_mix_prob: float = 0.5
     enforce_regime_balance: bool = True
     regime_resample_attempts: int = 8
+    regime_pool_size: int = 32  # pool size for quantile-based regime selection
     pta_cfg: PTAAugmentationConfig = field(default_factory=PTAAugmentationConfig)
     asset_sector_ids: tuple[int, ...] | None = None
     dsr_eta: float = 0.01
@@ -848,6 +850,27 @@ class PortfolioTrainer:
             return False
         uniq = set(int(x) for x in regime_ids.tolist())
         return uniq.issuperset(set(range(n_regimes)))
+
+    @staticmethod
+    def _quantile_regime_labels(features: torch.Tensor) -> torch.Tensor:
+        """Pool-relative 4-regime labels via median split on (vol, ret) proxies.
+
+        Unlike the absolute-threshold `infer_regime_label` heuristic (which
+        collapses to a single regime when features are z-scored), this splits
+        the pool at its own medians so all 4 regimes are populated whenever
+        the pool has ≥4 items. Labels match the spec ordering:
+            0 = low vol / positive ret  (low-vol bull)
+            1 = high vol / positive ret (high-vol trending)
+            2 = low vol / negative ret  (mean-reverting)
+            3 = high vol / negative ret (crisis)
+        """
+        seqs = features.mean(dim=1).cpu().numpy()  # (M, T, F)
+        vol = seqs[:, :, 184].mean(axis=-1)
+        ret = seqs[:, :, 3].mean(axis=-1)
+        vol_hi = (vol >= np.median(vol)).astype(np.int64)
+        ret_neg = (ret < np.median(ret)).astype(np.int64)
+        labels = vol_hi + 2 * ret_neg
+        return torch.tensor(labels, dtype=torch.long)
 
     @staticmethod
     def _should_freeze_backbone(step: int, cfg: "PortfolioTrainConfig") -> bool:
@@ -948,18 +971,20 @@ class PortfolioTrainer:
             with torch.autocast(
                 "cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"
             ):
-                _, _, fused_seq = self._forward(
-                    features,
-                    cfg.head,
-                    cfg,
-                    collect_fused=True,
-                )
-                assert fused_seq is not None
-                warmup_loss = correlation_frobenius_loss(
-                    fused_seq,
+                # Memory-optimised warm-up path: returns (B,N,D) time-mean
+                # directly via chunked activation checkpointing, avoiding the
+                # (B,T,N,D) fused-sequence retention that OOMs below 80 GB.
+                asset_mean = self._warmup_fused_mean(features, cfg)
+                asset_repr = F.normalize(asset_mean, dim=-1)  # (B, N, D)
+                pred_corr = torch.matmul(
+                    asset_repr, asset_repr.transpose(1, 2)
+                ).clamp(-1.0, 1.0)
+                target_corr = realized_correlation_matrix(
                     shifted_returns.to(self.device),
                     corr_window=cfg.cross_asset_corr_window,
                 )
+                diff = pred_corr - target_corr.detach()
+                warmup_loss = diff.pow(2).sum(dim=(1, 2)).mean()
                 loss = source_weight * warmup_loss
 
             loss.backward()
@@ -984,6 +1009,152 @@ class PortfolioTrainer:
             float("inf"),
         )
         print(f"Cross-asset warm-up complete. Saved: {cfg.warmup_path}")
+
+    def _warmup_fused_mean(
+        self,
+        features: torch.Tensor,  # (B, N, T, F=280)
+        cfg: "PortfolioTrainConfig | None" = None,
+        sector_ids: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Memory-optimised warm-up forward.
+
+        Returns the **time-mean** of fused tokens, (B, N, D), which is the only
+        quantity consumed by `correlation_frobenius_loss`. Skips the portfolio
+        head / vol head / portfolio-state bookkeeping since they do not feed the
+        warm-up loss. Processes T in chunks of size `cfg.bptt_chunk` under
+        `torch.utils.checkpoint.checkpoint` so the per-timestep activations
+        (input projection, fusion, backbone) are recomputed during backward
+        instead of being retained for all T steps at once. Gradient semantics
+        match the existing `_forward` path on the warm-up training signal
+        (backbone state is already detached at bptt_chunk boundaries).
+        """
+        features = features.to(self.device)
+        B, N, T, _ = features.shape
+        bptt_chunk = cfg.bptt_chunk if cfg is not None else 0
+        chunk_size = bptt_chunk if bptt_chunk > 0 else T
+
+        asset_feats = features[..., :184]
+        market_feats = features[..., 184:]
+        mkt_mean = market_feats.mean(dim=1)  # (B, T, 96)
+
+        portfolio_s = torch.zeros(
+            B, self.spec.portfolio_state_dim, device=self.device
+        )
+        calendar = torch.zeros(B, self.spec.calendar_dim, device=self.device)
+        if sector_ids is None:
+            sector_ids = torch.zeros(N, dtype=torch.long, device=self.device)
+        else:
+            if sector_ids.ndim != 1 or sector_ids.shape[0] != N:
+                raise ValueError(
+                    "sector_ids must be rank-1 with length N, got "
+                    f"shape {tuple(sector_ids.shape)} for N={N}"
+                )
+            sector_ids = sector_ids.to(self.device, dtype=torch.long)
+        episodic = torch.zeros(
+            B, self.spec.n_episodic_retrievals, self.spec.d_model, device=self.device
+        )
+        regime_ema = torch.zeros(B, self.spec.regime_emb_dim, device=self.device)
+        prev_regime_emb = torch.zeros(
+            B, self.spec.regime_emb_dim, device=self.device
+        )
+        states = self.backbone.init_state(B, N, self.device)
+
+        # Portfolio summary held constant during warm-up (head is inactive).
+        portfolio_summary = torch.stack(
+            [
+                torch.ones(B, device=self.device),
+                torch.zeros(B, device=self.device),
+                torch.ones(B, device=self.device),
+            ],
+            dim=-1,
+        )  # (B, 3)
+
+        # Sector bias (constant across timesteps).
+        with torch.no_grad():
+            n_episodic = episodic.shape[1]
+            n_total = N + 1 + 1 + n_episodic
+            n_extras = n_total - N
+            extra_ids = torch.full(
+                (n_extras,), -1, dtype=torch.long, device=self.device
+            )
+            full_ids = torch.cat([sector_ids, extra_ids], dim=0)
+            precomputed_bias = self.fusion.sector_bias.bias_matrix(full_ids, n_total)
+
+        def _run_chunk(
+            af_chunk: torch.Tensor,
+            mf_chunk: torch.Tensor,
+            regime_ema_in: torch.Tensor,
+            prev_regime_emb_in: torch.Tensor,
+            *state_tensors: torch.Tensor,
+        ) -> tuple[torch.Tensor, ...]:
+            """Process K timesteps, return (fused_sum, regime_ema, prev_regime, *states).
+
+            Pure tensor I/O for `torch.utils.checkpoint.checkpoint`.
+            """
+            local_states = list(state_tensors)
+            Bc, Nc, K, _ = af_chunk.shape
+            fused_sum = torch.zeros(
+                Bc, Nc, self.spec.d_model, device=af_chunk.device, dtype=af_chunk.dtype
+            )
+            r_ema = regime_ema_in
+            prev_r = prev_regime_emb_in
+            for k in range(K):
+                af_t = af_chunk[:, :, k, :]
+                mf_t = mf_chunk[:, k, :]
+                regime_emb, posteriors, _ = self.regime_detector(
+                    mf_t, portfolio_summary, r_ema, prev_r
+                )
+                r_ema = (0.98 * r_ema + 0.02 * regime_emb).detach()
+                prev_r = regime_emb.detach()
+
+                asset_tok, mkt_tok, port_tok, _ = self.input_projection(
+                    af_t, mf_t, portfolio_s, calendar, regime_emb
+                )
+                out, local_states = self.backbone(
+                    asset_tok, regime_emb, posteriors, local_states
+                )
+                fused, _ = self.fusion(
+                    out,
+                    mkt_tok,
+                    port_tok,
+                    episodic,
+                    sector_ids,
+                    precomputed_bias=precomputed_bias,
+                )
+                fused_sum = fused_sum + fused
+            return (fused_sum, r_ema, prev_r, *local_states)
+
+        total_fused_sum = torch.zeros(
+            B, N, self.spec.d_model, device=self.device
+        )
+        for t0 in range(0, T, chunk_size):
+            t1 = min(t0 + chunk_size, T)
+            af_chunk = asset_feats[:, :, t0:t1, :]
+            mf_chunk = mkt_mean[:, t0:t1, :]
+
+            # Matches existing bptt_chunk semantics: detach recurrent state
+            # between chunks so the backward graph covers at most one chunk.
+            states = [s.detach() for s in states]
+            regime_ema = regime_ema.detach()
+            prev_regime_emb = prev_regime_emb.detach()
+
+            result = _activation_checkpoint(
+                _run_chunk,
+                af_chunk,
+                mf_chunk,
+                regime_ema,
+                prev_regime_emb,
+                *states,
+                use_reentrant=False,
+            )
+            fused_sum_chunk = result[0]
+            regime_ema = result[1]
+            prev_regime_emb = result[2]
+            states = list(result[3:])
+
+            total_fused_sum = total_fused_sum + fused_sum_chunk
+
+        return total_fused_sum / float(T)  # (B, N, D)
 
     def _forward(
         self,
@@ -1394,20 +1565,48 @@ class PortfolioTrainer:
                 source_weight = cfg.fda_loss_weight
 
             if cfg.enforce_regime_balance:
-                regime_ids = self._batch_regime_ids(features)
-                attempts = 0
-                while (
-                    not self._has_all_regimes(regime_ids, n_regimes=self.spec.n_regimes)
-                    and attempts < cfg.regime_resample_attempts
-                ):
-                    features, shifted_returns = _pull_batch(source)
-                    regime_ids = self._batch_regime_ids(features)
-                    attempts += 1
-                if not self._has_all_regimes(regime_ids, n_regimes=self.spec.n_regimes):
-                    raise RuntimeError(
-                        "unable to sample a 4-regime batch after "
-                        f"{cfg.regime_resample_attempts} attempts"
-                    )
+                # Pool-based selection: accumulate a candidate pool large enough
+                # to cover all 4 regimes under quantile-relative labelling,
+                # then pick one item per regime (padding with random extras up
+                # to cfg.batch_size). Robust to skewed absolute-threshold
+                # labelling of the real data.
+                target_batch = features.shape[0]
+                pool_size = max(
+                    cfg.regime_pool_size, target_batch * self.spec.n_regimes
+                )
+                feats_pool = [features]
+                shifts_pool = [shifted_returns]
+                while sum(f.shape[0] for f in feats_pool) < pool_size:
+                    f, s = _pull_batch(source)
+                    feats_pool.append(f)
+                    shifts_pool.append(s)
+                feats_cat = torch.cat(feats_pool, dim=0)
+                shifts_cat = torch.cat(shifts_pool, dim=0)
+
+                labels = self._quantile_regime_labels(feats_cat)
+                selected_idx: list[int] = []
+                for r in range(self.spec.n_regimes):
+                    cand = (labels == r).nonzero(as_tuple=True)[0]
+                    if cand.numel() == 0:
+                        continue
+                    pick = cand[torch.randint(0, cand.numel(), (1,)).item()].item()
+                    selected_idx.append(int(pick))
+
+                if len(selected_idx) < target_batch:
+                    chosen = set(selected_idx)
+                    remaining = [i for i in range(feats_cat.shape[0]) if i not in chosen]
+                    fill = torch.randperm(len(remaining))[
+                        : target_batch - len(selected_idx)
+                    ]
+                    for i in fill.tolist():
+                        selected_idx.append(remaining[i])
+                elif len(selected_idx) > target_batch:
+                    perm = torch.randperm(len(selected_idx))[:target_batch]
+                    selected_idx = [selected_idx[i] for i in perm.tolist()]
+
+                idx_t = torch.tensor(selected_idx, dtype=torch.long)
+                features = feats_cat.index_select(0, idx_t)
+                shifted_returns = shifts_cat.index_select(0, idx_t)
 
             features, shifted_returns = expand_pta_training_batch(
                 features,
@@ -1632,7 +1831,19 @@ def main() -> None:
         "--regime-resample-attempts",
         type=int,
         default=8,
-        help="Maximum resampling attempts to satisfy regime-balanced batches",
+        help="(Deprecated) Maximum resampling attempts — pool-based selection now handles coverage",
+    )
+    parser.add_argument(
+        "--regime-pool-size",
+        type=int,
+        default=32,
+        help="Candidate pool size for quantile-relative regime-balanced selection",
+    )
+    parser.add_argument(
+        "--bptt-chunk",
+        type=int,
+        default=16,
+        help="Truncated BPTT chunk length — shorter = less memory, shorter gradient horizon (0 = full seq)",
     )
     parser.add_argument(
         "--checkpoint-dir", type=Path, default=Path("checkpoints/portfolio")
@@ -1663,6 +1874,9 @@ def main() -> None:
         help="Stride between sequences (lower = more data, default 4)",
     )
     parser.add_argument("--patience-steps", type=int, default=200)
+    parser.add_argument("--log-every", type=int, default=10)
+    parser.add_argument("--eval-every", type=int, default=200)
+    parser.add_argument("--save-every", type=int, default=5_000)
     parser.add_argument(
         "--freeze-backbone-steps",
         type=int,
@@ -1772,10 +1986,13 @@ def main() -> None:
                 fda_mix_prob=args.fda_mix_prob,
                 enforce_regime_balance=False,
                 regime_resample_attempts=args.regime_resample_attempts,
+                regime_pool_size=args.regime_pool_size,
+                bptt_chunk=args.bptt_chunk,
                 pta_cfg=pta_cfg,
                 warmup_steps=0,
-                log_every=1,
-                eval_every=2,
+                log_every=min(args.log_every, 1),
+                eval_every=min(args.eval_every, 2),
+                save_every=args.save_every,
                 checkpoint_dir=td / "checkpoints",
                 freeze_backbone_steps=args.freeze_backbone_steps,
                 backbone_lr_scale=args.backbone_lr_scale,
@@ -1907,8 +2124,13 @@ def main() -> None:
             fda_mix_prob=args.fda_mix_prob,
             enforce_regime_balance=not args.disable_regime_balance,
             regime_resample_attempts=args.regime_resample_attempts,
+            regime_pool_size=args.regime_pool_size,
+            bptt_chunk=args.bptt_chunk,
             pta_cfg=pta_cfg,
             asset_sector_ids=train_sector_ids,
+            log_every=args.log_every,
+            eval_every=args.eval_every,
+            save_every=args.save_every,
             checkpoint_dir=args.checkpoint_dir,
             patience_steps=args.patience_steps,
             freeze_backbone_steps=args.freeze_backbone_steps,
