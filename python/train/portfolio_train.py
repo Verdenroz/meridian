@@ -792,7 +792,9 @@ class PortfolioTrainConfig:
     # identical to a single large forward because every loss term reduces
     # independently along the PTA batch axis. 0 = no micro-batching.
     pta_micro_batch_size: int = 0
-    patience_steps: int = 200  # early stopping threshold measured in training steps
+    patience_steps: int = 1000  # early stopping threshold measured in training steps
+    patience_min_delta: float = 1e-3  # min val-loss improvement to reset patience counter
+    patience_grace_steps: int = 3000  # no early-stop before this step (covers LR warmup + initial plateau)
     freeze_backbone_steps: int = 500
     backbone_lr_scale: float = 0.1
     gradient_checkpointing: bool = False
@@ -897,6 +899,8 @@ class PortfolioTrainer:
         cfg: "PortfolioTrainConfig",
     ) -> bool:
         if cfg.patience_steps <= 0:
+            return False
+        if step < cfg.patience_grace_steps:
             return False
         return (step - last_improve_step) >= cfg.patience_steps
 
@@ -1848,15 +1852,21 @@ class PortfolioTrainer:
                     f"  val total={val_metrics['total']:.4f}  "
                     f"val dsr={val_metrics['dsr']:.4f}"
                 )
-                if monitor < best_monitor:
+                if monitor < best_monitor - cfg.patience_min_delta:
                     best_monitor = monitor
                     last_improve_step = step
                     self._save(cfg.best_path, step, optimizer, scheduler, best_monitor)
                 else:
+                    # Still save best checkpoint on any absolute improvement, even
+                    # if below min_delta — we just don't reset the patience counter.
+                    if monitor < best_monitor:
+                        best_monitor = monitor
+                        self._save(cfg.best_path, step, optimizer, scheduler, best_monitor)
                     if self._should_stop_early(step, last_improve_step, cfg):
                         print(
                             f"Early stopping at step {step} "
-                            f"(no improvement for {cfg.patience_steps} steps)"
+                            f"(no improvement ≥{cfg.patience_min_delta} "
+                            f"for {cfg.patience_steps} steps)"
                         )
                         break
 
@@ -2084,7 +2094,9 @@ def main() -> None:
         default=4,
         help="Stride between sequences (lower = more data, default 4)",
     )
-    parser.add_argument("--patience-steps", type=int, default=200)
+    parser.add_argument("--patience-steps", type=int, default=1000)
+    parser.add_argument("--patience-min-delta", type=float, default=1e-3)
+    parser.add_argument("--patience-grace-steps", type=int, default=3000)
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--eval-every", type=int, default=200)
     parser.add_argument("--save-every", type=int, default=5_000)
@@ -2361,6 +2373,8 @@ def main() -> None:
             save_every=args.save_every,
             checkpoint_dir=args.checkpoint_dir,
             patience_steps=args.patience_steps,
+            patience_min_delta=args.patience_min_delta,
+            patience_grace_steps=args.patience_grace_steps,
             freeze_backbone_steps=args.freeze_backbone_steps,
             backbone_lr_scale=args.backbone_lr_scale,
             gradient_checkpointing=args.gradient_checkpointing,
