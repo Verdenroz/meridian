@@ -64,24 +64,18 @@ def load_symbols(symbols_file: Path) -> list[str]:
 
 # ── Plan ──────────────────────────────────────────────────────────────────────
 
-# Minutes per trading year (250 days × 390 min/day)
-_MINUTES_PER_YEAR = 250 * 390
-_HISTORY_YEARS = 5
+# v4.0 uses daily bars (finance-query --interval 1d). Spec §11.1 documents
+# the realised corpus as ~1,695 rows per asset; this advisory estimate
+# mirrors that order of magnitude without pretending to be exact.
+_TRADING_DAYS_PER_YEAR = 252
+_HISTORY_YEARS = 7
 
 
 def build_plan(symbols: list[str]) -> dict:
     """Return a manifest describing the data pipeline for the given symbols."""
-    block_dims = {
-        "price_volume":        10,
-        "technical":           42,
-        "options":             12,
-        "fundamental":         30,
-        "risk_analytics":       8,
-        "event_state":         10,
-        "cross_asset_context":  8,
-        "text":                64,
-    }
-    per_asset_rows = _MINUTES_PER_YEAR * _HISTORY_YEARS
+    from train.feature_schema import PER_ASSET_BLOCKS
+    block_dims = {b.name: b.dim for b in PER_ASSET_BLOCKS} | {"text": 64}
+    per_asset_rows_daily_estimate = _TRADING_DAYS_PER_YEAR * _HISTORY_YEARS
     return {
         "n_symbols":             len(symbols),
         "per_asset_feature_dim": PER_ASSET_FEATURE_DIM,
@@ -106,11 +100,11 @@ def build_plan(symbols: list[str]) -> dict:
             "finance-query: crypto::coin() — BTC/ETH market data",
             "finance-query: feeds::fetch_all() — 31 RSS sources",
         ],
-        "estimated_rows_per_symbol": per_asset_rows,
-        "estimated_total_rows":      per_asset_rows * len(symbols),
-        "estimated_shard_bytes_per_symbol": per_asset_rows * PER_ASSET_FEATURE_DIM * 4,
+        "estimated_rows_per_symbol": per_asset_rows_daily_estimate,
+        "estimated_total_rows":      per_asset_rows_daily_estimate * len(symbols),
+        "estimated_shard_bytes_per_symbol": per_asset_rows_daily_estimate * PER_ASSET_FEATURE_DIM * 4,
         "estimated_total_gb": (
-            per_asset_rows * PER_ASSET_FEATURE_DIM * 4 * len(symbols) / 1e9
+            per_asset_rows_daily_estimate * PER_ASSET_FEATURE_DIM * 4 * len(symbols) / 1e9
         ),
         "symbols": symbols,
     }

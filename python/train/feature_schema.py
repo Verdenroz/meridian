@@ -84,6 +84,25 @@ MARKET_FEATURE_DIM: int    = 96
 PORTFOLIO_STATE_DIM: int   = 201
 CALENDAR_FEATURE_DIM: int  = 20
 
+# ── Canonical feature indices (shard row layout) ─────────────────────────────
+#
+# Row layout: [per-asset 0..183 | market 184..279]. These constants name the
+# handful of per-feature positions that multiple modules need to reference
+# (returns, market proxy, RSI) so no downstream file has to hardcode them.
+
+# Per-asset return at t, normalized: offset 3 inside BLOCK_PRICE_VOLUME.
+RETURN_FEATURE_INDEX: int = 3
+
+# First technical indicator is RSI-like (BLOCK_TECHNICAL.start = 10).
+RSI_FEATURE_INDEX: int = BLOCK_TECHNICAL.start
+
+# Market-wide features start right after the per-asset block.
+MARKET_FEATURE_OFFSET: int = PER_ASSET_FEATURE_DIM  # 184
+
+assert 0 <= RETURN_FEATURE_INDEX < BLOCK_PRICE_VOLUME.dim, "return idx out of price block"
+assert RSI_FEATURE_INDEX == BLOCK_TECHNICAL.start, "RSI idx must match technical block start"
+assert MARKET_FEATURE_OFFSET == PER_ASSET_FEATURE_DIM, "market offset invariant"
+
 # ── Sanity checks (evaluated at import time) ─────────────────────────────────
 
 _continuous_total = sum(b.dim for b in PER_ASSET_BLOCKS)

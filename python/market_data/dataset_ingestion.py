@@ -35,7 +35,9 @@ from typing import IO, Iterator
 
 from train.feature_schema import (
     MARKET_FEATURE_DIM,
+    PER_ASSET_BLOCKS,
     PER_ASSET_FEATURE_DIM,
+    PER_ASSET_TEXT_DIM,
 )
 from train.splits import Split, assign_split
 
@@ -44,16 +46,11 @@ from train.splits import Split, assign_split
 ROW_DIM = PER_ASSET_FEATURE_DIM + MARKET_FEATURE_DIM  # 280 floats per row
 ROW_STRUCT = struct.Struct(f"<{ROW_DIM}f")
 
-# Block sizes (must sum to PER_ASSET_FEATURE_DIM = 184)
-_BLOCK_DIMS: dict[str, int] = {
-    "price_volume":        10,
-    "technical":           42,
-    "options":             12,
-    "fundamental":         30,
-    "risk_analytics":       8,
-    "event_state":         10,
-    "cross_asset_context":  8,
-    "text":                64,
+# Block sizes derived from the canonical schema (feature_schema.py). The
+# import-time assert guards against schema drift without needing a second
+# copy of the numbers here.
+_BLOCK_DIMS: dict[str, int] = {b.name: b.dim for b in PER_ASSET_BLOCKS} | {
+    "text": PER_ASSET_TEXT_DIM,
 }
 assert sum(_BLOCK_DIMS.values()) == PER_ASSET_FEATURE_DIM, (
     f"Block dims sum to {sum(_BLOCK_DIMS.values())}, expected {PER_ASSET_FEATURE_DIM}"
