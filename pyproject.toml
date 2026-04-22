@@ -21,6 +21,7 @@ train = [
   "hmmlearn>=0.3",
   "faiss-cpu>=1.8",
   "tokenizers>=0.20",
+  "huggingface-hub>=0.26",
 ]
 dev = [
   "pytest>=8.2",

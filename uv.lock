@@ -517,6 +517,7 @@ dev = [
 train = [
     { name = "faiss-cpu" },
     { name = "hmmlearn" },
+    { name = "huggingface-hub" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyyaml" },
@@ -528,6 +529,7 @@ train = [
 requires-dist = [
     { name = "faiss-cpu", marker = "extra == 'train'", specifier = ">=1.8" },
     { name = "hmmlearn", marker = "extra == 'train'", specifier = ">=0.3" },
+    { name = "huggingface-hub", marker = "extra == 'train'", specifier = ">=0.26" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.10" },
     { name = "numpy", marker = "extra == 'train'", specifier = ">=2.1" },
     { name = "pandas", marker = "extra == 'train'", specifier = ">=2.2" },
