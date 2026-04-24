@@ -13,12 +13,24 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, IterableDataset
 
-PER_ASSET_FEATURE_DIM = 184
-MARKET_FEATURE_DIM = 96
+from train.feature_schema import (
+    MARKET_FEATURE_DIM,
+    PER_ASSET_FEATURE_DIM,
+    RETURN_FEATURE_INDEX,
+)
+
 TOTAL_FEATURE_DIM = PER_ASSET_FEATURE_DIM + MARKET_FEATURE_DIM
-RETURN_FEATURE_INDEX = 3
 SYNTHETIC_SHARD_PREFIX = "FDA_SYNTH_"
 UNKNOWN_SECTOR_ID = -1
+
+__all__ = [
+    "MARKET_FEATURE_DIM",
+    "PER_ASSET_FEATURE_DIM",
+    "RETURN_FEATURE_INDEX",
+    "SYNTHETIC_SHARD_PREFIX",
+    "TOTAL_FEATURE_DIM",
+    "UNKNOWN_SECTOR_ID",
+]
 
 
 # ── Contrastive projection ───────────────────────────────────────────────────
@@ -396,6 +408,149 @@ class ShardDataset(IterableDataset):
                 )
                 next_active.append(path)
             active = next_active
+
+
+class TarShardDataset(ShardDataset):
+    """Streams TCP training tuples from WebDataset-format tar archives.
+
+    Tars may be local paths or HTTP(S) URLs (e.g. HuggingFace resolve URLs).
+    Each tar contains many `FDA_SYNTH_NNNNNNNN.f32bin` entries produced by
+    `python.tools.pack_fda_shards`. The tar itself is treated as one logical
+    shard for worker-splitting; each entry inside yields a synthetic sample.
+
+    Only the synthetic path is supported here — real-shard .f32bin files
+    carry per-asset semantics (asset_id, HMM regime labels) that rely on
+    filesystem layout, so they keep using the base `ShardDataset`.
+    """
+
+    def __init__(
+        self,
+        tar_sources: list[str],
+        seq_len: int = 64,
+        shuffle: bool = True,
+        positive_offset: int = 4,
+        synthetic_prefix: str = SYNTHETIC_SHARD_PREFIX,
+        synthetic_loss_weight: float = 0.5,
+    ) -> None:
+        # Skip parent __init__ path-validation (no filesystem paths here).
+        self.tar_sources = list(tar_sources)
+        self.shard_paths = []  # unused, satisfy base-class attr expectations
+        self.seq_len = seq_len
+        self.shuffle = shuffle
+        self.positive_offset = positive_offset
+        self.synthetic_prefix = synthetic_prefix
+        self.synthetic_loss_weight = synthetic_loss_weight
+        self.symbol_to_sector = {}
+        self.symbol_to_id = {}
+        self.global_regime_labels = None
+        if self.positive_offset == 0:
+            raise ValueError("positive_offset must be non-zero for TCP views")
+        if self.synthetic_loss_weight <= 0.0:
+            raise ValueError(
+                "synthetic_loss_weight must be positive, "
+                f"got {self.synthetic_loss_weight}"
+            )
+        if not self.tar_sources:
+            raise ValueError("tar_sources must be non-empty")
+
+    @staticmethod
+    def _open_tar(source: str):
+        """Open a tar for streaming read from a local path or HTTP(S) URL."""
+        import tarfile
+
+        if source.startswith("http://") or source.startswith("https://"):
+            from urllib.request import urlopen
+
+            # Stream mode — no seek. tarfile handles sequential reads fine.
+            return tarfile.open(fileobj=urlopen(source), mode="r|")
+        return tarfile.open(source, mode="r")
+
+    def _iter_tar(self, source: str) -> Iterator[
+        tuple[np.ndarray, np.ndarray, float, int, int, int, float, int]
+    ]:
+        tf = self._open_tar(source)
+        try:
+            for member in tf:
+                if not member.isfile():
+                    continue
+                if not member.name.endswith(".f32bin"):
+                    continue
+                f = tf.extractfile(member)
+                if f is None:
+                    continue
+                buf = f.read()
+                arr = np.frombuffer(buf, dtype=np.float32)
+                if arr.size % self.FEATURE_DIM != 0:
+                    raise ValueError(
+                        f"tar entry {member.name} has unsupported row width "
+                        f"(floats={arr.size}, expected multiple of {self.FEATURE_DIM})"
+                    )
+                data = arr.reshape(-1, self.FEATURE_DIM)
+                # Synth entries inherit FDA_SYNTH_ prefix by construction.
+                is_synthetic = Path(member.name).stem.startswith(self.synthetic_prefix)
+                sample_weight = (
+                    self.synthetic_loss_weight if is_synthetic else 1.0
+                )
+                n_rows = data.shape[0]
+                min_start = max(0, -self.positive_offset)
+                max_start = n_rows - self.seq_len - max(self.positive_offset, 0)
+                if max_start <= min_start:
+                    continue
+                indices = np.arange(min_start, max_start)
+                if self.shuffle:
+                    np.random.shuffle(indices)
+                for start in indices:
+                    start_idx = int(start)
+                    pos_start = start_idx + self.positive_offset
+                    seq_a = data[start_idx : start_idx + self.seq_len]
+                    seq_b = data[pos_start : pos_start + self.seq_len]
+                    next_return = float(
+                        data[start_idx + self.seq_len, RETURN_FEATURE_INDEX]
+                    )
+                    regime_id = infer_regime_label(seq_a)
+                    yield (
+                        seq_a,
+                        seq_b,
+                        next_return,
+                        0,  # asset_id — synthetic windows are not asset-specific
+                        regime_id,
+                        UNKNOWN_SECTOR_ID,
+                        sample_weight,
+                        start_idx,
+                    )
+        finally:
+            tf.close()
+
+    def __iter__(self):
+        sources = list(self.tar_sources)
+        worker = torch.utils.data.get_worker_info()
+        if worker is not None:
+            sources = sources[worker.id :: worker.num_workers]
+        if self.shuffle:
+            import random
+
+            random.shuffle(sources)
+        for src in sources:
+            for (
+                seq_a,
+                seq_b,
+                next_return,
+                asset_id,
+                regime_id,
+                sector_id,
+                sample_weight,
+                time_index,
+            ) in self._iter_tar(src):
+                yield (
+                    torch.from_numpy(seq_a.copy()),
+                    torch.from_numpy(seq_b.copy()),
+                    torch.tensor(next_return, dtype=torch.float32),
+                    torch.tensor(asset_id, dtype=torch.long),
+                    torch.tensor(regime_id, dtype=torch.long),
+                    torch.tensor(sector_id, dtype=torch.long),
+                    torch.tensor(sample_weight, dtype=torch.float32),
+                    torch.tensor(time_index, dtype=torch.long),
+                )
 
 
 def build_dataloader(
