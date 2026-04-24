@@ -388,7 +388,11 @@ def validate_stylized_facts(
     `passed` requires BOTH hard checks AND ≥ 2/3 of the soft checks.
     """
     finite_ok, range_ok, max_abs = _hard_checks(window, max_abs_feature)
-    soft, soft_metrics = _soft_checks(window, reference)
+    if finite_ok and range_ok:
+        soft, soft_metrics = _soft_checks(window, reference)
+    else:
+        soft = {k: False for k in _SOFT_CHECK_KEYS}
+        soft_metrics = {}
 
     checks = {**soft, "finite": finite_ok, "range": range_ok}
     metrics = {**soft_metrics, "max_abs": max_abs}
