@@ -152,7 +152,10 @@ impl MarketFeatureLookup {
 
         // Volatility & sentiment block (partial historical proxies)
         out[0] = (vix_level / 100.0).clamp(0.0, 2.0);
-        out[6] = vix_level;
+        // out[6] carries a rescaled VIX with a wider dynamic range than out[0]:
+        // VIX=20 ≈ 1.0 (neutral), 40 ≈ 2.0 (elevated), 80 ≈ 4.0 (crisis).
+        // Raw level would blow the FDA pipeline's ±10 per-feature bound.
+        out[6] = (vix_level / 20.0).clamp(0.0, 5.0);
         out[7] = vix_ret;
         out[10] = dxy;
         out[11] = ((gold - oil) * 0.5).clamp(-2.0, 2.0);

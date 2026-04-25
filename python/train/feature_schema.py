@@ -93,14 +93,16 @@ CALENDAR_FEATURE_DIM: int  = 20
 # Per-asset return at t, normalized: offset 3 inside BLOCK_PRICE_VOLUME.
 RETURN_FEATURE_INDEX: int = 3
 
-# First technical indicator is RSI-like (BLOCK_TECHNICAL.start = 10).
-RSI_FEATURE_INDEX: int = BLOCK_TECHNICAL.start
+# RSI is the 9th entry of BLOCK_TECHNICAL — see src/features/technical.rs:282-292,
+# where the technical block starts with 8 ma_norm moving averages (indices 0-7)
+# before scale(rsi14, 0.0, 100.0) at index 8.
+RSI_FEATURE_INDEX: int = BLOCK_TECHNICAL.start + 8  # = 18
 
 # Market-wide features start right after the per-asset block.
 MARKET_FEATURE_OFFSET: int = PER_ASSET_FEATURE_DIM  # 184
 
 assert 0 <= RETURN_FEATURE_INDEX < BLOCK_PRICE_VOLUME.dim, "return idx out of price block"
-assert RSI_FEATURE_INDEX == BLOCK_TECHNICAL.start, "RSI idx must match technical block start"
+assert BLOCK_TECHNICAL.start <= RSI_FEATURE_INDEX < BLOCK_TECHNICAL.end, "RSI idx out of technical block"
 assert MARKET_FEATURE_OFFSET == PER_ASSET_FEATURE_DIM, "market offset invariant"
 
 # ── Sanity checks (evaluated at import time) ─────────────────────────────────
