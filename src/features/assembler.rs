@@ -2,7 +2,7 @@ use super::{
     FeatureRow, classify_asset, cross_asset, event_block, fundamental_block, market_wide,
     options_block, price_volume, risk_block, technical,
 };
-use crate::store::DataStore;
+use crate::{args::HistoricalInterval, store::DataStore};
 use chrono::Utc;
 use std::sync::Arc;
 
@@ -29,16 +29,31 @@ fn assemble_one(
     let price_buf = store.prices.get(symbol);
     let price_buf_ref = price_buf.as_deref();
 
+    // Live system operates at 1-minute interval
+    let interval = HistoricalInterval::OneMinute;
+
+    // Earnings proximity is shared between event_block and options_block
+    let earnings_proximity = store
+        .fundamentals
+        .get(symbol)
+        .and_then(|f| {
+            f.value.days_since_earnings.map(|d| {
+                let days_to_next = (90.0 - d).max(0.0);
+                (-days_to_next / 14.0).exp() as f32
+            })
+        })
+        .unwrap_or(0.0);
+
     FeatureRow {
         timestamp: now,
         symbol: symbol.to_string(),
         asset_class: classify_asset(symbol),
-        price_volume: price_volume::assemble(price_buf_ref, &store.rolling_stats, symbol),
-        technical: technical::assemble(price_buf_ref, &store.rolling_stats, symbol),
-        options: options_block::assemble(&store.options, symbol, &store.rolling_stats),
+        price_volume: price_volume::assemble(price_buf_ref, &store.rolling_stats, symbol, &interval),
+        technical: technical::assemble(price_buf_ref, &store.rolling_stats, symbol, &interval),
+        options: options_block::assemble(&store.options, &store.prices, symbol, &store.rolling_stats, earnings_proximity),
         fundamental: fundamental_block::assemble(&store.fundamentals, symbol, &store.rolling_stats),
         risk_analytics: risk_block::assemble(&store.risk, symbol),
-        event_state: event_block::assemble(&store.event_state, &store.fundamentals, symbol, now),
+        event_state: event_block::assemble(&store.event_state, &store.fundamentals, &store.calendar, &store.news_sentiment, symbol, now),
         cross_asset_context: cross_asset::assemble(symbol, store, now),
         text: [0.0f32; 64], // Phase 0 stub — wired to MarketReader in Phase 1
         market: *market,

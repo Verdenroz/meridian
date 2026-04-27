@@ -6,6 +6,7 @@ pub mod market_wide;
 pub mod options_block;
 pub mod price_volume;
 pub mod risk_block;
+pub mod sector_map;
 pub mod technical;
 
 use chrono::{DateTime, Utc};

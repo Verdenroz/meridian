@@ -16,20 +16,44 @@ pub fn assemble_market_vector(store: &Arc<DataStore>, now: DateTime<Utc>) -> [f3
     let mut out = [0.0f32; 96];
 
     // ── Volatility & Sentiment [0..12] ────────────────────────────────────────
+    // Layout mirrors the historical batch path so training and inference use
+    // the same feature semantics:
+    //   [0]    VIX level (normalised)
+    //   [1..5] VIX regime one-hot (extreme-fear / fear / neutral / greed / extreme-greed)
+    //   [6]    VIX level (alt normalisation, wider range)
+    //   [7]    VIX 1d log-return
+    //   [8]    VIX term-structure proxy (stub; no live VIX3M data)
+    //   [9]    Fear & Greed index (macro-sentiment proxy, replaces put/call ratio)
+    //   [10]   DXY return (from world_indices poller)
+    //   [11]   Gold–oil spread proxy
     {
-        let fg = store.fear_greed.read();
-        let fgv = &fg.value;
-        out[0] = fgv.value as f32 / 100.0; // Fear & Greed [0,1]
-        // Fear & Greed classification one-hot [1..6] → [1..5] (5 classes)
-        let class = fgv.classification.min(4) as usize;
-        out[1 + class] = 1.0;
-        // VIX proxied by HY/credit spreads from world_indices (stub values)
-        out[6] = 0.0; // VIX level — filled by market poller when VIX ticker is tracked
-        out[7] = 0.0; // VIX 1d change
-        out[8] = 0.0; // VIX term structure
-        out[9] = 0.0; // Market-wide put/call ratio (stub)
-        out[10] = 0.0; // HY spread proxy (HYG/IEF)
-        out[11] = 0.0; // Credit stress (LQD/TLT)
+        let wi = store.world_indices.read();
+        let vix = wi.value.vix_level as f32;
+        let vix_ret = wi.value.vix_ret as f32;
+        let dxy = wi.value.dxy as f32;
+        let gold = wi.value.gold as f32;
+        let oil = wi.value.oil as f32;
+        drop(wi);
+
+        out[0] = (vix / 100.0).clamp(0.0, 2.0);
+        let regime_idx = if vix >= 35.0 {
+            0usize // extreme fear
+        } else if vix >= 28.0 {
+            1 // fear
+        } else if vix >= 20.0 {
+            2 // neutral
+        } else if vix >= 14.0 {
+            3 // greed
+        } else {
+            4 // extreme greed
+        };
+        out[1 + regime_idx] = 1.0;
+        out[6] = (vix / 20.0).clamp(0.0, 5.0);
+        out[7] = vix_ret;
+        out[8] = (vix / (18.0 + 250.0 * vix_ret.abs() + 1.0)).clamp(0.0, 2.0);
+        out[9] = store.fear_greed.read().value.value as f32 / 100.0;
+        out[10] = dxy;
+        out[11] = ((gold - oil) * 0.5).clamp(-2.0, 2.0);
     }
 
     // ── Yield Curve [12..24] ──────────────────────────────────────────────────

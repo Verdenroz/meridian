@@ -1,5 +1,17 @@
+use crate::args::HistoricalInterval;
 use crate::store::{PriceBuffer, RollingStatsStore};
 use std::sync::Arc;
+
+/// Determine the lookback window size in bars based on interval.
+/// Returns the number of bars to request for computing price/volume features.
+fn bar_lookback_window(interval: &HistoricalInterval) -> usize {
+    match interval {
+        HistoricalInterval::OneMinute => 390,    // 1 trading day (6.5h × 60m)
+        HistoricalInterval::FiveMinutes => 78,   // 1 trading day (6.5h × 12 × 5m)
+        HistoricalInterval::OneHour => 24,       // ~3 trading days  
+        HistoricalInterval::OneDay => 252,       // 1 trading year
+    }
+}
 
 /// Block 1: Price & Volume — 10 features.
 ///
@@ -8,6 +20,7 @@ pub fn assemble(
     buf: Option<&PriceBuffer>,
     stats: &Arc<RollingStatsStore>,
     symbol: &str,
+    interval: &HistoricalInterval,
 ) -> [f32; 10] {
     let Some(buf) = buf else {
         return [0.0f32; 10];
@@ -16,7 +29,8 @@ pub fn assemble(
         return [0.0f32; 10];
     }
 
-    let closes = buf.closes(390); // up to 1 day of minute bars
+    let window = bar_lookback_window(interval);
+    let closes = buf.closes(window); // up to 1 year of bars (adjusted for interval)
     let n = closes.len();
     if n < 2 {
         return [0.0f32; 10];
@@ -34,7 +48,7 @@ pub fn assemble(
         }
     };
 
-    // Return over N minutes ago (index offset)
+    // Return over N bars ago (index offset)
     let ret_n = |offset: usize| -> f32 {
         if n <= offset {
             0.0
@@ -44,13 +58,13 @@ pub fn assemble(
     };
 
     // Open of the current bar (use first close in the buffer as proxy)
-    let opens = buf.opens(390);
+    let opens = buf.opens(window);
     let m = opens.len();
     let open_price = if m > 0 { opens[m - 1] } else { last };
 
     // High / low of the current bar
-    let highs = buf.highs(390);
-    let lows = buf.lows(390);
+    let highs = buf.highs(window);
+    let lows = buf.lows(window);
     let nh = highs.len();
     let nl = lows.len();
     let high_price = if nh > 0 { highs[nh - 1] } else { last };
@@ -79,10 +93,11 @@ pub fn assemble(
         ln_ret(low_price, open_price),  // low vs open
         ln_ret(last, prev),             // close vs prev close
         vol_norm,                       // volume vs SMA20
-        ln_ret(last, prev),             // return 1m (same as close)
-        ret_n(5),                       // return 5m
-        ret_n(15),                      // return 15m
-        ret_n(60),                      // return 60m
-        ret_n(390),                     // return 1d (390 minute bars)
+        ln_ret(last, prev),             // return 1 bar (same as close)
+        ret_n(5),                       // return 5 bars
+        ret_n(15),                      // return 15 bars
+        ret_n(60),                      // return 60 bars
+        ret_n(390),                     // return 390 bars (1 year equiv in daily)
     ]
 }
+

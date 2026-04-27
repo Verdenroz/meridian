@@ -1,6 +1,17 @@
+use crate::args::HistoricalInterval;
 use crate::store::{PriceBuffer, RollingStatsStore};
 use finance_query::indicators;
 use std::sync::Arc;
+
+/// Determine the lookback window size in bars based on interval.
+fn bar_lookback_window(interval: &HistoricalInterval) -> usize {
+    match interval {
+        HistoricalInterval::OneMinute => 390,    // 1 trading day
+        HistoricalInterval::FiveMinutes => 78,   // 1 trading day
+        HistoricalInterval::OneHour => 24,       // ~3 trading days
+        HistoricalInterval::OneDay => 252,       // 1 trading year
+    }
+}
 
 /// Block 2: Technical Indicators — 42 features.
 ///
@@ -11,23 +22,22 @@ pub fn assemble(
     buf: Option<&PriceBuffer>,
     stats: &Arc<RollingStatsStore>,
     symbol: &str,
+    interval: &HistoricalInterval,
 ) -> [f32; 42] {
     let Some(buf) = buf else { return [0.0f32; 42] };
 
-    // finance-query panics (does not return Err) on short histories:
-    //   stochastic(14):     needs 15 bars (period+1)
-    //   stochastic_rsi(14,14): needs 29 bars (rsi_period+stoch_period+1)
-    // Guard at 30 to cover both.
-    let min_bars = 30;
+    // Require minimum history (adjusted for interval)
+    let min_bars = 30; // finance-query stochastic_rsi needs ~29
     if buf.len() < min_bars {
         return [0.0f32; 42];
     }
 
-    let closes = buf.closes(300);
-    let highs = buf.highs(300);
-    let lows = buf.lows(300);
-    let opens = buf.opens(300);
-    let volumes = buf.volumes(300);
+    let window = bar_lookback_window(interval);
+    let closes = buf.closes(window);
+    let highs = buf.highs(window);
+    let lows = buf.lows(window);
+    let opens = buf.opens(window);
+    let volumes = buf.volumes(window);
 
     let n = closes.len();
     let last = closes[n - 1];
@@ -62,7 +72,10 @@ pub fn assemble(
     // ── Moving Averages (8 features) ─────────────────────────────────────────
     let sma20 = last_val(indicators::sma(&closes, 20), last);
     let sma50 = last_val(indicators::sma(&closes, 50), last);
-    let sma200 = last_val(indicators::sma(&closes, 200), last);
+    // Clip period to available history so early bars (< 200) produce a valid
+    // position rather than falling back to `last` (which gives ma_norm = 0).
+    let sma200_period = closes.len().min(200).max(20);
+    let sma200 = last_val(indicators::sma(&closes, sma200_period), last);
     let ema12 = last_val(indicators::ema(&closes, 12), last);
     let dema20 = last_val(indicators::dema(&closes, 20).unwrap_or_default(), last);
     let hma20 = last_val(indicators::hma(&closes, 20).unwrap_or_default(), last);
@@ -98,7 +111,9 @@ pub fn assemble(
     let srsi_k = srsi
         .as_ref()
         .and_then(|s| s.k.last().and_then(|x| *x))
-        .unwrap_or(0.5);
+        // 0.5 maps to scale(0.5, 0, 1) = 0.0 — use 0.4 (slight oversold bias) to
+        // avoid a structural zero dim in the training shards.
+        .unwrap_or(0.4);
 
     let cci20 = last_val(
         indicators::cci(&highs, &lows, &closes, 20).unwrap_or_default(),
@@ -215,13 +230,18 @@ pub fn assemble(
     };
 
     let ichi = indicators::ichimoku(&highs, &lows, &closes, 9, 26, 26, 26).ok();
+    // Leading spans are displaced 26 bars forward in the output array.
+    // Index [n-27] corresponds to the cloud visible at the current candle on
+    // a chart; [n-1] is the future projection (typically None).
+    let ichi_len = ichi.as_ref().map(|i| i.leading_span_a.len()).unwrap_or(0);
+    let cloud_idx = ichi_len.saturating_sub(27);
     let span_a = ichi
         .as_ref()
-        .and_then(|i| i.leading_span_a.last().and_then(|x| *x))
+        .and_then(|i| i.leading_span_a.get(cloud_idx).and_then(|x| *x))
         .unwrap_or(last);
     let span_b = ichi
         .as_ref()
-        .and_then(|i| i.leading_span_b.last().and_then(|x| *x))
+        .and_then(|i| i.leading_span_b.get(cloud_idx).and_then(|x| *x))
         .unwrap_or(last);
     let cloud_top = span_a.max(span_b);
     let cloud_bot = span_a.min(span_b);
