@@ -23,7 +23,13 @@ pub fn compute_cross_asset_at(
     dividend_amounts: &[f64],
 ) -> [f32; 8] {
     let rs_market = relative_strength(asset_bars, spy_bars, 20);
-    let rs_sector = relative_strength(asset_bars, sector_bars, 20);
+    // Fall back to market RS when no sector ETF is available (ETFs, crypto,
+    // unrecognised symbols). Matches the live-mode behaviour in cross_asset.rs.
+    let rs_sector = if sector_bars.len() >= 2 {
+        relative_strength(asset_bars, sector_bars, 20)
+    } else {
+        rs_market
+    };
     let corr_60 = rolling_corr(asset_bars, spy_bars, 60);
     let corr_change = corr_change_20d(asset_bars, spy_bars, 60, 20);
     let div_trend = dividend_trend(dividend_amounts);
@@ -133,19 +139,21 @@ fn pearson_corr(x: &[f64], y: &[f64]) -> f32 {
 /// previous (up to) 4 payments.
 fn dividend_trend(amounts: &[f64]) -> f32 {
     if amounts.len() < 2 {
-        return 0.0;
+        // No dividend history: return a small negative value distinguishing
+        // "no yield policy" from a neutral-trending payer (which returns 0.0).
+        return -0.1;
     }
     let last = *amounts.last().unwrap();
     let history_end = amounts.len() - 1;
     let history_start = history_end.saturating_sub(4);
     let mut hist: Vec<f64> = amounts[history_start..history_end].to_vec();
     if hist.is_empty() {
-        return 0.0;
+        return -0.1;
     }
     hist.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let median = hist[hist.len() / 2];
     if median <= 0.0 {
-        return 0.0;
+        return -0.1;
     }
     let ratio = last / median;
     if ratio > 1.05 {
@@ -153,6 +161,7 @@ fn dividend_trend(amounts: &[f64]) -> f32 {
     } else if ratio < 0.95 {
         -1.0
     } else {
-        0.0
+        // Continuous signal in the stable band: captures small trends <5%
+        ((ratio - 1.0) * 10.0).clamp(-0.9, 0.9) as f32
     }
 }
