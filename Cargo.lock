@@ -853,9 +853,9 @@ dependencies = [
 
 [[package]]
 name = "finance-query"
-version = "2.4.0"
+version = "2.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2c4cd7659ad0702905802dd36ce8c484c93273e0a23bf4f00ee0d789d76dc62a"
+checksum = "933e7a15c30392a0ba803744917e73f679e4686f8c533b3966bf81076e77abe5"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -886,9 +886,9 @@ dependencies = [
 
 [[package]]
 name = "finance-query-derive"
-version = "2.4.0"
+version = "2.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "035abbe168af92e21940c9941892ecaf655385f46e3d18232e0022c8d8783307"
+checksum = "8ca518305e12e926d12c914dc4ce847f22cbefde8a37e97802c7ceeea48763ea"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1669,8 +1669,10 @@ dependencies = [
  "numpy",
  "parking_lot",
  "pyo3",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
  "tokio-stream",
  "tracing",

@@ -1,4 +1,4 @@
-use crate::store::{CachedValue, DataStore, FundamentalData};
+use crate::store::{CachedValue, DataStore, FundamentalData, OurCalendar};
 use finance_query::Ticker;
 use std::sync::Arc;
 
@@ -249,10 +249,17 @@ async fn poll_one_fundamental(symbol: &str, store: &Arc<DataStore>) {
     }
 
     if let Ok(Some(cal)) = ticker.calendar_events().await {
+        let today_ts = chrono::Utc::now().timestamp();
         if let Some(ts) = cal.next_earnings_date() {
-            let today_ts = chrono::Utc::now().timestamp();
             d.days_since_earnings = Some(((today_ts - ts).abs() / 86400) as f64);
         }
+        store.calendar.insert(
+            symbol.to_string(),
+            CachedValue::new(OurCalendar {
+                next_earnings_ts: cal.next_earnings_date(),
+                ex_div_ts: cal.ex_dividend_timestamp(),
+            }),
+        );
     }
 
     d.sector_idx = 0.0;

@@ -10,6 +10,7 @@ use crate::events::EventState;
 use dashmap::DashMap;
 use finance_query::{OptionContract, Split};
 use parking_lot::RwLock;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 // ── Our own extracted types (avoid naming private finance-query models) ────────
@@ -140,6 +141,8 @@ pub struct WorldIndices {
     pub oil: f64,
     pub eurusd: f64,
     pub usdjpy: f64,
+    pub vix_level: f64,
+    pub vix_ret: f64,
 }
 
 #[derive(Clone, Default)]
@@ -267,6 +270,12 @@ pub struct DataStore {
 
     pub rolling_stats: Arc<RollingStatsStore>,
     pub symbols: Vec<String>,
+
+    // Snapshot-polled sets used by cross_asset::assemble (live mode)
+    pub trending_symbols: Arc<RwLock<HashSet<String>>>,
+    pub screener_membership: Arc<DashMap<String, f32>>,
+    /// Per-symbol 24h decay-weighted news sentiment [-1.0, +1.0]. Updated every 5 min.
+    pub news_sentiment: Arc<DashMap<String, f32>>,
 }
 
 impl DataStore {
@@ -319,6 +328,9 @@ impl DataStore {
             })),
             rolling_stats,
             symbols,
+            trending_symbols: Arc::new(RwLock::new(HashSet::new())),
+            screener_membership: Arc::new(DashMap::new()),
+            news_sentiment: Arc::new(DashMap::new()),
         })
     }
 }

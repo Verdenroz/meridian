@@ -24,7 +24,7 @@ name = "meridian-bus"
 path = "src/main.rs"
 
 [dependencies]
-finance-query = { version = "2.4", features = [
+finance-query = { version = "=2.4.3", features = [
     "dataframe",
     "indicators",
     "backtesting",
@@ -47,6 +47,8 @@ dashmap       = "6"
 bincode       = "1"
 parking_lot   = "0.12"
 tokio-stream  = "0.1"
+reqwest       = { version = "0.13", default-features = false }
+sha2          = "0.10"
 
 [features]
 default = ["python"]

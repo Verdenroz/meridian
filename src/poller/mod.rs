@@ -3,6 +3,8 @@ pub mod fundamental;
 pub mod insider;
 pub mod macro_fred;
 pub mod market;
+pub mod news_sentiment;
 pub mod options;
 pub mod risk;
 pub mod rss;
+pub mod screener;

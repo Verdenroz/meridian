@@ -31,7 +31,7 @@ impl EventState {
     ///   [4]  SEC filing recency        exp(-Δt / τ_sec)
     ///   [5]  10-K/10-Q recency         exp(-Δt / τ_sec_annual)
     ///   [6]  news intensity (24h)      (stubbed: raw count proxy)
-    ///   [7]  news sentiment (24h)      (stubbed: 0.0 until MarketReader)
+    ///   [7]  news sentiment (24h)      per-asset sentiment from llama-swap model
     ///   [8]  earnings proximity        decayed by days_to_earnings (external)
     ///   [9]  ex-dividend proximity     decayed by days_to_exdiv (external)
     pub fn to_block6(
@@ -39,6 +39,7 @@ impl EventState {
         now: DateTime<Utc>,
         earnings_proximity: f32,
         exdiv_proximity: f32,
+        news_sentiment: f32,
     ) -> [f32; 10] {
         let decay = |kind: EventKind| -> f32 {
             let (mag, ts) = self.slots[kind.index()];
@@ -76,7 +77,7 @@ impl EventState {
             decay(EventKind::SecFiling10K).max(decay(EventKind::SecFiling10Q)),
             // news intensity proxy (magnitude = article count, log-scaled)
             decay(EventKind::NewsHighImpact),
-            0.0, // news sentiment — MarketReader stub
+            news_sentiment,
             earnings_proximity,
             exdiv_proximity,
         ]

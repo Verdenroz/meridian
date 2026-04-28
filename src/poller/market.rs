@@ -3,7 +3,7 @@ use crate::store::{
     CachedValue, CryptoMarket, DataStore, FearGreedData, MarketSummaryData, SectorData,
     WorldIndices,
 };
-use finance_query::{IndicesRegion, Region, Sector, crypto, finance};
+use finance_query::{IndicesRegion, Region, Sector, Ticker, crypto, finance};
 use std::collections::HashSet;
 use std::sync::Arc;
 
@@ -36,6 +36,16 @@ pub async fn poll_world_indices(store: &Arc<DataStore>) -> anyhow::Result<()> {
                 "oil" => wi.oil = quote,
                 _ => {}
             }
+        }
+    }
+
+    // VIX level for market block dims [0..8] — not included in indices() response.
+    let prev_vix = store.world_indices.read().value.vix_level;
+    if let Ok(vix_ticker) = Ticker::new("^VIX").await {
+        if let Ok(q) = vix_ticker.quote().await {
+            let level = q.regular_market_price.as_ref().and_then(|v| v.raw).unwrap_or(0.0);
+            wi.vix_level = level;
+            wi.vix_ret = if prev_vix > 0.0 { (level / prev_vix).ln() } else { 0.0 };
         }
     }
 
@@ -233,6 +243,7 @@ pub async fn poll_market_summary(store: &Arc<DataStore>) -> anyhow::Result<()> {
     };
 
     *store.market_summary.write() = CachedValue::new(ms_data);
+    *store.trending_symbols.write() = new_trending;
     tracing::debug!("Market summary updated");
     Ok(())
 }

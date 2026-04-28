@@ -1,6 +1,6 @@
 use crate::features::assembler::assemble_all;
 use crate::output::emit_row;
-use crate::poller::{analyst, insider, macro_fred, market, options, risk, rss};
+use crate::poller::{analyst, insider, macro_fred, market, news_sentiment, options, risk, rss, screener};
 use crate::store::DataStore;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,7 +21,7 @@ pub async fn run_one_minute(store: Arc<DataStore>) {
     }
 }
 
-/// Every 5 minutes: poll RSS feeds.
+/// Every 5 minutes: poll RSS feeds, then score per-asset news sentiment.
 pub async fn run_five_minute(store: Arc<DataStore>) {
     let mut ticker = interval(Duration::from_secs(5 * 60));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -29,6 +29,9 @@ pub async fn run_five_minute(store: Arc<DataStore>) {
         ticker.tick().await;
         if let Err(e) = rss::poll_rss_feeds(&store).await {
             tracing::warn!(err = %e, "RSS poll failed");
+        }
+        if let Err(e) = news_sentiment::poll_news_sentiment(&store).await {
+            tracing::warn!(err = %e, "news sentiment poll failed");
         }
     }
 }
@@ -45,7 +48,7 @@ pub async fn run_fifteen_minute(store: Arc<DataStore>) {
     }
 }
 
-/// Every 1 hour: poll world indices and crypto market.
+/// Every 1 hour: poll world indices, crypto, market summary, and screener membership.
 pub async fn run_hourly(store: Arc<DataStore>) {
     let mut ticker = interval(Duration::from_secs(60 * 60));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -55,6 +58,7 @@ pub async fn run_hourly(store: Arc<DataStore>) {
             log_err(market::poll_world_indices(&store), "world_indices"),
             log_err(market::poll_crypto_market(&store), "crypto"),
             log_err(market::poll_market_summary(&store), "market_summary"),
+            log_err(screener::poll_screener_membership(&store), "screener"),
         );
     }
 }
