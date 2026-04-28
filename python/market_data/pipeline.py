@@ -20,8 +20,12 @@ Usage:
 from __future__ import annotations
 
 import os
+import random
 import sys
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,6 +54,11 @@ class PipelineConfig:
     end: str | None = None
     workers: int = 4
     binary: Path | None = None
+    max_retries: int = 5
+    retry_base_seconds: float = 2.0
+    retry_max_seconds: float = 60.0
+    retry_jitter_seconds: float = 1.0
+    request_permits: int | None = None
 
 
 def load_symbols(symbols_file: Path) -> list[str]:
@@ -112,23 +121,84 @@ def build_plan(symbols: list[str]) -> dict:
 
 # ── Collect ───────────────────────────────────────────────────────────────────
 
-def _collect_one(symbol: str, cfg: PipelineConfig) -> tuple[str, bool, str]:
+_RATE_LIMIT_MARKERS = (
+    "429",
+    "too many requests",
+    "rate limit",
+    "rate-limit",
+    "rate limited",
+    "throttl",
+)
+
+
+def _effective_request_permits(cfg: PipelineConfig) -> int:
+    if cfg.request_permits is None:
+        return max(1, cfg.workers)
+    return max(1, min(cfg.request_permits, cfg.workers))
+
+
+def _is_rate_limit_error(exc: Exception) -> bool:
+    stderr = getattr(exc, "stderr", "") or ""
+    text = f"{type(exc).__name__}: {exc}\n{stderr}".lower()
+    return any(marker in text for marker in _RATE_LIMIT_MARKERS)
+
+
+def _retry_delay_seconds(
+    retry_index: int,
+    cfg: PipelineConfig,
+    rng: Callable[[], float] = random.random,
+) -> float:
+    exp = cfg.retry_base_seconds * (2 ** max(0, retry_index - 1))
+    capped = min(exp, cfg.retry_max_seconds)
+    jitter = max(0.0, cfg.retry_jitter_seconds) * max(0.0, rng())
+    return min(capped + jitter, cfg.retry_max_seconds)
+
+
+def _collect_one(
+    symbol: str,
+    cfg: PipelineConfig,
+    semaphore: threading.Semaphore | None = None,
+    sleeper: Callable[[float], None] = time.sleep,
+    rng: Callable[[], float] = random.random,
+) -> tuple[str, bool, str]:
     """Collect one symbol. Returns (symbol, success, message)."""
     from market_data.finance_query_collector import collect_symbol_to_dir
 
-    try:
-        collect_symbol_to_dir(
-            symbol=symbol,
-            data_dir=cfg.data_dir,
-            interval=cfg.interval,
-            start=cfg.start,
-            end=cfg.end,
-            binary=cfg.binary,
-            reports_dir=cfg.reports_dir,
-        )
-        return symbol, True, "ok"
-    except Exception as exc:
-        return symbol, False, str(exc)
+    max_attempts = max(1, cfg.max_retries + 1)
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if semaphore is None:
+                collect_symbol_to_dir(
+                    symbol=symbol,
+                    data_dir=cfg.data_dir,
+                    interval=cfg.interval,
+                    start=cfg.start,
+                    end=cfg.end,
+                    binary=cfg.binary,
+                    reports_dir=cfg.reports_dir,
+                )
+            else:
+                with semaphore:
+                    collect_symbol_to_dir(
+                        symbol=symbol,
+                        data_dir=cfg.data_dir,
+                        interval=cfg.interval,
+                        start=cfg.start,
+                        end=cfg.end,
+                        binary=cfg.binary,
+                        reports_dir=cfg.reports_dir,
+                    )
+            return symbol, True, "ok"
+        except Exception as exc:
+            if attempt >= max_attempts or not _is_rate_limit_error(exc):
+                return symbol, False, str(exc)
+            delay = _retry_delay_seconds(attempt, cfg, rng=rng)
+            print(
+                f"[pipeline] {symbol} rate-limited (attempt {attempt}/{max_attempts}); "
+                f"retrying in {delay:.1f}s",
+                file=sys.stderr,
+            )
+            sleeper(delay)
 
 
 def collect_universe(cfg: PipelineConfig) -> None:
@@ -144,12 +214,15 @@ def collect_universe(cfg: PipelineConfig) -> None:
 
     print(
         f"[pipeline] collecting {len(symbols)} symbols  "
-        f"interval={cfg.interval}  workers={cfg.workers}",
+        f"interval={cfg.interval}  workers={cfg.workers}  "
+        f"permits={_effective_request_permits(cfg)}  "
+        f"max_retries={cfg.max_retries}",
         file=sys.stderr,
     )
 
     failed: list[str] = []
     completed = 0
+    semaphore = threading.Semaphore(_effective_request_permits(cfg))
 
     # Prewarm the macro lookup cache by running the first symbol
     # synchronously. The Rust binary writes data/.macro_cache.json on its
@@ -163,7 +236,7 @@ def collect_universe(cfg: PipelineConfig) -> None:
             f"[pipeline] prewarming macro cache via {first} (synchronous)…",
             file=sys.stderr,
         )
-        sym, ok, msg = _collect_one(first, cfg)
+        sym, ok, msg = _collect_one(first, cfg, semaphore=semaphore)
         completed += 1
         status = "ok" if ok else f"FAILED: {msg}"
         print(f"[pipeline] {completed}/{len(symbols)}  {sym}  {status}", file=sys.stderr)
@@ -174,7 +247,9 @@ def collect_universe(cfg: PipelineConfig) -> None:
         rest = []
 
     with ThreadPoolExecutor(max_workers=cfg.workers) as pool:
-        futures = {pool.submit(_collect_one, sym, cfg): sym for sym in rest}
+        futures = {
+            pool.submit(_collect_one, sym, cfg, semaphore): sym for sym in rest
+        }
         for fut in as_completed(futures):
             sym, ok, msg = fut.result()
             completed += 1
@@ -234,6 +309,11 @@ def _cli() -> None:
     p_collect.add_argument("--end",          default=None)
     p_collect.add_argument("--workers",      type=int, default=4)
     p_collect.add_argument("--binary",       type=Path, default=None)
+    p_collect.add_argument("--max-retries", type=int, default=5)
+    p_collect.add_argument("--retry-base-seconds", type=float, default=2.0)
+    p_collect.add_argument("--retry-max-seconds", type=float, default=60.0)
+    p_collect.add_argument("--retry-jitter-seconds", type=float, default=1.0)
+    p_collect.add_argument("--request-permits", type=int, default=None)
 
     # ── stats ──
     p_stats = sub.add_parser("stats", help="Print shard counts per split")
@@ -255,6 +335,11 @@ def _cli() -> None:
             end=args.end,
             workers=args.workers,
             binary=args.binary,
+            max_retries=args.max_retries,
+            retry_base_seconds=args.retry_base_seconds,
+            retry_max_seconds=args.retry_max_seconds,
+            retry_jitter_seconds=args.retry_jitter_seconds,
+            request_permits=args.request_permits,
         )
         collect_universe(cfg)
 

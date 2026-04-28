@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tempfile
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -112,10 +113,11 @@ def stream_lines(
     proc_env = {**os.environ, **(env or {})}
     cmd = _build_cmd(symbol, interval, start, end, binary)
 
+    stderr_file = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
     proc = subprocess.Popen(
         cmd,
         stdout=subprocess.PIPE,
-        stderr=sys.stderr,  # pass Rust tracing logs through to caller's stderr
+        stderr=stderr_file,
         text=True,
         encoding="utf-8",
         env=proc_env,
@@ -126,8 +128,13 @@ def stream_lines(
     finally:
         proc.stdout and proc.stdout.close()
         proc.wait()
+        stderr_file.seek(0)
+        stderr_text = stderr_file.read()
+        if stderr_text:
+            print(stderr_text, end="", file=sys.stderr)
+        stderr_file.close()
         if proc.returncode not in (0, -15):  # -15 = SIGTERM (normal cancel)
-            raise subprocess.CalledProcessError(proc.returncode, cmd)
+            raise subprocess.CalledProcessError(proc.returncode, cmd, stderr=stderr_text)
 
 
 def iter_rows(
