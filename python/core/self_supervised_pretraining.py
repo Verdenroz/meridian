@@ -76,21 +76,27 @@ def infer_regime_label(feature_seq: np.ndarray) -> int:
 
     Uses two robust proxies available in every shard row:
       - volatility proxy: market block index 0 (global offset 184)
-      - return proxy: close log-return at index 3
+        = VIX / 100, clamped [0, 2]; per src/historical/batch.rs:154.
+      - return proxy: per-asset close log-return at index 3.
 
-    Canonical IDs match the spec:
+    Thresholds are calibrated against 10yr real shard data (SPY universe,
+    64-day windows): VIX/100 median ≈ 0.17, p70 ≈ 0.19, p90 ≈ 0.27.
+    The split below targets the spec §8.4 distribution of roughly
+    55/20/15/10 across {bull, high-vol, mean-rev, crisis}.
+
+    Canonical IDs (spec §11.3):
       0 = low-vol bull  1 = high-vol trending
       2 = mean-reverting  3 = crisis
     """
     vol_proxy = float(feature_seq[:, 184].mean())
     ret_proxy = float(feature_seq[:, 3].mean())
 
-    if vol_proxy > 1.5:
-        return 3  # crisis
-    if abs(ret_proxy) > 0.5 or vol_proxy > 0.6:
-        return 1  # high-vol trending
+    if vol_proxy > 0.28:
+        return 3  # crisis — sustained elevated VIX (top ~10%)
+    if vol_proxy > 0.19:
+        return 1  # high-vol trending — VIX elevated but not crisis
     if ret_proxy >= 0.0:
-        return 0  # low-vol trending
+        return 0  # low-vol bull
     return 2  # mean-reverting
 
 
@@ -287,8 +293,17 @@ class ShardDataset(IterableDataset):
         data = self._load_rows(path)
         n_rows = data.shape[0]
 
+        # `max_start` is the EXCLUSIVE upper bound on window start index — the
+        # last valid start is `max_start - 1` because we read both seq_a
+        # ([start, start+seq_len)) and the auxiliary next_return at
+        # `data[start + seq_len]`. With offset=4, seq_b reads
+        # [start+4, start+seq_len+4); the largest start where every read is in
+        # bounds is `n_rows - seq_len - offset`, which must be < max_start.
+        # The +1 is what lets exact-length synth shards (n_rows = seq_len +
+        # offset) yield their single (anchor, positive) pair instead of
+        # being silently dropped at `n_seqs <= 0`.
         min_start = max(0, -self.positive_offset)
-        max_start = n_rows - self.seq_len - max(self.positive_offset, 0)
+        max_start = n_rows - self.seq_len - max(self.positive_offset, 0) + 1
         n_seqs = max_start - min_start
         if n_seqs <= 0:
             return
@@ -491,9 +506,15 @@ class TarShardDataset(ShardDataset):
                 sample_weight = (
                     self.synthetic_loss_weight if is_synthetic else 1.0
                 )
+                # max_start is the EXCLUSIVE upper bound on window start; the
+                # +1 lets exact-length synth shards (n_rows = seq_len + offset)
+                # contribute their single (anchor, positive) pair. See the
+                # matching comment in `ShardDataset._iter_shard`.
                 n_rows = data.shape[0]
                 min_start = max(0, -self.positive_offset)
-                max_start = n_rows - self.seq_len - max(self.positive_offset, 0)
+                max_start = (
+                    n_rows - self.seq_len - max(self.positive_offset, 0) + 1
+                )
                 if max_start <= min_start:
                     continue
                 indices = np.arange(min_start, max_start)

@@ -151,8 +151,30 @@ def collect_universe(cfg: PipelineConfig) -> None:
     failed: list[str] = []
     completed = 0
 
+    # Prewarm the macro lookup cache by running the first symbol
+    # synchronously. The Rust binary writes data/.macro_cache.json on its
+    # first invocation; subsequent parallel processes read it instead of
+    # hammering FRED with 8× concurrent fetches and getting rate-limited.
+    # Spec §6.3 requires yield curve + 12 FRED series; without prewarming,
+    # parallel processes race to refetch the same data 8× and ~75% fail.
+    if symbols:
+        first = symbols[0]
+        print(
+            f"[pipeline] prewarming macro cache via {first} (synchronous)…",
+            file=sys.stderr,
+        )
+        sym, ok, msg = _collect_one(first, cfg)
+        completed += 1
+        status = "ok" if ok else f"FAILED: {msg}"
+        print(f"[pipeline] {completed}/{len(symbols)}  {sym}  {status}", file=sys.stderr)
+        if not ok:
+            failed.append(sym)
+        rest = symbols[1:]
+    else:
+        rest = []
+
     with ThreadPoolExecutor(max_workers=cfg.workers) as pool:
-        futures = {pool.submit(_collect_one, sym, cfg): sym for sym in symbols}
+        futures = {pool.submit(_collect_one, sym, cfg): sym for sym in rest}
         for fut in as_completed(futures):
             sym, ok, msg = fut.result()
             completed += 1

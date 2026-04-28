@@ -37,6 +37,17 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.multiprocessing as _torch_mp
+
+# DataLoader workers ship batches to the main process via shared-memory
+# tensors. Default sharing strategy on Linux is 'file_descriptor', which
+# allocates one FD per tensor per inflight sample — with 8 tensors per
+# sample, batch=32, prefetch=4, workers=4, that's ~4096 FDs in flight,
+# easily blowing past the default ulimit -n of 1024. Symptom: training
+# crashes mid-run with "OSError: [Errno 24] Too many open files" inside
+# the worker collate. 'file_system' uses tmpfs entries instead of FDs and
+# scales without a per-tensor FD cost.
+_torch_mp.set_sharing_strategy("file_system")
 from core.cross_asset_fusion import CrossAssetFusion
 from core.regime_aware_backbone import InputProjection, RAGDNBackbone, RegimeDetector
 from core.self_supervised_pretraining import (

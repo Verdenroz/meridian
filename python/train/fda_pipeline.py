@@ -32,7 +32,14 @@ class FDAConfig:
     # Earlier defaults (100 steps, 5 epochs, batch=32) severely underfit the
     # denoiser, producing off-manifold samples that the statistical gate cannot
     # distinguish from valid ones.
-    window_len: int = 64
+    #
+    # window_len = 68 (= TCP seq_len 64 + positive_offset 4): the spec §11.3
+    # contrastive pretrainer needs each synth shard to contain a (W_t, W_{t+4})
+    # pair, otherwise IterableShardDataset._iter_shard drops the shard for
+    # `n_seqs <= 0`. Spec §8.2's nominal T=64 refers to the validation-gate
+    # window; the 4 trailing rows are extra coherent timeseries that let TCP
+    # form the offset positive pair within a single synth shard.
+    window_len: int = 68
     feature_dim: int = 280
     diffusion_steps: int = 1000
     hidden_dim: int = 256
@@ -54,6 +61,10 @@ class FDAConfig:
     # sampling; the realized distribution (via heuristic post-hoc labeling)
     # will track these but is not guaranteed to match exactly.
     regime_quotas: tuple[float, float, float, float] = (0.30, 0.25, 0.25, 0.20)
+    # Seed for training reproducibility. The same data + config + seed gives
+    # the same trained model and the same synthetic distribution. Change this
+    # only if you want a different sample of an otherwise-equivalent run.
+    seed: int = 42
 
 
 @dataclass
@@ -633,15 +644,28 @@ class FDADiffusionModel(nn.Module):
         # that was killing stylized-fact gate acceptance.
         self.register_buffer("feature_mean", torch.zeros(feature_dim))
         self.register_buffer("feature_std", torch.ones(feature_dim))
+        # 1.0 for channels with non-trivial raw std in the training set,
+        # 0.0 for channels that were exactly constant zero across every
+        # real window (fundamental/options/text/unused-market dimensions
+        # not yet populated by the historical collector). `denormalize`
+        # post-multiplies by this mask so synthetic shards match real on
+        # dead channels exactly. Without it, the diffusion's tiny Gaussian
+        # noise on dead channels is a near-perfect real-vs-synth
+        # discriminator for the downstream contrastive pretrainer
+        # (saturates contrastive_acc → 1.0 in <100 steps because the
+        # encoder shortcut-learns "any nonzero in dead channel → synth").
+        # Default 1.0 so an unfitted model behaves as identity.
+        self.register_buffer("live_mask", torch.ones(feature_dim))
 
     def fit_feature_stats(self, windows: torch.Tensor) -> None:
-        """Compute per-channel mean and std from real training windows and
-        store them as buffers. `windows`: (N, T, F) float tensor.
+        """Compute per-channel mean, std, and live-channel mask from real
+        training windows. `windows`: (N, T, F) float tensor.
 
-        Channels with near-zero variance (< 1e-5) are left with std=1 so the
-        dead channels (fundamental/options/text blocks zeroed in the shards)
-        don't blow up when divided — instead they train on exact zeros and
-        reconstruct to exact zeros, which is the correct behaviour.
+        Dead channels (raw std < 1e-5) are stored with std=1, mean=0 for
+        numerically benign normalize/denormalize math, AND tracked in
+        `live_mask` so denormalize zeroes them post-multiplication. The
+        result: synthetic output is bit-identical to real on every
+        constant-zero dimension, closing the TCP-shortcut failure mode.
         """
         if windows.ndim != 3 or windows.shape[-1] != self.feature_dim:
             raise ValueError(
@@ -650,11 +674,12 @@ class FDADiffusionModel(nn.Module):
         flat = windows.reshape(-1, self.feature_dim)
         mean = flat.mean(dim=0)
         std = flat.std(dim=0)
-        # Dead / near-constant channels → std=1 (passthrough after subtracting
-        # mean, which zeroes them out).
-        std = torch.where(std > 1e-5, std, torch.ones_like(std))
+        is_dead = std <= 1e-5
+        std = torch.where(is_dead, torch.ones_like(std), std)
+        mean = torch.where(is_dead, torch.zeros_like(mean), mean)
         self.feature_mean.copy_(mean.to(self.feature_mean))
         self.feature_std.copy_(std.to(self.feature_std))
+        self.live_mask.copy_((~is_dead).to(self.live_mask.dtype))
 
     def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """Map raw feature space → unit-variance space (no clipping).
@@ -667,8 +692,9 @@ class FDADiffusionModel(nn.Module):
         return (x - self.feature_mean) / self.feature_std
 
     def denormalize(self, x: torch.Tensor) -> torch.Tensor:
-        """Map unit-variance space → raw feature space."""
-        return x * self.feature_std + self.feature_mean
+        """Map unit-variance space → raw feature space; zero dead channels
+        so synth matches real exactly on constant-zero dimensions."""
+        return (x * self.feature_std + self.feature_mean) * self.live_mask
 
     def forward(
         self, x: torch.Tensor, t: torch.Tensor, regime: torch.Tensor
@@ -776,11 +802,21 @@ def train_diffusion_model(
 
     opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
 
+    # Reproducibility: seeding training removes the run-to-run lottery where
+    # ε-MSE training would land in either a mildly-leptokurtic basin (synth
+    # passes the gate at ~4%%) or a fully-Gaussian basin (synth fails 100%%).
+    # v-parameterization (below) makes this lottery much smaller, but seeding
+    # eliminates it entirely so the same data + config gives the same result.
+    torch.manual_seed(cfg.seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(cfg.seed)
+
     n = x_norm.shape[0]
     n_params = sum(p.numel() for p in model.parameters())
-    print(f"[fda] training diffusion denoiser: params={n_params:,} "
-          f"windows={n} epochs={cfg.epochs} batch={cfg.batch_size} "
-          f"T_diff={cfg.diffusion_steps}", flush=True)
+    print(f"[fda] training diffusion denoiser (v-parameterization): "
+          f"params={n_params:,} windows={n} epochs={cfg.epochs} "
+          f"batch={cfg.batch_size} T_diff={cfg.diffusion_steps} "
+          f"seed={cfg.seed}", flush=True)
     for epoch in range(cfg.epochs):
         perm = torch.randperm(n, device=device)
         loss_sum = 0.0
@@ -792,9 +828,21 @@ def train_diffusion_model(
             t = torch.randint(1, cfg.diffusion_steps + 1, (x0.shape[0],), device=device)
             eps = torch.randn_like(x0)
             ab = model.alpha_bar[t][:, None, None]
-            noisy = torch.sqrt(ab) * x0 + torch.sqrt(1.0 - ab) * eps
-            pred = model(noisy, t, regime)
-            loss = F.mse_loss(pred, eps)
+            sqrt_ab = torch.sqrt(ab)
+            sqrt_om = torch.sqrt(1.0 - ab)
+            noisy = sqrt_ab * x0 + sqrt_om * eps
+            # v-parameterization (Salimans & Ho 2022, "Progressive Distillation
+            # for Fast Sampling of Diffusion Models"): predict v rather than ε.
+            #   v_t = √ᾱ_t · ε - √(1-ᾱ_t) · x₀
+            # v has constant unit variance across all noise levels, which
+            # avoids the ε-MSE failure mode where the optimal predictor
+            # at high t collapses toward zero (mode collapse on the data
+            # distribution). At t=T (ᾱ→0), v ≈ -x₀; at t=0 (ᾱ→1), v ≈ ε —
+            # the model is forced to learn data structure at every step
+            # rather than just denoise.
+            v_target = sqrt_ab * eps - sqrt_om * x0
+            v_pred = model(noisy, t, regime)
+            loss = F.mse_loss(v_pred, v_target)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
@@ -852,30 +900,30 @@ def sample_diffusion_windows(
     x0_clip: float = 5.0,
     eta: float = 0.0,
 ) -> np.ndarray:
-    """DDIM reverse sampler with per-step x₀ clipping and full DDPM variance.
+    """DDIM reverse sampler over a v-parameterized denoiser.
 
-    Plain DDPM reverse in ε-parameterization is numerically unstable on this
-    data: imperfect ε-predictions (shrunk by ~0.6× vs the true noise scale
-    because of finite model capacity + leptokurtic target distribution) cause
-    x_t to drift exponentially from std=1 at t=T up to std=75 at t=0, blowing
-    samples past the ±10 hard gate. The fix is to re-express each reverse
-    step via the model's x₀ estimate and clip it to the training range:
+    The model predicts v_t = √ᾱ_t · ε - √(1-ᾱ_t) · x₀ (Salimans & Ho 2022).
+    We recover x̂₀ and ε̂ from v̂ in closed form, clip x̂₀ to the training
+    distribution, then run the standard DDIM update:
 
-        x̂₀ = (x_t - √(1-ᾱ_t) · ε_θ) / √ᾱ_t             # predict x₀
+        v̂  = model(x_t, t, regime)
+        x̂₀ = √ᾱ_t · x_t - √(1-ᾱ_t) · v̂                # recover x₀
+        ε̂  = √(1-ᾱ_t) · x_t + √ᾱ_t · v̂                # recover ε
         x̂₀ ← clip(x̂₀, -x0_clip, +x0_clip)              # stay in-distribution
         σ_t = η · √((1-ᾱ_{t-1})/(1-ᾱ_t)) · √(1 - ᾱ_t/ᾱ_{t-1})
         x_{t-1} = √ᾱ_{t-1} · x̂₀
-                + √(1-ᾱ_{t-1} - σ_t²) · ε_θ
+                + √(1-ᾱ_{t-1} - σ_t²) · ε̂
                 + σ_t · z                                # stochastic term
 
+    v-parameterization sidesteps the ε-MSE collapse-to-zero failure mode:
+    v has unit variance at every t, so optimal predictions don't shrink
+    toward 0 at high noise levels. The sampler structure is identical to
+    plain DDIM — only the closed-form recovery of x̂₀/ε̂ from v̂ changes.
+
     `eta` ∈ [0, 1] interpolates DDIM↔DDPM: 0 = deterministic, 1 = full DDPM.
-    Default 0 because our finite-capacity denoiser produces ε predictions
-    that are shrunk relative to true noise (std ~0.6 instead of ~1.0); adding
-    the full DDPM posterior noise on top of those biased predictions inflates
-    sample variance 2× (return std 0.05 vs real 0.022) and destroys fat
-    tails. Deterministic reverse (eta=0) gives the best match to real
-    moments at the cost of slightly over-correlated temporal structure,
-    which the calibrated autocorr gate tolerates.
+    Default 0; the v-parameterized denoiser doesn't have the systematic ε
+    shrinkage that broke eta>0 under ε-prediction, so eta is now a clean
+    diversity↔fidelity dial.
     """
     dev = device or next(model.parameters()).device
     x_t = torch.randn(n_windows, window_len, feature_dim, device=dev)
@@ -888,16 +936,19 @@ def sample_diffusion_windows(
     with torch.no_grad():
         for step in range(model.diffusion_steps, 0, -1):
             t = torch.full((n_windows,), step, dtype=torch.long, device=dev)
-            eps_theta = model(x_t, t, regime)
+            v_theta = model(x_t, t, regime)
             alpha_bar_t = model.alpha_bar[t][:, None, None]
             alpha_bar_prev = (
                 model.alpha_bar[t - 1][:, None, None]
                 if step > 1
                 else torch.ones_like(alpha_bar_t)
             )
+            sqrt_ab = torch.sqrt(alpha_bar_t)
+            sqrt_om = torch.sqrt(1.0 - alpha_bar_t)
 
-            # Predict x₀ from x_t and the noise estimate; clip to training range.
-            x0_hat = (x_t - torch.sqrt(1.0 - alpha_bar_t) * eps_theta) / torch.sqrt(alpha_bar_t)
+            # Recover x̂₀ and ε̂ from the v-prediction in closed form.
+            x0_hat = sqrt_ab * x_t - sqrt_om * v_theta
+            eps_theta = sqrt_om * x_t + sqrt_ab * v_theta
             x0_hat = torch.clamp(x0_hat, -x0_clip, x0_clip)
 
             if step > 1:
@@ -1130,7 +1181,14 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--input-dir", type=Path, default=Path("data/mmaps/train"))
     parser.add_argument("--output-dir", type=Path, default=Path("data/mmaps_synth"))
     parser.add_argument("--max-real-windows", type=int, default=4096)
-    parser.add_argument("--window-len", type=int, default=64)
+    parser.add_argument(
+        "--window-len",
+        type=int,
+        default=68,
+        help="Synth shard length. Defaults to 68 = TCP seq_len 64 + positive_offset 4 "
+             "so each synth shard contains a (W_t, W_{t+4}) pair for spec §11.3 "
+             "contrastive pretraining. Lower values silently drop synth from TCP.",
+    )
     parser.add_argument("--stride", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--batch-size", type=int, default=64)
