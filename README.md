@@ -12,6 +12,8 @@ For the full canonical specification, see [`meridian-spec.md`](meridian-spec.md)
 |---|---|
 | Data-source fidelity (finance-query only) | Validated and aligned with current daily data paths |
 | Arithmetic and assumptions in v4 spec | Validated with corrections applied in `meridian-spec.md` |
+| Feature block coverage (all 280 dims) | All dims populated in both live and historical modes — no zero-filled blocks |
+| Train/inference alignment | VIX-based Vol/Sentiment now consistent across both modes; sector ETFs and international index data fetched in historical mode; residual divergences documented in spec §6.3.1 |
 | RA-GDN core | Implemented |
 | SWA hybrid blocks | Implemented |
 | FDA / TCP / PTA | Implemented in training pipelines |

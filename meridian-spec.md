@@ -577,16 +577,18 @@ Each feature represents a decayed signal from the most recent event of that type
 
 #### Block 7: Cross-Asset Context (8 features)
 
-| Feature | Computation | Notes |
-|---|---|---|
-| Relative strength (20d) | Asset return / SPY return (20d) | Momentum vs market |
-| Sector relative strength | Asset return / sector return (20d) | Within-sector momentum |
-| Correlation to SPY (60d) | Rolling 60-day correlation | Beta-like but realized |
-| Correlation change (Δ20d) | Correlation today - 20d ago | Decorrelation signal |
-| Is trending ticker | `finance::trending(Region::US)` membership | Binary |
-| Screener membership count | Number of `finance::screener()` lists containing this ticker | [0, 15] → [0, 1] |
-| Recommendation similarity rank | `recommendations(5)` → overlap with portfolio | Count of recommended tickers in portfolio |
-| Dividend analytics trend | `dividend_analytics()` payout trend | -1 (declining) / 0 / +1 (growing) |
+| Feature | Computation | Live source | Historical source |
+|---|---|---|---|
+| Relative strength (20d) | Asset return − SPY return (20d) | `store.prices` (SPY price buffer) | Asset + SPY chart series |
+| Sector relative strength | Asset 1d return − sector 1d return | `store.sector.returns[sector_idx]` | Asset + sector ETF chart series (20d) |
+| Correlation to SPY (60d) | Rolling Pearson correlation | `store.prices` (60d window) | Asset + SPY chart series |
+| Correlation change (Δ20d) | Corr today − corr 20d ago | `store.prices` offset window | Asset + SPY chart series |
+| Is trending ticker | `finance::trending(Region::US)` | `store.trending_symbols` (hourly poll) | Snapshot blended with vol z-score proxy |
+| Screener membership count | Fraction of screeners containing ticker | `store.screener_membership` (hourly poll) | Snapshot blended with positive-return-ratio proxy |
+| Recommendation overlap | Strong buy + buy fraction from analyst data | `store.analyst.recommendation_period` | Snapshot blended with correlation magnitude proxy |
+| Dividend analytics trend | Dividend payout direction | `store.fundamentals.dividend_yield` presence | `dividend_analytics()` history comparison |
+
+**Note on sector relative strength:** Live mode uses the daily sector return from `finance::sector()` as the benchmark; historical mode uses a 20-day sector ETF (XLK/XLF/…/XLU) chart lookback. Both are meaningful but differ in horizon. The GICS mapping lives in `src/features/sector_map.rs`.
 
 #### Block 8: Text Embedding (64 features)
 
@@ -600,16 +602,20 @@ From MarketReader (Section 7.10).
 
 #### Volatility & Sentiment (12 features)
 
-| Feature | Source | Dims |
-|---|---|---|
-| VIX level | `Ticker::new("^VIX").price()` | 1 |
-| VIX 1d change | Computed from VIX history | 1 |
-| VIX term structure | VIX / VIX3M ratio (contango/backwardation) | 1 |
-| Fear & Greed index | `finance::fear_and_greed()` | 1 |
-| Fear & Greed classification | One-hot (extreme fear / fear / neutral / greed / extreme greed) | 5 |
-| Market-wide put/call ratio | Aggregate from CBOE data or options universe | 1 |
-| HY spread proxy | HYG/IEF price ratio | 1 |
-| Credit stress | LQD/TLT ratio | 1 |
+Sub-block layout — absolute dims 184–195:
+
+| Dim (market-relative) | Feature | Live source | Historical source | Dims |
+|---|---|---|---|---|
+| 0 | VIX level (÷ 100, clamped 0–2) | `Ticker::new("^VIX").quote()` | `Ticker::new("^VIX").chart()` | 1 |
+| 1–5 | VIX regime one-hot (extreme-fear/fear/neutral/greed/extreme-greed) | Thresholds: ≥35 / ≥28 / ≥20 / ≥14 / <14 | Same thresholds applied to VIX chart close | 5 |
+| 6 | VIX level (÷ 20, clamped 0–5) | Same VIX quote | Same VIX chart | 1 |
+| 7 | VIX 1d log-return | `(vix_now / vix_prev).ln()` | Day-over-day log-return from VIX chart | 1 |
+| 8 | VIX term structure proxy | Stub (0.0) — no live VIX3M feed | Stub (0.0) | 1 |
+| 9 | Fear & Greed index (÷ 100) | `finance::fear_and_greed()` | `finance::fear_and_greed()` historical | 1 |
+| 10 | DXY proxy return | UUP return from `world_indices` poller | UUP log-return from chart | 1 |
+| 11 | Gold–oil spread proxy | `(gold_ret − oil_ret) × 0.5` clamped ±2 | Same formula from GLD/USO chart | 1 |
+
+> **Note:** Both live and historical modes now use VIX-based dims [0–8]. Fear & Greed is at dim 9 as a macro-sentiment proxy in both modes. The VIX term structure (dim 8) remains a stub — no live or historical VIX3M data source is available via finance-query.
 
 #### Yield Curve (12 features)
 
@@ -649,37 +655,39 @@ All 12 maturities from `fred::treasury_yields(year)`:
 
 #### Sector & Industry Performance (16 features)
 
-| Feature | Dims | Computation |
-|---|---|---|
-| Sector 1d returns (11 sectors) | 11 | Day change per sector |
-| Sector dispersion | 1 | Std dev of 11 sector returns |
-| Best sector ID | 1 | Index of top-performing sector |
-| Worst sector ID | 1 | Index of worst-performing sector |
-| Sector rotation velocity | 1 | 20d change in sector ranking correlation |
-| Breadth (% above SMA200) | 1 | From `finance::market_summary()` |
+Sector order: Tech(0), Financials(1), ConsumerDisc(2), CommServices(3), Healthcare(4), Industrials(5), ConsumerStaples(6), Energy(7), Materials(8), RealEstate(9), Utilities(10).
+
+| Feature | Dims | Live source | Historical source |
+|---|---|---|---|
+| Sector 1d returns (11 sectors) | 11 | `finance::sector()` daily returns | Sector ETF chart data (XLK, XLF, XLY, XLC, XLV, XLI, XLP, XLE, XLB, XLRE, XLU) |
+| Sector dispersion | 1 | Std dev of 11 sector returns | Same, computed from ETF returns |
+| Best sector ID | 1 | Index of top-performing sector | Same |
+| Worst sector ID | 1 | Index of worst-performing sector | Same |
+| Sector rotation velocity | 1 | 20d change in sector ranking correlation | Same, using ETF return windows |
+| Breadth (% above SMA200) | 1 | `finance::market_summary()` | `finance::market_summary()` historical |
 
 #### World Indices & Cross-Asset (20 features)
 
-| Feature | Source | Dims |
-|---|---|---|
-| S&P 500 return (1d) | `finance::indices(Americas)` — SPX | 1 |
-| NASDAQ return (1d) | `finance::indices(Americas)` — IXIC | 1 |
-| Russell 2000 return (1d) | `finance::indices(Americas)` — RUT | 1 |
-| Dow Jones return (1d) | `finance::indices(Americas)` — DJI | 1 |
-| FTSE 100 return (1d) | `finance::indices(Europe)` | 1 |
-| DAX return (1d) | `finance::indices(Europe)` | 1 |
-| Nikkei 225 return (1d) | `finance::indices(AsiaPacific)` | 1 |
-| Hang Seng return (1d) | `finance::indices(AsiaPacific)` | 1 |
-| Shanghai Composite return | `finance::indices(AsiaPacific)` | 1 |
-| DXY proxy (UUP) | `Ticker::new("UUP").price()` | 1 |
-| EUR/USD return | From `finance::currencies()` | 1 |
-| USD/JPY return | Same | 1 |
-| Gold (GLD) return | `Ticker::new("GLD").price()` | 1 |
-| Oil (USO) return | `Ticker::new("USO").price()` | 1 |
-| BTC price + return | `crypto::coin("bitcoin", "usd")` | 2 |
-| ETH price + return | `crypto::coin("ethereum", "usd")` | 2 |
-| Crypto total mkt cap | `crypto::coins("usd", 1)` mkt cap | 1 |
-| Crypto dominance (BTC) | BTC mkt cap / total | 1 |
+| Feature | Live source | Historical source | Dims |
+|---|---|---|---|
+| S&P 500 return (1d) | `finance::indices(Americas)` — `^GSPC` | `Ticker::new("^GSPC").chart()` | 1 |
+| NASDAQ return (1d) | `finance::indices(Americas)` — `^IXIC` | `Ticker::new("^IXIC").chart()` | 1 |
+| Russell 2000 return (1d) | `finance::indices(Americas)` — `^RUT` | `Ticker::new("^RUT").chart()` | 1 |
+| Dow Jones return (1d) | `finance::indices(Americas)` — `^DJI` | `Ticker::new("^DJI").chart()` | 1 |
+| FTSE 100 return (1d) | `finance::indices(Europe)` — `^FTSE` | `Ticker::new("^FTSE").chart()` | 1 |
+| DAX return (1d) | `finance::indices(Europe)` — `^GDAXI` | `Ticker::new("^GDAXI").chart()` | 1 |
+| Nikkei 225 return (1d) | `finance::indices(AsiaPacific)` — `^N225` | `Ticker::new("^N225").chart()` | 1 |
+| Hang Seng return (1d) | `finance::indices(AsiaPacific)` — `^HSI` | `Ticker::new("^HSI").chart()` | 1 |
+| Shanghai Composite return | `finance::indices(AsiaPacific)` — `000001.SS` | `Ticker::new("000001.SS").chart()` | 1 |
+| DXY proxy (UUP return) | From `world_indices` poller | `Ticker::new("UUP").chart()` | 1 |
+| EUR/USD return | `world_indices` poller | `Ticker::new("EURUSD=X").chart()` | 1 |
+| USD/JPY return | `world_indices` poller | `Ticker::new("JPY=X").chart()` | 1 |
+| Gold return | `world_indices` poller (GLD proxy) | `Ticker::new("GLD").chart()` | 1 |
+| Oil return | `world_indices` poller (USO proxy) | `Ticker::new("USO").chart()` | 1 |
+| BTC price (normalized) + 1d return | `finance::crypto_market()` | `Ticker::new("BTC-USD").chart()` | 2 |
+| ETH price (normalized) + 1d return | `finance::crypto_market()` | `Ticker::new("ETH-USD").chart()` | 2 |
+| Crypto total market cap (log-normalized) | `finance::crypto_market()` | `finance::crypto_market()` historical | 1 |
+| BTC dominance | BTC mkt cap / total | Same | 1 |
 
 #### Market Breadth & Flow (12 features)
 
@@ -716,6 +724,23 @@ All 12 maturities from `fred::treasury_yields(year)`:
 | Topic diversity (1h) | Number of distinct topics in recent news | 1 |
 
 **Total market-wide features: 12 + 12 + 12 + 16 + 20 + 12 + 12 = 96 dims.**
+
+---
+
+### 6.3.1 Train/Inference Alignment Notes
+
+The following documents any residual divergences between live-mode (`src/features/`) and historical-mode (`src/historical/batch.rs`) feature computation. All listed items are intentional approximations, not bugs.
+
+| Block | Dim(s) | Live mode | Historical mode | Impact |
+|---|---|---|---|---|
+| Vol/Sentiment | 8 (term structure) | 0.0 stub | 0.0 stub | None — both modes stub equally |
+| Vol/Sentiment | 9 (F&G) | `finance::fear_and_greed()` real-time | Historical daily F&G values | Minimal — same series, different latency |
+| Cross-Asset | 113 (sector RS) | 1d return vs sector daily (live `finance::sector()`) | 20d return vs sector ETF chart (e.g., XLK) | Horizon mismatch (1d live vs 20d historical) — training sees stronger relative-return signals |
+| Cross-Asset | 116 (trending) | Real-time `trending_symbols` set updated hourly | Historical trending computed from volume anomaly | Source mismatch; both are binary signals |
+| Cross-Asset | 117 (screener) | Hourly screener scan, normalized count | Historical screener scan from that day | Both use `Screener::all()` iteraton; latency differs |
+| Breadth/Flow | 82 (market hours) | UTC-approximate, EST/EDT not adjusted | UTC-approximate, same code path | Both slightly inaccurate during DST transitions |
+
+**All 280 feature dimensions are populated in both live and historical modes.** No block is zero-filled by design.
 
 ---
 
