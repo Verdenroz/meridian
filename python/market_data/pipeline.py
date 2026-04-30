@@ -26,7 +26,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -150,8 +150,10 @@ def _retry_delay_seconds(
 ) -> float:
     exp = cfg.retry_base_seconds * (2 ** max(0, retry_index - 1))
     capped = min(exp, cfg.retry_max_seconds)
-    jitter = max(0.0, cfg.retry_jitter_seconds) * max(0.0, rng())
-    return min(capped + jitter, cfg.retry_max_seconds)
+    # Full-jitter around the capped exponential delay to avoid herd retries.
+    jitter_span = min(capped, max(0.0, cfg.retry_jitter_seconds))
+    jitter = jitter_span * max(0.0, rng())
+    return max(0.0, capped - jitter)
 
 
 def _collect_one(
@@ -260,6 +262,35 @@ def collect_universe(cfg: PipelineConfig) -> None:
             )
             if not ok:
                 failed.append(sym)
+
+    if failed:
+        print(
+            f"[pipeline] entering sequential recovery pass for {len(failed)} symbol(s)",
+            file=sys.stderr,
+        )
+        cooldown = min(max(5.0, cfg.retry_base_seconds), 60.0)
+        time.sleep(cooldown)
+        recovery_cfg = replace(
+            cfg,
+            workers=1,
+            request_permits=1,
+            max_retries=max(cfg.max_retries, 10),
+            retry_base_seconds=max(cfg.retry_base_seconds, 5.0),
+            retry_max_seconds=max(cfg.retry_max_seconds, 180.0),
+            retry_jitter_seconds=max(cfg.retry_jitter_seconds, 30.0),
+        )
+        recovery_sem = threading.Semaphore(1)
+        still_failed: list[str] = []
+        for sym in failed:
+            rsym, ok, msg = _collect_one(sym, recovery_cfg, semaphore=recovery_sem)
+            status = "ok (recovery)" if ok else f"FAILED (recovery): {msg}"
+            print(
+                f"[pipeline] recovery {rsym}  {status}",
+                file=sys.stderr,
+            )
+            if not ok:
+                still_failed.append(rsym)
+        failed = still_failed
 
     if failed:
         print(
