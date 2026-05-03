@@ -214,6 +214,18 @@ def main() -> None:
     parser.add_argument("--negative-min-separation", type=int, default=50)
     parser.add_argument("--early-stop-patience-evals", type=int, default=20)
     parser.add_argument("--early-stop-min-delta", type=float, default=1e-4)
+    parser.add_argument(
+        "--tsne-reports-dir",
+        type=Path,
+        default=Path("reports/pretrain"),
+        help="Directory to write t-SNE cluster plots (§11.3 cluster gate)",
+    )
+    parser.add_argument(
+        "--tsne-every",
+        type=int,
+        default=5_000,
+        help="Generate a t-SNE plot every N steps (0 = disabled)",
+    )
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument(
         "--checkpoint-dir", type=Path, default=Path("checkpoints/pretrain")
@@ -332,6 +344,8 @@ def main() -> None:
             early_stop_patience_evals=args.early_stop_patience_evals,
             early_stop_min_delta=args.early_stop_min_delta,
             checkpoint_dir=args.checkpoint_dir,
+            tsne_reports_dir=args.tsne_reports_dir,
+            tsne_every=args.tsne_every,
             compile=args.compile,
         )
         pretrainer.train(

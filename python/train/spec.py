@@ -26,7 +26,7 @@ class MeridianSpec:
     # SWA blocks inserted after GDN blocks 3 and 7 (1-indexed)
     swa_after_gdn: tuple[int, ...] = field(default_factory=lambda: (3, 7))
     swa_window: int = 64
-    swa_heads: int = 8
+    swa_heads: int = 4
     n_experts: int = 4
     top_k_experts: int = 2
     n_heads: int = 4
@@ -115,7 +115,8 @@ class MeridianSpec:
         assert len(self.swa_after_gdn) == self.n_swa_layers
         assert all(1 <= p <= self.n_gdn_blocks for p in self.swa_after_gdn)
         assert self.swa_window == 64, "v4 fixes SWA window at 64"
-        assert self.swa_heads > 0 and self.d_model % self.swa_heads == 0
+        assert self.swa_heads == 4, "v4 fixes n_heads_swa = 4 (§7.3.2)"
+        assert self.d_model % self.swa_heads == 0
         assert self.top_k_experts <= self.n_experts
         assert self.top_k_experts <= self.n_regimes, (
             "top_k ≤ n_regimes for regime routing"
