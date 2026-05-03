@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import time
 from collections.abc import Callable
 
@@ -105,14 +106,18 @@ class RegimeDetector(nn.Module):
 class RAGDNLayer(nn.Module):
     """Single RA-GDN block with regime-conditioned forgetting/update gates.
 
-    Recurrence (per head):
-      S_t = α_t · S_{t-1} + β_t · (k_t ⊗ (v_t − α_t · S_{t-1}ᵀ k_t))
+    Recurrence (per head, spec §7.3.1):
+      δ_t = v_t − S_{t-1}ᵀ k_t               — prediction error (no α scaling)
+      S_t = (1 − α_t) · S_{t-1} + β_t · (k_t ⊗ δ_t)
       h_t = S_t · q_t
 
-    α_t = sigmoid(W_α · [h_{t-1}, regime_emb])  — forget gate
-    β_t = sigmoid(W_β · [h_{t-1}, regime_emb])  — update strength
+    Per spec §7.3.1, α and β depend only on the regime embedding:
+      α_t = sigmoid(W_α · regime_emb + b_α)  — forgetting rate (higher → forget more)
+      β_t = sigmoid(W_β · regime_emb + b_β)  — update strength
 
-    State S: (B, n_heads, d_head, d_v) — separate per asset at inference.
+    Gates are shared across all assets at a given timestep — assets differ in
+    their k/v/q/state, not in their forgetting/update rate, which is set by
+    the global market regime. State S: (B, N, n_heads, d_head, d_v).
     """
 
     def __init__(
@@ -137,10 +142,9 @@ class RAGDNLayer(nn.Module):
         self.v_proj = nn.Linear(d_model, n_heads * d_v, bias=False)
         self.o_proj = nn.Linear(n_heads * d_v, d_model, bias=False)
 
-        # Regime-conditioned gates: input = [prev_output (D) + regime_emb (64)]
-        gate_in = d_model + regime_emb_dim
-        self.alpha_proj = nn.Linear(gate_in, n_heads)
-        self.beta_proj = nn.Linear(gate_in, n_heads)
+        # Regime-conditioned gates per spec §7.3.1: input = regime_emb only.
+        self.alpha_proj = nn.Linear(regime_emb_dim, n_heads)
+        self.beta_proj = nn.Linear(regime_emb_dim, n_heads)
 
         self.norm = RMSNorm(d_model)
         self.drop = nn.Dropout(dropout)
@@ -179,13 +183,9 @@ class RAGDNLayer(nn.Module):
         """Fully vectorised over N assets — no serial loop.
 
         Each asset maintains its own independent GDN state across portfolio
-        timesteps. Gates are conditioned on the current asset token + regime
-        embedding (replacing the old prev_out cross-asset dependency, which
-        imposed an arbitrary ordering on assets). Cross-asset information flows
-        through CrossAssetFusion, not through the GDN state.
-
-        Weight shapes are unchanged from the serial version so pretrained
-        checkpoints load without modification.
+        timesteps. Per spec §7.3.1, α/β gates are conditioned on regime_emb
+        only and therefore shared across assets at the current step. Cross-
+        asset information flows through CrossAssetFusion, not the GDN state.
         """
         residual = x
         x = self.norm(x)
@@ -196,11 +196,11 @@ class RAGDNLayer(nn.Module):
         k = F.normalize(self.k_proj(x).view(B, N, H, Dh), dim=-1)
         v = self.v_proj(x).view(B, N, H, Dv)
 
-        # Gates: condition on current token + regime (same weight shapes as before)
-        regime_exp = regime_emb.unsqueeze(1).expand(-1, N, -1)  # (B, N, re)
-        gate_input = torch.cat([x, regime_exp], dim=-1)  # (B, N, D+re)
-        alpha = torch.sigmoid(self.alpha_proj(gate_input)).view(B, N, H, 1, 1)
-        beta = torch.sigmoid(self.beta_proj(gate_input)).view(B, N, H, 1, 1)
+        # Gates: regime_emb-only (spec §7.3.1) — broadcast over N assets.
+        alpha_b = torch.sigmoid(self.alpha_proj(regime_emb))  # (B, H)
+        beta_b = torch.sigmoid(self.beta_proj(regime_emb))  # (B, H)
+        alpha = alpha_b.view(B, 1, H, 1, 1).expand(B, N, H, 1, 1)
+        beta = beta_b.view(B, 1, H, 1, 1).expand(B, N, H, 1, 1)
 
         compute_dtype = k.dtype
         if state.dtype != compute_dtype:
@@ -210,17 +210,17 @@ class RAGDNLayer(nn.Module):
         if beta.dtype != compute_dtype:
             beta = beta.to(compute_dtype)
 
-        # DeltaNet update — vectorised over N
+        # DeltaNet update — vectorised over N (spec §7.3.1)
         # state: (B, N, H, Dh, Dv),  k: (B, N, H, Dh)
         s_k = torch.einsum("bnhdc,bnhd->bnhc", state, k)  # (B, N, H, Dv)
-        correction = v - alpha.squeeze(-1) * s_k  # (B, N, H, Dv)
+        correction = v - s_k  # δ_t = v_t − S_{t-1}ᵀ k_t  (no α scaling per spec)
 
         if self.surprise_hook is not None:
             surprise_t = correction.detach().pow(2).sum(dim=(-2, -1))  # (B, N)
             beta = self.surprise_hook(surprise_t, beta)
 
         outer = torch.einsum("bnhd,bnhc->bnhdc", k, correction)  # (B, N, H, Dh, Dv)
-        new_state = alpha * state + beta * outer  # (B, N, H, Dh, Dv)
+        new_state = (1.0 - alpha) * state + beta * outer  # (1−α)·S + β·(k⊗δ) per spec
 
         h = torch.einsum("bnhdc,bnhd->bnhc", new_state, q)  # (B, N, H, Dv)
         h = h.reshape(B, N, H * Dv)
@@ -241,7 +241,7 @@ class SlidingWindowAttention(nn.Module):
     def __init__(
         self,
         d_model: int = 768,
-        n_heads: int = 8,
+        n_heads: int = 4,
         window: int = 64,
         dropout: float = 0.1,
     ) -> None:
@@ -364,9 +364,9 @@ class FMoEBlock(nn.Module):
 
     def forward(
         self,
-        x: torch.Tensor,  # (B, T, D)
+        x: torch.Tensor,  # (B, N, D) — N = assets (token dim in backbone context)
         posteriors: torch.Tensor,  # (B, n_regimes) — from RegimeDetector
-    ) -> torch.Tensor:  # (B, T, D)
+    ) -> torch.Tensor:  # (B, N, D)
         residual = x
         x = self.norm(x)
 
@@ -374,21 +374,21 @@ class FMoEBlock(nn.Module):
         top_vals, top_idx = posteriors.topk(self.top_k, dim=-1)  # (B, k)
         gate_weights = F.softmax(top_vals, dim=-1)  # (B, k)
 
-        B, T, D = x.shape
+        B, N, D = x.shape
         n_experts = len(self.experts)
         # Run all experts on all inputs — eliminates conditional branching.
         # Extra compute (4 vs 2 experts) is negligible at B=2, N=100 vs. kernel launch savings.
         all_expert_out = torch.stack(
             [expert(x) for expert in self.experts], dim=0
-        )  # (n_experts, B, T, D)
+        )  # (n_experts, B, N, D)
         # Scatter gate weights into per-expert weight tensor
         expert_weights = torch.zeros(B, n_experts, device=x.device, dtype=x.dtype)
         expert_weights.scatter_(1, top_idx, gate_weights)  # (B, n_experts)
-        # Weighted sum: (n_experts, B, 1, 1) * (n_experts, B, T, D)
+        # Weighted sum: (n_experts, B, 1, 1) * (n_experts, B, N, D)
         w = (
             expert_weights.permute(1, 0).unsqueeze(-1).unsqueeze(-1)
         )  # (n_experts, B, 1, 1)
-        out = (all_expert_out * w).sum(dim=0)  # (B, T, D)
+        out = (all_expert_out * w).sum(dim=0)  # (B, N, D)
 
         return residual + self.drop(out)
 
@@ -475,7 +475,7 @@ class RAGDNBackbone(nn.Module):
         fmoe_after_gdn: tuple[int, ...] = (2, 5, 8),
         swa_after_gdn: tuple[int, ...] = (3, 7),
         swa_window: int = 64,
-        swa_heads: int = 8,
+        swa_heads: int = 4,
         regime_emb_dim: int = 64,
         dropout: float = 0.1,
     ) -> None:
@@ -696,3 +696,38 @@ class RAGDNBackbone(nn.Module):
             new_states = list(out[1:])
             return x_out, new_states
         return self._forward_impl(x, regime_emb, posteriors, states)
+
+    def last_swa_entropy(self, states: list[torch.Tensor]) -> float:
+        """Mean normalized Shannon entropy of SWA attention (§11.3 gate: < 0.80).
+
+        Derived from SWA cache states after a forward pass — no extra pass needed.
+        Uses the last cached token as the query approximation. Returns [0, 1].
+        """
+        swa_caches = states[self._n_gdn_states :]  # list of (B, N, W, D)
+        entropies: list[float] = []
+        with torch.no_grad():
+            for block, cache in zip(self.swa_blocks, swa_caches):
+                B, N, W, D = cache.shape
+                H = block.attn.num_heads
+                Dh = D // H
+                in_w = block.attn.in_proj_weight.float()
+                in_b = block.attn.in_proj_bias
+                w_q, w_k = in_w[:D], in_w[D : 2 * D]
+                b_q = in_b[:D].float() if in_b is not None else None
+                b_k = in_b[D : 2 * D].float() if in_b is not None else None
+
+                # Last-token query vs full window keys
+                q_flat = cache[:, :, -1:, :].reshape(B * N, 1, D).float()
+                k_flat = cache.reshape(B * N, W, D).float()
+                q = F.linear(q_flat, w_q, b_q).view(B * N, 1, H, Dh).transpose(1, 2)
+                k = F.linear(k_flat, w_k, b_k).view(B * N, W, H, Dh).transpose(1, 2)
+
+                scores = torch.matmul(q, k.transpose(-2, -1)) * (Dh**-0.5)  # (BN, H, 1, W)
+                attn_w = torch.softmax(scores, dim=-1).squeeze(2)  # (BN, H, W)
+
+                eps = 1e-10
+                ent = -(attn_w * (attn_w + eps).log()).sum(dim=-1)  # (BN, H)
+                entropies.append((ent / math.log(W)).mean().item())
+
+        return sum(entropies) / len(entropies) if entropies else float("nan")
+
