@@ -194,7 +194,7 @@ def main() -> None:
     parser.add_argument("--log-every", type=int, default=100)
     parser.add_argument("--eval-every", type=int, default=1_000)
     parser.add_argument("--save-every", type=int, default=5_000)
-    parser.add_argument("--eval-max-batches", type=int, default=25)
+    parser.add_argument("--eval-max-batches", type=int, default=50)
     parser.add_argument(
         "--temperature", type=float, default=DEFAULT_SPEC.tcp_temperature
     )
