@@ -58,7 +58,7 @@ from core.self_supervised_pretraining import (
     load_checkpoint,
     save_checkpoint,
 )
-from optimization.losses import dsr_loss, return_head_loss
+from optimization.losses import dsr_loss, return_head_loss, rolling_sharpe_loss
 from optimization.portfolio_heads import (
     AuxHeadSurprise,
     MeridianR,
@@ -67,7 +67,7 @@ from optimization.portfolio_heads import (
 )
 from torch.utils.data import DataLoader, IterableDataset
 
-from train.feature_schema import BLOCK_PRICE_VOLUME, BLOCK_TECHNICAL
+from train.feature_schema import BLOCK_FUNDAMENTAL, BLOCK_PRICE_VOLUME, BLOCK_TECHNICAL
 from train.spec import DEFAULT_SPEC, MeridianSpec
 
 # ── Multi-asset dataset ───────────────────────────────────────────────────────
@@ -82,6 +82,8 @@ _PTA_VOLATILITY_CHANNELS = tuple(
 )
 _PTA_PERMUTED_FEATURE_SLICE = slice(BLOCK_PRICE_VOLUME.start, BLOCK_TECHNICAL.end)
 _PTA_PERMUTED_FEATURE_DIM = BLOCK_TECHNICAL.end - BLOCK_PRICE_VOLUME.start
+_PTA_IDENTITY_FEATURE_SLICE = slice(BLOCK_FUNDAMENTAL.end - 2, BLOCK_FUNDAMENTAL.end)
+_PTA_IDENTITY_FEATURE_DIM = _PTA_IDENTITY_FEATURE_SLICE.stop - _PTA_IDENTITY_FEATURE_SLICE.start
 _SYNTH_PREFIX = "FDA_SYNTH_"
 _SECTOR_HEADER_RE = re.compile(r"([A-Za-z][A-Za-z\s&/\-]+)\s*\(\d+\)")
 _GICS_SECTOR_NAMES = (
@@ -98,6 +100,7 @@ _GICS_SECTOR_NAMES = (
     "Utilities",
 )
 _SECTOR_NAME_TO_ID = {name: idx for idx, name in enumerate(_GICS_SECTOR_NAMES)}
+_DEFAULT_RETURN_CROSS_ASSET_WARMUP_STEPS = 180_000
 
 
 def load_symbol_sector_map(symbols_file: Path) -> dict[str, int]:
@@ -160,6 +163,7 @@ class PTAAugmentationConfig:
     sign_flip_prob: float = 0.5
     vol_scale_prob: float = 0.7
     vol_scale_values: tuple[float, ...] = (0.8, 0.9, 1.1, 1.2)
+    allow_short_positions: bool = False
 
     def validate(self) -> None:
         if not (0.0 <= self.apply_prob <= 1.0):
@@ -223,14 +227,18 @@ def apply_pta_permutation(
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Asset-permutation PTA view for single-batch tensors.
 
-    Per Risk #13 mitigation, only Blocks 1–2 (price/volume + technical) are
-    permuted across assets; later per-asset blocks remain slot-stable.
+    Per Risk #13 mitigation, Blocks 1–2 are permuted across assets.
+    Asset-identity dims (fundamental tail: sector + mktcap rank) are also
+    permuted so identity metadata remains aligned with the permuted asset slot.
     """
     n_assets = returns.shape[0]
     perm = torch.randperm(n_assets, generator=generator, device=returns.device)
     permuted = features.clone()
     permuted[..., _PTA_PERMUTED_FEATURE_SLICE] = features[perm][
         ..., _PTA_PERMUTED_FEATURE_SLICE
+    ]
+    permuted[..., _PTA_IDENTITY_FEATURE_SLICE] = features[perm][
+        ..., _PTA_IDENTITY_FEATURE_SLICE
     ]
     return permuted, returns[perm], perm
 
@@ -240,23 +248,27 @@ def apply_pta_batch_augmentations(
     returns: torch.Tensor,
     generator: torch.Generator | None = None,
     cfg: PTAAugmentationConfig | None = None,
-) -> tuple[torch.Tensor, torch.Tensor]:
+) -> list[tuple[torch.Tensor, torch.Tensor]]:
     """PTA transforms used in portfolio head training.
 
     1. Apply with probability p_aug (spec default: 0.5)
     2. Asset permutation
     3. Optional sign-coupled return flips
-    4. Optional volatility scaling
+    4. Optional volatility scaling (all configured scales when triggered)
     """
     cfg = cfg or PTAAugmentationConfig()
     cfg.validate()
 
     if not _draw_event(cfg.apply_prob, device=returns.device, generator=generator):
-        return features, returns
+        return [(features, returns)]
 
     features, returns, _ = apply_pta_permutation(features, returns, generator=generator)
 
-    if _draw_event(cfg.sign_flip_prob, device=returns.device, generator=generator):
+    if cfg.allow_short_positions and _draw_event(
+        cfg.sign_flip_prob,
+        device=returns.device,
+        generator=generator,
+    ):
         returns = -returns
         _scale_return_channels_inplace(features, -1.0)
 
@@ -265,20 +277,17 @@ def apply_pta_batch_augmentations(
         and cfg.vol_scale_values
         and _draw_event(cfg.vol_scale_prob, device=returns.device, generator=generator)
     ):
-        scale_idx = int(
-            torch.randint(
-                len(cfg.vol_scale_values),
-                (1,),
-                generator=generator,
-                device=returns.device,
-            ).item()
-        )
-        scale = returns.new_tensor(cfg.vol_scale_values[scale_idx])
-        returns = returns * scale
-        _scale_return_channels_inplace(features, scale)
-        _scale_volatility_channels_inplace(features, scale)
+        views: list[tuple[torch.Tensor, torch.Tensor]] = []
+        for scale in cfg.vol_scale_values:
+            s = returns.new_tensor(scale)
+            scaled_feats = features.clone()
+            scaled_rets = returns * s
+            _scale_return_channels_inplace(scaled_feats, s)
+            _scale_volatility_channels_inplace(scaled_feats, s)
+            views.append((scaled_feats, scaled_rets))
+        return views
 
-    return features, returns
+    return [(features, returns)]
 
 
 def _permute_assets_batch(
@@ -295,7 +304,9 @@ def _permute_assets_batch(
         sector_ids: (N,) optional sector group id per asset; non-negative ids are
             permuted within-group, negative ids remain fixed.
 
-    Per Risk #13 mitigation, only Blocks 1–2 are permuted in feature space.
+    Per Risk #13 mitigation, Blocks 1–2 are permuted in feature space.
+    Identity dims (sector + mktcap rank) are also permuted to keep metadata
+    aligned with the permuted asset slot.
     """
     B, N, T, _ = features.shape
     base_idx = torch.arange(N, device=features.device)
@@ -335,6 +346,10 @@ def _permute_assets_batch(
     permuted[..., _PTA_PERMUTED_FEATURE_SLICE] = features[
         ..., _PTA_PERMUTED_FEATURE_SLICE
     ].gather(1, feat_idx)
+    identity_idx = perms[:, :, None, None].expand(B, N, T, _PTA_IDENTITY_FEATURE_DIM)
+    permuted[..., _PTA_IDENTITY_FEATURE_SLICE] = features[
+        ..., _PTA_IDENTITY_FEATURE_SLICE
+    ].gather(1, identity_idx)
     ret_idx = perms[:, :, None].expand(B, N, T)
     return permuted, returns.gather(1, ret_idx)
 
@@ -405,7 +420,11 @@ def expand_pta_training_batch(
             feature_views.append(perm_feats)
             return_views.append(perm_rets)
 
-    if _draw_event(cfg.sign_flip_prob, device=features.device, generator=generator):
+    if cfg.allow_short_positions and _draw_event(
+        cfg.sign_flip_prob,
+        device=features.device,
+        generator=generator,
+    ):
         sign_feats = features.clone()
         sign_rets = -shifted_returns
         _scale_return_channels_inplace(sign_feats, -1.0)
@@ -627,12 +646,15 @@ class MultiAssetShardDataset(IterableDataset):
             returns = torch.from_numpy(
                 window[:, 1:, self.RETURN_IDX].copy()  # (N, T) next-step returns
             )
-            if self.augment:
-                feats, returns = apply_pta_batch_augmentations(
+            views = (
+                apply_pta_batch_augmentations(
                     feats,
                     returns,
                     cfg=self.pta_cfg,
                 )
+                if self.augment
+                else [(feats, returns)]
+            )
             if horizon > 0:
                 # Future returns start immediately after the training window
                 future_slice = data[
@@ -640,9 +662,12 @@ class MultiAssetShardDataset(IterableDataset):
                     start + self.seq_len + 1 : start + self.seq_len + 1 + horizon,
                     self.RETURN_IDX,
                 ]  # (N, horizon)
-                yield feats, returns, torch.from_numpy(future_slice.copy())
+                future_returns = torch.from_numpy(future_slice.copy())
+                for view_feats, view_returns in views:
+                    yield view_feats, view_returns, future_returns
             else:
-                yield feats, returns
+                for view_feats, view_returns in views:
+                    yield view_feats, view_returns
 
 
 def build_portfolio_loader(
@@ -769,19 +794,24 @@ class SyntheticWindowPortfolioDataset(IterableDataset):
                 returns = torch.from_numpy(
                     window[:, 1 : self.seq_len + 1, self.RETURN_IDX].copy()  # (N, T)
                 )
-                if self.augment:
-                    feats, returns = apply_pta_batch_augmentations(
+                views = (
+                    apply_pta_batch_augmentations(
                         feats,
                         returns,
                         cfg=self.pta_cfg,
                     )
+                    if self.augment
+                    else [(feats, returns)]
+                )
                 if horizon > 0:
                     future_returns = torch.from_numpy(
                         window[:, self.seq_len + 1 :, self.RETURN_IDX].copy()  # (N, horizon)
                     )
-                    yield feats, returns, future_returns
+                    for view_feats, view_returns in views:
+                        yield view_feats, view_returns, future_returns
                 else:
-                    yield feats, returns
+                    for view_feats, view_returns in views:
+                        yield view_feats, view_returns
 
 
 def build_synthetic_portfolio_loader(
@@ -820,8 +850,8 @@ class PortfolioTrainConfig:
     head: str = "return"  # "return" or "sharpe"
     total_steps: int = 50_000
     # Spec §11.4a: ~10 H100-hours. At ~5 steps/s on H100 (B=8, N=100, T=64)
-    # that is ~180 k steps; 10 k is a practical lower bound for meaningful warmup.
-    cross_asset_warmup_steps: int = 10_000
+    # this is ~180 k steps.
+    cross_asset_warmup_steps: int = _DEFAULT_RETURN_CROSS_ASSET_WARMUP_STEPS
     cross_asset_corr_window: int = 20
     cross_asset_warmup_batch_size: int = 8
     batch_size: int = 4
@@ -836,7 +866,7 @@ class PortfolioTrainConfig:
     fda_mix_prob: float = 0.5
     enforce_regime_balance: bool = True
     regime_resample_attempts: int = 8
-    regime_pool_size: int = 32  # pool size for quantile-based regime selection
+    regime_pool_size: int = 32  # pool size for HMM regime-balanced selection
     pta_cfg: PTAAugmentationConfig = field(default_factory=PTAAugmentationConfig)
     asset_sector_ids: tuple[int, ...] | None = None
     dsr_eta: float = 0.01
@@ -851,9 +881,13 @@ class PortfolioTrainConfig:
     # identical to a single large forward because every loss term reduces
     # independently along the PTA batch axis. 0 = no micro-batching.
     pta_micro_batch_size: int = 0
-    patience_steps: int = 1000  # early stopping threshold measured in training steps
+    patience_steps: int = 200  # spec §11.4c early stopping threshold
     patience_min_delta: float = 1e-3  # min val-loss improvement to reset patience counter
-    patience_grace_steps: int = 3000  # no early-stop before this step (covers LR warmup + initial plateau)
+    patience_grace_steps: int = 0
+    state_warmup_steps: int = 8  # exclude initial cold-state steps from loss
+    enforce_phase2_gate: bool = True
+    phase2_gate_min_sharpe: float = 0.0
+    phase2_gate_max_drawdown: float = 0.25
     freeze_backbone_steps: int = 500
     backbone_lr_scale: float = 0.1
     gradient_checkpointing: bool = False
@@ -976,6 +1010,57 @@ class PortfolioTrainer:
             )
 
     @staticmethod
+    def _init_portfolio_state(
+        batch_size: int,
+        n_assets: int,
+        n_full: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        if n_assets < 1:
+            raise ValueError(f"n_assets must be >= 1, got {n_assets}")
+        if n_assets > n_full:
+            raise ValueError(
+                f"asset axis N={n_assets} exceeds spec.n_assets={n_full} in portfolio forward pass"
+            )
+        weights = torch.zeros(batch_size, n_full, device=device)
+        weights[:, :n_assets] = 1.0 / float(n_assets)
+        unrealized_pnl = torch.zeros(batch_size, n_full, device=device)
+        nav_log = torch.zeros(batch_size, 1, device=device)
+        return torch.cat([weights, unrealized_pnl, nav_log], dim=-1)
+
+    def _calendar_from_market(self, market_step: torch.Tensor) -> torch.Tensor:
+        if market_step.ndim != 2:
+            raise ValueError(
+                f"market_step must be rank 2 (B,M), got shape {tuple(market_step.shape)}"
+            )
+        if market_step.shape[1] < self.spec.calendar_dim:
+            raise ValueError(
+                "market feature dim must be >= calendar_dim, got "
+                f"M={market_step.shape[1]} calendar_dim={self.spec.calendar_dim}"
+            )
+        # Use the trailing market features as a non-zero calendar proxy instead
+        # of an all-zero calendar vector.
+        return market_step[:, -self.spec.calendar_dim :]
+
+    @staticmethod
+    def _trim_cold_start_steps(
+        weights: torch.Tensor,
+        returns: torch.Tensor,
+        pred_vol: torch.Tensor | None,
+        warmup_steps: int,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        if warmup_steps <= 0:
+            return weights, returns, pred_vol
+        t = weights.shape[1]
+        burn = min(warmup_steps, max(t - 1, 0))
+        if burn <= 0:
+            return weights, returns, pred_vol
+        w = weights[:, burn:, :]
+        r = returns[:, burn:, :]
+        pv = pred_vol[:, burn:, :] if pred_vol is not None else None
+        return w, r, pv
+
+    @staticmethod
     def _resolve_asset_sector_ids(
         asset_sector_ids: tuple[int, ...] | None,
         n_assets: int,
@@ -1016,20 +1101,33 @@ class PortfolioTrainer:
         data_iter = iter(train_loader)
         synth_iter = iter(synthetic_loader) if synthetic_loader is not None else None
 
+        def _extract_warmup_target(
+            batch: list[torch.Tensor] | tuple[torch.Tensor, ...],
+        ) -> tuple[torch.Tensor, torch.Tensor]:
+            if len(batch) != 3:
+                raise ValueError(
+                    "cross-asset warm-up requires DataLoader batches as "
+                    "(features, shifted_returns, future_returns). "
+                    "Build warm-up loaders with future_return_horizon > 0 "
+                    "to provide out-of-window correlation targets."
+                )
+            features, _shifted_returns, future_returns = batch
+            return features, future_returns
+
         def _pull_batch(source: str) -> tuple[torch.Tensor, torch.Tensor]:
             nonlocal data_iter, synth_iter
             if source == "synth":
                 assert synthetic_loader is not None
                 try:
-                    return next(synth_iter)
+                    return _extract_warmup_target(next(synth_iter))
                 except StopIteration:
                     synth_iter = iter(synthetic_loader)
-                    return next(synth_iter)
+                    return _extract_warmup_target(next(synth_iter))
             try:
-                return next(data_iter)
+                return _extract_warmup_target(next(data_iter))
             except StopIteration:
                 data_iter = iter(train_loader)
-                return next(data_iter)
+                return _extract_warmup_target(next(data_iter))
 
         print(
             "Starting cross-asset warm-up: "
@@ -1042,7 +1140,7 @@ class PortfolioTrainer:
             )
             source = "synth" if use_synth else "real"
             source_weight = cfg.fda_loss_weight if source == "synth" else 1.0
-            features, shifted_returns = _pull_batch(source)
+            features, future_returns = _pull_batch(source)
 
             warmup_optimizer.zero_grad(set_to_none=True)
             with torch.autocast(
@@ -1057,7 +1155,7 @@ class PortfolioTrainer:
                     asset_repr, asset_repr.transpose(1, 2)
                 ).clamp(-1.0, 1.0)
                 target_corr = realized_correlation_matrix(
-                    shifted_returns.to(self.device),
+                    future_returns.to(self.device),
                     corr_window=cfg.cross_asset_corr_window,
                 )
                 diff = pred_corr - target_corr.detach()
@@ -1109,15 +1207,18 @@ class PortfolioTrainer:
         B, N, T, _ = features.shape
         bptt_chunk = cfg.bptt_chunk if cfg is not None else 0
         chunk_size = bptt_chunk if bptt_chunk > 0 else T
+        n_full = self.spec.n_assets
 
         asset_feats = features[..., :184]
         market_feats = features[..., 184:]
         mkt_mean = market_feats.mean(dim=1)  # (B, T, 96)
 
-        portfolio_s = torch.zeros(
-            B, self.spec.portfolio_state_dim, device=self.device
+        portfolio_s = self._init_portfolio_state(
+            batch_size=B,
+            n_assets=N,
+            n_full=n_full,
+            device=self.device,
         )
-        calendar = torch.zeros(B, self.spec.calendar_dim, device=self.device)
         if sector_ids is None:
             sector_ids = torch.zeros(N, dtype=torch.long, device=self.device)
         else:
@@ -1178,6 +1279,7 @@ class PortfolioTrainer:
             for k in range(K):
                 af_t = af_chunk[:, :, k, :]
                 mf_t = mf_chunk[:, k, :]
+                calendar_t = self._calendar_from_market(mf_t)
                 regime_emb, posteriors, _ = self.regime_detector(
                     mf_t, portfolio_summary, r_ema, prev_r
                 )
@@ -1185,7 +1287,7 @@ class PortfolioTrainer:
                 prev_r = regime_emb.detach()
 
                 asset_tok, mkt_tok, port_tok, _ = self.input_projection(
-                    af_t, mf_t, portfolio_s, calendar, regime_emb
+                    af_t, mf_t, portfolio_s, calendar_t, regime_emb
                 )
                 out, local_states = self.backbone(
                     asset_tok, regime_emb, posteriors, local_states
@@ -1264,8 +1366,13 @@ class PortfolioTrainer:
         mkt_mean = market_feats.mean(dim=1)  # (B, T, 96)
 
         # Bootstrap portfolio/calendar/sector state
-        portfolio_s = torch.zeros(B, self.spec.portfolio_state_dim, device=self.device)
-        calendar = torch.zeros(B, self.spec.calendar_dim, device=self.device)
+        n_full = self.spec.n_assets  # 100
+        portfolio_s = self._init_portfolio_state(
+            batch_size=B,
+            n_assets=N,
+            n_full=n_full,
+            device=self.device,
+        )
         if sector_ids is None:
             sector_ids = torch.zeros(N, dtype=torch.long, device=self.device)
         else:
@@ -1290,7 +1397,6 @@ class PortfolioTrainer:
         states = self.backbone.init_state(B, N, self.device)
 
         # Validate and initialize portfolio-state buffers once per sequence.
-        n_full = self.spec.n_assets  # 100
         if N > n_full:
             raise ValueError(
                 f"asset axis N={N} exceeds spec.n_assets={n_full} in portfolio forward pass"
@@ -1352,6 +1458,7 @@ class PortfolioTrainer:
             for k in range(K):
                 af_t = af_chunk[:, :, k, :]
                 mf_t = mf_chunk[:, k, :]
+                calendar_t = self._calendar_from_market(mf_t)
 
                 pv = pv * (1.0 + prev_pr)
                 portfolio_summary = torch.stack(
@@ -1365,7 +1472,7 @@ class PortfolioTrainer:
                 prev_r = regime_emb.detach()
 
                 asset_tok, mkt_tok, port_tok, _ = self.input_projection(
-                    af_t, mf_t, ps, calendar, regime_emb
+                    af_t, mf_t, ps, calendar_t, regime_emb
                 )
                 out, local_states = self.backbone(
                     asset_tok, regime_emb, posteriors, local_states
@@ -1505,7 +1612,7 @@ class PortfolioTrainer:
         self,
         val_loader: DataLoader,
         cfg: PortfolioTrainConfig,
-        max_batches: int = 20,
+        max_batches: int = 0,
     ) -> dict[str, float]:
         for m in (
             self.backbone,
@@ -1518,6 +1625,7 @@ class PortfolioTrainer:
         ):
             m.eval()
         totals: dict[str, float] = {"total": 0.0, "dsr": 0.0}
+        portfolio_ret_series: list[torch.Tensor] = []
         n = 0
         with (
             torch.no_grad(),
@@ -1526,11 +1634,20 @@ class PortfolioTrainer:
             ),
         ):
             for i, (features, shifted_returns) in enumerate(val_loader):
-                if i >= max_batches:
+                if max_batches > 0 and i >= max_batches:
                     break
                 # DataLoader collates item shape (N, T, F) into (B, N, T, F).
                 returns = prepare_return_targets(shifted_returns).to(self.device)
                 weights, pred_vol, _ = self._forward(features, cfg.head, cfg)
+                weights, returns, pred_vol = self._trim_cold_start_steps(
+                    weights,
+                    returns,
+                    pred_vol,
+                    cfg.state_warmup_steps,
+                )
+                portfolio_ret_series.append(
+                    (weights.detach() * returns).sum(dim=-1).reshape(-1).cpu()
+                )
                 if cfg.head == "return":
                     loss_dict = return_head_loss(
                         weights,
@@ -1544,7 +1661,7 @@ class PortfolioTrainer:
                     totals["total"] += loss_dict["total"].item()
                     totals["dsr"] += loss_dict["dsr"].item()
                 else:
-                    loss = dsr_loss(weights, returns, eta=cfg.dsr_eta)
+                    loss = rolling_sharpe_loss(weights, returns)
                     totals["total"] += loss.item()
                     totals["dsr"] += loss.item()
                 n += 1
@@ -1558,7 +1675,20 @@ class PortfolioTrainer:
             self.vol_head,
         ):
             m.train()
-        return {k: v / max(n, 1) for k, v in totals.items()}
+        metrics = {k: v / max(n, 1) for k, v in totals.items()}
+        if portfolio_ret_series:
+            rets = torch.cat(portfolio_ret_series, dim=0)
+            mu = float(rets.mean().item())
+            sigma = float(rets.std(unbiased=False).clamp(min=1e-6).item())
+            metrics["val_sharpe"] = (mu / sigma) * math.sqrt(252.0)
+            equity = torch.exp(torch.cumsum(rets, dim=0))
+            running_max = torch.cummax(equity, dim=0).values.clamp(min=1e-6)
+            drawdown = 1.0 - (equity / running_max)
+            metrics["val_max_drawdown"] = float(drawdown.max().item())
+        else:
+            metrics["val_sharpe"] = 0.0
+            metrics["val_max_drawdown"] = 1.0
+        return metrics
 
     def train(
         self,
@@ -1769,10 +1899,8 @@ class PortfolioTrainer:
 
             if cfg.enforce_regime_balance:
                 # Pool-based selection: accumulate a candidate pool large enough
-                # to cover all 4 regimes under quantile-relative labelling,
-                # then pick one item per regime (padding with random extras up
-                # to cfg.batch_size). Robust to skewed absolute-threshold
-                # labelling of the real data.
+                # to cover all 4 HMM regimes, then pick one item per regime
+                # (padding with random extras up to cfg.batch_size).
                 target_batch = features.shape[0]
                 pool_size = max(
                     cfg.regime_pool_size, target_batch * self.spec.n_regimes
@@ -1786,7 +1914,7 @@ class PortfolioTrainer:
                 feats_cat = torch.cat(feats_pool, dim=0)
                 shifts_cat = torch.cat(shifts_pool, dim=0)
 
-                labels = self._quantile_regime_labels(feats_cat)
+                labels = self._batch_regime_ids(feats_cat)
                 selected_idx: list[int] = []
                 for r in range(self.spec.n_regimes):
                     cand = (labels == r).nonzero(as_tuple=True)[0]
@@ -1853,12 +1981,18 @@ class PortfolioTrainer:
                     "cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"
                 ):
                     weights, pred_vol, _ = self._forward(feats_g, cfg.head, cfg)
+                    loss_weights, loss_returns, loss_pred_vol = self._trim_cold_start_steps(
+                        weights,
+                        rets_g,
+                        pred_vol,
+                        cfg.state_warmup_steps,
+                    )
 
                     if cfg.head == "return":
                         loss_dict = return_head_loss(
-                            weights,
-                            rets_g,
-                            pred_vol=pred_vol,
+                            loss_weights,
+                            loss_returns,
+                            pred_vol=loss_pred_vol,
                             lambda_ret=cfg.lambda_return,
                             lambda_turn=cfg.lambda_turn,
                             lambda_vol=cfg.lambda_vol,
@@ -1866,8 +2000,8 @@ class PortfolioTrainer:
                         )
                         loss = loss_dict["total"]
                     else:
-                        loss = dsr_loss(weights, rets_g, eta=cfg.dsr_eta)
-                        loss_dict = {"dsr": loss, "total": loss}
+                        loss = rolling_sharpe_loss(loss_weights, loss_returns)
+                        loss_dict = {"rolling_sharpe": loss, "total": loss}
 
                 if mem_diag:
                     fwd_peak = torch.cuda.max_memory_allocated() / 1e9
@@ -1888,7 +2022,13 @@ class PortfolioTrainer:
                     )
 
                 for k, v in loss_dict.items():
-                    log_parts[k] = log_parts.get(k, 0.0) + group_scale * v.item()
+                    if k == "return":
+                        key = "exp_return"
+                        value = -v.item()
+                    else:
+                        key = k
+                        value = v.item()
+                    log_parts[key] = log_parts.get(key, 0.0) + group_scale * value
 
             loss_dict = {
                 k: torch.tensor(v, device=self.device) for k, v in log_parts.items()
@@ -1909,7 +2049,9 @@ class PortfolioTrainer:
                 monitor = val_metrics["dsr"]
                 print(
                     f"  val total={val_metrics['total']:.4f}  "
-                    f"val dsr={val_metrics['dsr']:.4f}"
+                    f"val dsr={val_metrics['dsr']:.4f}  "
+                    f"val_sharpe={val_metrics['val_sharpe']:.3f}  "
+                    f"val_max_dd={val_metrics['val_max_drawdown']:.3f}"
                 )
                 if monitor < best_monitor - cfg.patience_min_delta:
                     best_monitor = monitor
@@ -1933,6 +2075,26 @@ class PortfolioTrainer:
                 self._save(
                     cfg.step_path_fn(step), step, optimizer, scheduler, best_monitor
                 )
+
+        if val_loader is not None and cfg.enforce_phase2_gate:
+            gate_metrics = self.evaluate(val_loader, cfg)
+            gate_failures: list[str] = []
+            if gate_metrics["val_sharpe"] < cfg.phase2_gate_min_sharpe:
+                gate_failures.append(
+                    f"val_sharpe {gate_metrics['val_sharpe']:.3f} < {cfg.phase2_gate_min_sharpe:.3f}"
+                )
+            if gate_metrics["val_max_drawdown"] > cfg.phase2_gate_max_drawdown:
+                gate_failures.append(
+                    "val_max_drawdown "
+                    f"{gate_metrics['val_max_drawdown']:.3f} > {cfg.phase2_gate_max_drawdown:.3f}"
+                )
+            if gate_failures:
+                raise RuntimeError("Phase-2 gate failed: " + "; ".join(gate_failures))
+            print(
+                "Phase-2 gate passed: "
+                f"val_sharpe={gate_metrics['val_sharpe']:.3f}, "
+                f"val_max_dd={gate_metrics['val_max_drawdown']:.3f}"
+            )
 
         print(f"Training complete at step {step}. Best monitor: {best_monitor:.4f}")
 
@@ -1978,12 +2140,18 @@ def _write_smoke_shard(path: Path, n_rows: int, feature_dim: int = 280) -> None:
             f.write(row_struct.pack(*row))
 
 
-def _make_smoke_shards(tmp_dir: Path, n_assets: int, seq_len: int) -> list[Path]:
+def _make_smoke_shards(
+    tmp_dir: Path,
+    n_assets: int,
+    seq_len: int,
+    future_return_horizon: int = 0,
+) -> list[Path]:
     paths = []
     for i in range(n_assets):
         for split in ("train", "validation"):
             p = tmp_dir / split / f"ASSET{i:02d}.f32bin"
-            _write_smoke_shard(p, seq_len + 10)
+            # Need at least seq_len+1 rows (+future horizon for warm-up target).
+            _write_smoke_shard(p, seq_len + 1 + max(future_return_horizon, 9))
             if split == "train":
                 paths.append(p)
     return paths
@@ -2033,7 +2201,7 @@ def main() -> None:
         type=int,
         default=-1,
         help="Cross-asset warm-up steps before head training "
-        "(default: 1000 for return, 0 for sharpe)",
+        "(default: 180000 for return, 0 for sharpe)",
     )
     parser.add_argument(
         "--cross-asset-corr-window",
@@ -2076,6 +2244,11 @@ def main() -> None:
         help="Probability of adding a sign-flipped PTA batch view",
     )
     parser.add_argument(
+        "--allow-short-positions",
+        action="store_true",
+        help="Enable sign-flip PTA (valid only when short positions are allowed).",
+    )
+    parser.add_argument(
         "--pta-vol-scale-prob",
         type=float,
         default=0.7,
@@ -2103,7 +2276,7 @@ def main() -> None:
         "--regime-pool-size",
         type=int,
         default=32,
-        help="Candidate pool size for quantile-relative regime-balanced selection",
+        help="Candidate pool size for HMM regime-balanced selection",
     )
     parser.add_argument(
         "--bptt-chunk",
@@ -2153,9 +2326,32 @@ def main() -> None:
         default=4,
         help="Stride between sequences (lower = more data, default 4)",
     )
-    parser.add_argument("--patience-steps", type=int, default=1000)
+    parser.add_argument("--patience-steps", type=int, default=200)
     parser.add_argument("--patience-min-delta", type=float, default=1e-3)
-    parser.add_argument("--patience-grace-steps", type=int, default=3000)
+    parser.add_argument("--patience-grace-steps", type=int, default=0)
+    parser.add_argument(
+        "--disable-phase2-gate",
+        action="store_true",
+        help="Disable final Phase-2 validation gate (Sharpe + max drawdown).",
+    )
+    parser.add_argument(
+        "--phase2-gate-min-sharpe",
+        type=float,
+        default=0.0,
+        help="Minimum validation Sharpe required by the Phase-2 gate.",
+    )
+    parser.add_argument(
+        "--phase2-gate-max-drawdown",
+        type=float,
+        default=0.25,
+        help="Maximum validation drawdown allowed by the Phase-2 gate.",
+    )
+    parser.add_argument(
+        "--state-warmup-steps",
+        type=int,
+        default=8,
+        help="Exclude this many initial sequence steps from loss/eval to reduce cold-state mismatch.",
+    )
     parser.add_argument("--log-every", type=int, default=10)
     parser.add_argument("--eval-every", type=int, default=200)
     parser.add_argument("--save-every", type=int, default=5_000)
@@ -2190,7 +2386,7 @@ def main() -> None:
     cross_asset_warmup_steps = (
         args.cross_asset_warmup_steps
         if args.cross_asset_warmup_steps >= 0
-        else (1_000 if args.head == "return" else 0)
+        else (_DEFAULT_RETURN_CROSS_ASSET_WARMUP_STEPS if args.head == "return" else 0)
     )
     if args.smoke and args.cross_asset_warmup_steps < 0:
         cross_asset_warmup_steps = 0
@@ -2201,6 +2397,7 @@ def main() -> None:
             permutations_per_batch=args.pta_permutations,
             sign_flip_prob=1.0,
             vol_scale_prob=1.0,
+            allow_short_positions=args.allow_short_positions,
         )
     else:
         pta_cfg = PTAAugmentationConfig(
@@ -2208,6 +2405,7 @@ def main() -> None:
             permutations_per_batch=args.pta_permutations,
             sign_flip_prob=args.pta_sign_flip_prob,
             vol_scale_prob=args.pta_vol_scale_prob,
+            allow_short_positions=args.allow_short_positions,
         )
     pta_cfg.validate()
 
@@ -2242,7 +2440,14 @@ def main() -> None:
         with tempfile.TemporaryDirectory() as td:
             td = Path(td)
             n_smoke = 5  # fewer assets for smoke speed
-            shard_paths = _make_smoke_shards(td, n_smoke, args.seq_len)
+            shard_paths = _make_smoke_shards(
+                td,
+                n_smoke,
+                args.seq_len,
+                future_return_horizon=(
+                    args.cross_asset_corr_window if cross_asset_warmup_steps > 0 else 0
+                ),
+            )
             val_paths = [
                 td / "validation" / f"ASSET{i:02d}.f32bin" for i in range(n_smoke)
             ]
@@ -2255,11 +2460,9 @@ def main() -> None:
                     args.seq_len,
                     args.cross_asset_warmup_batch_size,
                     num_workers=0,
+                    future_return_horizon=args.cross_asset_corr_window,
                 )
-                if (
-                    cross_asset_warmup_steps > 0
-                    and args.cross_asset_warmup_batch_size != args.batch_size
-                )
+                if cross_asset_warmup_steps > 0
                 else None
             )
             val_loader = build_portfolio_loader(
@@ -2293,6 +2496,8 @@ def main() -> None:
                 checkpoint_dir=td / "checkpoints",
                 freeze_backbone_steps=args.freeze_backbone_steps,
                 backbone_lr_scale=args.backbone_lr_scale,
+                state_warmup_steps=args.state_warmup_steps,
+                enforce_phase2_gate=False,
             )
             trainer.train(
                 train_loader,
@@ -2364,11 +2569,9 @@ def main() -> None:
                 num_workers=args.workers,
                 stride=args.stride,
                 augment=False,
+                future_return_horizon=args.cross_asset_corr_window,
             )
-            if (
-                cross_asset_warmup_steps > 0
-                and args.cross_asset_warmup_batch_size != args.batch_size
-            )
+            if cross_asset_warmup_steps > 0
             else None
         )
         cross_asset_warmup_synthetic_loader = (
@@ -2378,12 +2581,12 @@ def main() -> None:
                 seq_len=args.seq_len,
                 batch_size=args.cross_asset_warmup_batch_size,
                 augment=False,
+                future_return_horizon=args.cross_asset_corr_window,
                 num_workers=0,
             )
             if (
                 synthetic_loader is not None
                 and cross_asset_warmup_steps > 0
-                and args.cross_asset_warmup_batch_size != args.batch_size
             )
             else None
         )
@@ -2434,6 +2637,10 @@ def main() -> None:
             patience_steps=args.patience_steps,
             patience_min_delta=args.patience_min_delta,
             patience_grace_steps=args.patience_grace_steps,
+            state_warmup_steps=args.state_warmup_steps,
+            enforce_phase2_gate=not args.disable_phase2_gate,
+            phase2_gate_min_sharpe=args.phase2_gate_min_sharpe,
+            phase2_gate_max_drawdown=args.phase2_gate_max_drawdown,
             freeze_backbone_steps=args.freeze_backbone_steps,
             backbone_lr_scale=args.backbone_lr_scale,
             gradient_checkpointing=args.gradient_checkpointing,
