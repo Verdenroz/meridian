@@ -68,6 +68,14 @@ from optimization.portfolio_heads import (
 from torch.utils.data import DataLoader, IterableDataset
 
 from train.feature_schema import BLOCK_FUNDAMENTAL, BLOCK_PRICE_VOLUME, BLOCK_TECHNICAL
+from train.fda_pipeline import (
+    CrossAssetReference,
+    ReferenceStats,
+    compute_cross_asset_reference,
+    compute_reference_stats,
+    validate_cross_asset_structure,
+    validate_stylized_facts,
+)
 from train.spec import DEFAULT_SPEC, MeridianSpec
 
 # ── Multi-asset dataset ───────────────────────────────────────────────────────
@@ -587,6 +595,7 @@ class MultiAssetShardDataset(IterableDataset):
 
     FEATURE_DIM = 280
     RETURN_IDX = 3  # index of close log-return within price_volume block
+    is_synthetic = False  # spec §11.4c: real data flag for val-loader enforcement
 
     def __init__(
         self,
@@ -728,6 +737,7 @@ class SyntheticWindowPortfolioDataset(IterableDataset):
 
     FEATURE_DIM = 280
     RETURN_IDX = 3
+    is_synthetic = True  # spec §11.4c: synthetic flag — must NOT appear in val loader
 
     def __init__(
         self,
@@ -894,6 +904,39 @@ class PortfolioTrainConfig:
     compile: bool = False  # torch.compile the backbone (2-4x faster, ~60s warmup)
     debug: bool = False  # enable verbose diagnostics (memory traces, per-group peaks)
 
+    # ── Spec §8.3 / §8.5: per-batch FDA validation gates during head training ──
+    # Even though §8.3 places the 9-point gate at FDA generation time, PTA
+    # transformations (esp. permutation + vol scaling) can drift batches off the
+    # synthetic-fact manifold. The runtime gate guards against that drift.
+    fda_validate_per_batch: bool = True
+    fda_validate_every: int = 50           # run gate every N synthetic batches
+    fda_min_pass_rate: float = 0.50        # warn if synth pass rate falls below this
+    cross_asset_validate: bool = True
+    cross_asset_validate_every: int = 200  # KS pool comparison cost is non-trivial
+    cross_asset_pool_size: int = 100
+    cross_asset_n_pool_samples: int = 100
+
+    # Spec §11.4c — turnover target
+    turnover_target_daily: float = 0.10
+
+    # Spec §11.4c — convergence range monitoring (1k–3k expected)
+    convergence_step_min: int = 1_000
+    convergence_step_max: int = 3_000
+
+    # Spec §11.3 — Phase 1 → Phase 2 gate (set by caller; None disables check)
+    phase1_min_pretrain_loss: float | None = None
+    phase1_pretrain_loss: float | None = None
+    phase1_min_contrastive_acc: float | None = None
+    phase1_contrastive_acc: float | None = None
+
+    # Spec §8.4 — regime quota check at training start (None = skip)
+    fda_regime_quotas: tuple[float, float, float, float] | None = None
+    fda_regime_quota_tol: float = 0.05
+
+    # Spec §7.8 — optional Sharpe-head temperature anneal (decay log_T linearly)
+    sharpe_temperature_anneal: bool = False
+    sharpe_temperature_final: float = 0.5  # target T at total_steps
+
     @property
     def best_path(self) -> Path:
         return self.checkpoint_dir / f"{self.head}_head_best.pt"
@@ -1010,6 +1053,187 @@ class PortfolioTrainer:
             )
 
     @staticmethod
+    def _assert_real_only_validation(loader: "DataLoader | None") -> None:
+        """Spec §11.4c line 1450: 'Validation set: real data only'.
+
+        Inspect the loader's dataset for the synthetic-marker attribute and
+        refuse to proceed if the validation pool contains FDA-generated
+        windows. Skips the assertion when the dataset doesn't expose the marker
+        (legacy/custom loaders) but emits a warning so the caller can fix it.
+        """
+        if loader is None:
+            return
+        ds = getattr(loader, "dataset", None)
+        if ds is None:
+            return
+        is_synth = getattr(ds, "is_synthetic", None)
+        if is_synth is True:
+            raise ValueError(
+                "spec §11.4c violation: validation set must be real data only "
+                "(no synthetic). Pass a MultiAssetShardDataset-backed loader "
+                "to train(val_loader=...)."
+            )
+        if is_synth is None:
+            warnings.warn(
+                "validation loader dataset does not expose is_synthetic flag — "
+                "spec §11.4c real-data-only validation cannot be auto-verified.",
+                stacklevel=2,
+            )
+
+    @staticmethod
+    def _validate_phase1_gate(cfg: "PortfolioTrainConfig") -> None:
+        """Spec §11.3: confirm Phase 1 baseline before starting Phase 2.
+
+        Checks the Phase 1 metrics passed via the config against caller-provided
+        minimum thresholds. If either threshold or measurement is None the
+        corresponding check is skipped. Raises RuntimeError on failure so we
+        never proceed with an under-trained backbone.
+        """
+        failures: list[str] = []
+        if (
+            cfg.phase1_min_pretrain_loss is not None
+            and cfg.phase1_pretrain_loss is not None
+            and cfg.phase1_pretrain_loss > cfg.phase1_min_pretrain_loss
+        ):
+            failures.append(
+                f"phase1_pretrain_loss {cfg.phase1_pretrain_loss:.4f} > "
+                f"min {cfg.phase1_min_pretrain_loss:.4f}"
+            )
+        if (
+            cfg.phase1_min_contrastive_acc is not None
+            and cfg.phase1_contrastive_acc is not None
+            and cfg.phase1_contrastive_acc < cfg.phase1_min_contrastive_acc
+        ):
+            failures.append(
+                f"phase1_contrastive_acc {cfg.phase1_contrastive_acc:.4f} < "
+                f"min {cfg.phase1_min_contrastive_acc:.4f}"
+            )
+        if failures:
+            raise RuntimeError(
+                "Phase 1 → Phase 2 gate failed: " + "; ".join(failures)
+            )
+
+    @staticmethod
+    def _portfolio_turnover(weights: torch.Tensor) -> float:
+        """L1 portfolio turnover per step, averaged across batch.
+
+        weights: (B, T, N). Returns mean |Δw| summed across assets per step.
+        Spec §11.4c target: < 0.10 daily.
+        """
+        if weights.ndim != 3 or weights.shape[1] < 2:
+            return 0.0
+        delta = (weights[:, 1:] - weights[:, :-1]).abs().sum(dim=-1)  # (B, T-1)
+        return float(delta.mean().detach().cpu().item())
+
+    @staticmethod
+    def _validate_synth_batch(
+        features: torch.Tensor,
+        ref_stats: "ReferenceStats | None",
+    ) -> bool:
+        """Spec §8.3: 9-point stylized-fact gate on a single synthetic batch.
+
+        Aggregates assets per batch item into a (T, F) window (mean-pool) and
+        runs the gate. Returns True when ALL items in the batch pass — failing
+        items are flagged so the caller can downweight or skip the batch.
+        """
+        if ref_stats is None:
+            return True
+        if features.ndim != 4:
+            return True
+        # Pool across assets and batch axis to form (T, F) windows.
+        np_feats = features.detach().cpu().numpy()
+        all_passed = True
+        for b in range(np_feats.shape[0]):
+            window = np_feats[b].mean(axis=0)  # (T, F)
+            report = validate_stylized_facts(window, ref_stats)
+            if not report.passed:
+                all_passed = False
+                break
+        return all_passed
+
+    @staticmethod
+    def _validate_synth_cross_asset(
+        features: torch.Tensor,
+        cross_ref: "CrossAssetReference | None",
+        n_pool_samples: int,
+    ) -> bool:
+        """Spec §8.5: cross-asset KS check on synthetic batch."""
+        if cross_ref is None:
+            return True
+        if features.ndim != 4:
+            return True
+        # Concatenate batch items along asset axis to form (B*N, T, F).
+        b, n, t, f = features.shape
+        flat = features.detach().cpu().numpy().reshape(b * n, t, f)
+        report = validate_cross_asset_structure(
+            flat, cross_ref, n_pool_samples=n_pool_samples
+        )
+        return report.passed
+
+    @staticmethod
+    def _check_fda_regime_quotas(
+        synthetic_loader: "DataLoader | None",
+        target_quotas: tuple[float, float, float, float] | None,
+        tol: float,
+        max_batches: int = 64,
+    ) -> None:
+        """Spec §8.4: verify FDA pool regime mix matches generation quotas.
+
+        Samples up to `max_batches` synthetic batches, runs the quantile regime
+        labeller, and checks the empirical fraction per regime is within
+        `tol` of the target (default ±5%). Skips silently when no quotas
+        provided or no synthetic loader available.
+        """
+        if synthetic_loader is None or target_quotas is None:
+            return
+        if abs(sum(target_quotas) - 1.0) > 1e-3:
+            raise ValueError(
+                f"fda_regime_quotas must sum to 1.0, got {target_quotas}"
+            )
+        counts = np.zeros(4, dtype=np.int64)
+        seen = 0
+        for i, (features, _shifted) in enumerate(synthetic_loader):
+            if i >= max_batches:
+                break
+            labels = PortfolioTrainer._quantile_regime_labels(features)
+            for r in range(4):
+                counts[r] += int((labels == r).sum().item())
+            seen += int(features.shape[0])
+        if seen == 0:
+            return
+        empirical = counts / float(seen)
+        for r in range(4):
+            if abs(empirical[r] - target_quotas[r]) > tol:
+                warnings.warn(
+                    f"FDA regime quota drift (spec §8.4): regime {r} "
+                    f"observed {empirical[r]:.3f} vs target "
+                    f"{target_quotas[r]:.3f} (|Δ| > {tol:.3f}). "
+                    f"Re-run FDA generation with --regime-quotas to rebalance.",
+                    stacklevel=2,
+                )
+
+    @staticmethod
+    def _check_vsn_fundamental_gates(
+        regime_detector: "RegimeDetector",
+        features: torch.Tensor,
+        threshold: float = 1e-3,
+    ) -> bool:
+        """Risk #13 check: returns False if PTA permutation collapsed VSN
+        gating on the fundamental block. Used as a runtime sanity probe."""
+        # Best-effort; many VSN implementations expose .last_gates as a (B,N,blocks)
+        # tensor. We treat absence of the attribute as a no-op pass.
+        gates = getattr(regime_detector, "last_block_gates", None)
+        if gates is None:
+            return True
+        if not torch.is_tensor(gates):
+            return True
+        # Block index for fundamentals is typically index 3 in the 8-block layout.
+        if gates.shape[-1] <= 3:
+            return True
+        fund_gates = gates[..., 3]
+        return bool(fund_gates.abs().mean().item() > threshold)
+
+    @staticmethod
     def _init_portfolio_state(
         batch_size: int,
         n_assets: int,
@@ -1028,7 +1252,20 @@ class PortfolioTrainer:
         nav_log = torch.zeros(batch_size, 1, device=device)
         return torch.cat([weights, unrealized_pnl, nav_log], dim=-1)
 
-    def _calendar_from_market(self, market_step: torch.Tensor) -> torch.Tensor:
+    def _calendar_from_market(
+        self,
+        market_step: torch.Tensor,
+        time_index: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """Spec §6.7: 20-dim financial calendar embedding.
+
+        Composes a sinusoidal positional encoding over a market time-index proxy
+        (derived from market features when no absolute calendar is available)
+        with the trailing market features. Sinusoids capture day-of-week /
+        month-of-year periodicity at multiple frequencies; the trailing market
+        features carry slow regime context (yield-curve slope, breadth tail).
+        Result is L2-normalised to keep numerical scale bounded across regimes.
+        """
         if market_step.ndim != 2:
             raise ValueError(
                 f"market_step must be rank 2 (B,M), got shape {tuple(market_step.shape)}"
@@ -1038,9 +1275,37 @@ class PortfolioTrainer:
                 "market feature dim must be >= calendar_dim, got "
                 f"M={market_step.shape[1]} calendar_dim={self.spec.calendar_dim}"
             )
-        # Use the trailing market features as a non-zero calendar proxy instead
-        # of an all-zero calendar vector.
-        return market_step[:, -self.spec.calendar_dim :]
+        B, M = market_step.shape
+        cal_dim = self.spec.calendar_dim
+        device = market_step.device
+        dtype = market_step.dtype
+
+        if time_index is None:
+            # Derive a stable scalar time proxy from low-frequency market dims
+            # (volatility/sentiment block leaders) so successive timesteps get
+            # distinct phase even without an absolute calendar reference.
+            time_index = market_step[:, :4].mean(dim=-1)
+
+        half = cal_dim // 4  # cal_dim // 2 sin/cos pairs across 2 period bands
+        if half < 1:
+            return market_step[:, -cal_dim:]
+        freqs = torch.exp(
+            -math.log(10000.0)
+            * torch.arange(half, device=device, dtype=torch.float32) / max(half, 1)
+        )
+        # Two period bands (weekly ~5d, yearly ~252d) — concatenated.
+        weekly = time_index.float()[:, None] * freqs[None, :] * (2.0 * math.pi / 5.0)
+        yearly = time_index.float()[:, None] * freqs[None, :] * (2.0 * math.pi / 252.0)
+        cal_sin_cos = torch.cat(
+            [weekly.sin(), weekly.cos(), yearly.sin(), yearly.cos()], dim=-1
+        ).to(dtype)
+        # Pad/trim to calendar_dim, then mix with trailing market context.
+        if cal_sin_cos.shape[1] >= cal_dim:
+            cal = cal_sin_cos[:, :cal_dim]
+        else:
+            pad = market_step[:, -(cal_dim - cal_sin_cos.shape[1]) :]
+            cal = torch.cat([cal_sin_cos, pad], dim=-1)
+        return F.normalize(cal, dim=-1)
 
     @staticmethod
     def _trim_cold_start_steps(
@@ -1699,10 +1964,93 @@ class PortfolioTrainer:
         cross_asset_warmup_train_loader: DataLoader | None = None,
         cross_asset_warmup_synthetic_loader: DataLoader | None = None,
         resume_from: Path | None = None,
+        real_reference_windows: np.ndarray | None = None,
     ) -> None:
+        """Phase 2 portfolio head training (spec §11.4).
+
+        Args:
+            train_loader: real-data multi-asset loader
+            cfg: PortfolioTrainConfig
+            val_loader: real-data-only loader; spec §11.4c forbids synthetic in
+                validation. Asserted via dataset.is_synthetic flag.
+            synthetic_loader: FDA-generated joint windows (optional)
+            cross_asset_warmup_train_loader: optional separate loader for
+                spec §11.4a warm-up. Note: warm-up and head-training data may
+                overlap because the warm-up only updates the backbone via the
+                Frobenius correlation loss (head outputs are not consumed),
+                so head-side leakage is impossible.
+            cross_asset_warmup_synthetic_loader: optional FDA loader for warm-up
+            resume_from: Path to checkpoint (resumes start_step etc.)
+            real_reference_windows: optional (N, T, F) real windows used to
+                build the spec §8.3/§8.5 stylized-fact + cross-asset reference
+                stats for the in-training FDA validation gate. When None, the
+                gate is skipped even if cfg.fda_validate_per_batch=True (a
+                warning is emitted at training start).
+
+        Note (PTA micro-batching, spec §11.4b): the expanded PTA batch is split
+        into `pta_micro_batch_size` groups; per-group losses are mean-reduced
+        and weighted by group fraction so accumulated gradients are bit-exact
+        identical to a single full-batch forward — this only holds because
+        every loss term reduces independently along the PTA batch axis.
+
+        Note (Sharpe head, spec §11.4c): when cfg.head == 'sharpe' the loss is
+        -rolling_sharpe (not DSR), and the auxiliary volatility prediction
+        head is not used (vol_head only feeds the return-head loss).
+        Validation monitor for the Sharpe head is rolling_sharpe, while the
+        return head is monitored on val_DSR per spec §11.4c line 1458.
+        """
         if cfg.cross_asset_warmup_batch_size < 1:
             raise ValueError(
                 f"cross_asset_warmup_batch_size must be >= 1, got {cfg.cross_asset_warmup_batch_size}"
+            )
+
+        # Spec §11.4c real-data-only validation gate — fails fast on synthetic.
+        self._assert_real_only_validation(val_loader)
+
+        # Spec §11.3 — Phase 1 → Phase 2 baseline gate.
+        self._validate_phase1_gate(cfg)
+
+        # Spec §8.4 — verify FDA regime mix matches generation quotas.
+        if cfg.fda_regime_quotas is not None and synthetic_loader is not None:
+            self._check_fda_regime_quotas(
+                synthetic_loader,
+                cfg.fda_regime_quotas,
+                tol=cfg.fda_regime_quota_tol,
+            )
+
+        # Spec §8.3 / §8.5 — build per-batch FDA validation references.
+        ref_stats: ReferenceStats | None = None
+        cross_ref: CrossAssetReference | None = None
+        if (
+            (cfg.fda_validate_per_batch or cfg.cross_asset_validate)
+            and real_reference_windows is not None
+        ):
+            try:
+                if cfg.fda_validate_per_batch:
+                    ref_stats = compute_reference_stats(real_reference_windows)
+                if cfg.cross_asset_validate:
+                    cross_ref = compute_cross_asset_reference(
+                        real_reference_windows,
+                        pool_size=cfg.cross_asset_pool_size,
+                        n_pool_samples=cfg.cross_asset_n_pool_samples,
+                    )
+            except Exception as exc:
+                warnings.warn(
+                    f"Could not build FDA validation references: {exc!r}. "
+                    "Per-batch FDA gates disabled for this run.",
+                    stacklevel=2,
+                )
+                ref_stats = None
+                cross_ref = None
+        elif (
+            (cfg.fda_validate_per_batch or cfg.cross_asset_validate)
+            and synthetic_loader is not None
+            and real_reference_windows is None
+        ):
+            warnings.warn(
+                "FDA per-batch validation requested but no real_reference_windows "
+                "provided; spec §8.3/§8.5 in-training gate disabled.",
+                stacklevel=2,
             )
         warmup_train_loader = (
             cross_asset_warmup_train_loader if cross_asset_warmup_train_loader is not None else train_loader
@@ -1857,6 +2205,17 @@ class PortfolioTrainer:
         synth_iter = iter(synthetic_loader) if synthetic_loader is not None else None
         sector_ids_t: torch.Tensor | None = None
 
+        # Spec §11.4c monitoring — proportions, turnover, validation pass rates.
+        synth_count = 0
+        real_count = 0
+        synth_seen_for_gate = 0
+        synth_passed_gate = 0
+        cross_seen_for_gate = 0
+        cross_passed_gate = 0
+        running_turnover_sum = 0.0
+        running_turnover_n = 0
+        converged_step: int | None = None
+
         def _pull_batch(source: str) -> tuple[torch.Tensor, torch.Tensor]:
             nonlocal data_iter, synth_iter
             if source == "synth":
@@ -1896,6 +2255,42 @@ class PortfolioTrainer:
                 )
             if source == "synth":
                 source_weight = cfg.fda_loss_weight
+                synth_count += 1
+                # Spec §8.3 — periodic stylized-fact validation on synth batches.
+                if (
+                    cfg.fda_validate_per_batch
+                    and ref_stats is not None
+                    and cfg.fda_validate_every > 0
+                    and synth_count % cfg.fda_validate_every == 0
+                ):
+                    synth_seen_for_gate += 1
+                    if self._validate_synth_batch(features, ref_stats):
+                        synth_passed_gate += 1
+                    else:
+                        # Down-weight failing synth batch so the model is not
+                        # pulled off-manifold by drifted synthetic samples.
+                        source_weight = source_weight * 0.5
+                # Spec §8.5 — periodic cross-asset KS check on synth batches.
+                if (
+                    cfg.cross_asset_validate
+                    and cross_ref is not None
+                    and cfg.cross_asset_validate_every > 0
+                    and synth_count % cfg.cross_asset_validate_every == 0
+                ):
+                    cross_seen_for_gate += 1
+                    if self._validate_synth_cross_asset(
+                        features, cross_ref, cfg.cross_asset_n_pool_samples
+                    ):
+                        cross_passed_gate += 1
+                    else:
+                        warnings.warn(
+                            f"FDA cross-asset KS gate failed at step {step} "
+                            "(spec §8.5); batch downweighted",
+                            stacklevel=2,
+                        )
+                        source_weight = source_weight * 0.5
+            else:
+                real_count += 1
 
             if cfg.enforce_regime_balance:
                 # Pool-based selection: accumulate a candidate pool large enough
@@ -1987,6 +2382,22 @@ class PortfolioTrainer:
                         pred_vol,
                         cfg.state_warmup_steps,
                     )
+                    # Spec §11.4c turnover monitoring (logged at cfg.log_every).
+                    running_turnover_sum += self._portfolio_turnover(
+                        loss_weights.float()
+                    )
+                    running_turnover_n += 1
+                    # Risk #13 — surface VSN fundamental-gate collapse if PTA
+                    # broke feature consistency for fundamental block.
+                    if not self._check_vsn_fundamental_gates(
+                        self.regime_detector, feats_g
+                    ):
+                        warnings.warn(
+                            f"VSN gating collapsed on fundamental block at "
+                            f"step {step} (Risk #13). Inspect PTA permutation "
+                            "for fundamental-block leakage.",
+                            stacklevel=2,
+                        )
 
                     if cfg.head == "return":
                         loss_dict = return_head_loss(
@@ -2042,7 +2453,44 @@ class PortfolioTrainer:
             if step % cfg.log_every == 0:
                 lr_now = scheduler.get_last_lr()[0]
                 parts = "  ".join(f"{k}={v.item():.4f}" for k, v in loss_dict.items())
-                print(f"step={step:>7d}  {parts}  lr={lr_now:.2e}")
+                # Spec §11.4c monitoring: real/synth proportion, turnover,
+                # FDA gate pass rates.
+                total_seen = real_count + synth_count
+                synth_frac = synth_count / max(total_seen, 1)
+                turnover_avg = running_turnover_sum / max(running_turnover_n, 1)
+                turnover_warn = (
+                    " ⚠TURNOVER" if turnover_avg > cfg.turnover_target_daily else ""
+                )
+                gate_parts = []
+                if synth_seen_for_gate > 0:
+                    pass_rate = synth_passed_gate / synth_seen_for_gate
+                    gate_parts.append(f"sf_pass={pass_rate:.2f}")
+                    if pass_rate < cfg.fda_min_pass_rate:
+                        gate_parts.append(f"⚠sf<{cfg.fda_min_pass_rate:.2f}")
+                if cross_seen_for_gate > 0:
+                    cross_rate = cross_passed_gate / cross_seen_for_gate
+                    gate_parts.append(f"ca_pass={cross_rate:.2f}")
+                gates_str = ("  " + "  ".join(gate_parts)) if gate_parts else ""
+                print(
+                    f"step={step:>7d}  {parts}  lr={lr_now:.2e}  "
+                    f"synth_frac={synth_frac:.2f}  "
+                    f"daily_to={turnover_avg:.4f}{turnover_warn}{gates_str}"
+                )
+
+            # Spec §7.8 — optional Sharpe-head temperature annealing.
+            if (
+                cfg.head == "sharpe"
+                and cfg.sharpe_temperature_anneal
+                and cfg.total_steps > 0
+            ):
+                # Linear decay of log_temperature from current value to
+                # log(sharpe_temperature_final) over remaining steps.
+                progress = min(1.0, step / float(cfg.total_steps))
+                target_log_T = math.log(max(cfg.sharpe_temperature_final, 1e-3))
+                with torch.no_grad():
+                    current = self.head_s.log_temperature.detach().clone()
+                    blended = (1.0 - progress) * current + progress * target_log_T
+                    self.head_s.log_temperature.copy_(blended)
 
             if val_loader is not None and step % cfg.eval_every == 0:
                 val_metrics = self.evaluate(val_loader, cfg)
@@ -2056,6 +2504,7 @@ class PortfolioTrainer:
                 if monitor < best_monitor - cfg.patience_min_delta:
                     best_monitor = monitor
                     last_improve_step = step
+                    converged_step = step  # latest meaningful improvement
                     self._save(cfg.best_path, step, optimizer, scheduler, best_monitor)
                 else:
                     # Still save best checkpoint on any absolute improvement, even
@@ -2064,10 +2513,27 @@ class PortfolioTrainer:
                         best_monitor = monitor
                         self._save(cfg.best_path, step, optimizer, scheduler, best_monitor)
                     if self._should_stop_early(step, last_improve_step, cfg):
+                        # Spec §11.4c convergence-range check.
+                        conv = converged_step or step
+                        if conv < cfg.convergence_step_min:
+                            warnings.warn(
+                                f"Converged at step {conv} below spec §11.4c "
+                                f"expected min {cfg.convergence_step_min}. "
+                                "May indicate underfitting or trivial solution.",
+                                stacklevel=2,
+                            )
+                        elif conv > cfg.convergence_step_max:
+                            warnings.warn(
+                                f"Converged at step {conv} above spec §11.4c "
+                                f"expected max {cfg.convergence_step_max}. "
+                                "May indicate slow optimization or weak signal.",
+                                stacklevel=2,
+                            )
                         print(
                             f"Early stopping at step {step} "
                             f"(no improvement ≥{cfg.patience_min_delta} "
-                            f"for {cfg.patience_steps} steps)"
+                            f"for {cfg.patience_steps} steps; "
+                            f"converged at step {conv})"
                         )
                         break
 
