@@ -52,11 +52,10 @@ class ProjectionHead(nn.Module):
 
 
 class ReturnPredictionHead(nn.Module):
-    """Auxiliary next-step prediction head — spec §7.9.
+    """Auxiliary next-step prediction head.
 
-    Outputs (return, log_vol) at t+1. Phase-1 (§11.3) supervises only the
-    return output via MSE; log_vol is unused during pretraining and consumed
-    by the surprise signal at inference.
+    Outputs (return, log_vol) at t+1. Return is supervised via MSE during
+    pretraining; log_vol is unused until inference.
 
     Zero-initialised so early predictions start near zero, avoiding the
     ~3-order-of-magnitude MSE blow-up that occurs with default Linear init
@@ -74,15 +73,45 @@ class ReturnPredictionHead(nn.Module):
         return out[..., 0], out[..., 1]
 
 
+# ── Asset adversarial head ───────────────────────────────────────────────────
+
+
+class _GradientReversal(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, lambda_: float) -> torch.Tensor:  # type: ignore[override]
+        ctx.lambda_ = float(lambda_)
+        return x.view_as(x)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):  # type: ignore[override]
+        return -ctx.lambda_ * grad_output, None
+
+
+def grad_reverse(x: torch.Tensor, lambda_: float = 1.0) -> torch.Tensor:
+    return _GradientReversal.apply(x, lambda_)
+
+
+class AssetAdversarialHead(nn.Module):
+    """Predicts asset_id via a gradient-reversal layer to push the encoder toward asset-invariant representations."""
+
+    def __init__(self, d_model: int, n_assets: int) -> None:
+        super().__init__()
+        hidden = max(64, d_model // 2)
+        self.net = nn.Sequential(
+            nn.Linear(d_model, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, n_assets),
+        )
+
+    def forward(self, x: torch.Tensor, lambda_: float = 1.0) -> torch.Tensor:
+        return self.net(grad_reverse(x, lambda_))
+
+
 def infer_regime_label(feature_seq: np.ndarray) -> int:
     """Heuristic 4-state regime label for synthetic shards lacking HMM labels.
 
     Proxies: VIX/100 at market offset 184 (volatility) and log-return at index 3.
-    Thresholds calibrated against 10yr SPY data to target the §8.4 regime
-    distribution (~55/20/15/10 across bull/hi-vol/mean-rev/crisis).
-
-    Canonical IDs (spec §11.3):
-      0 = low-vol bull  1 = high-vol trending  2 = mean-reverting  3 = crisis
+    Canonical IDs: 0 = low-vol bull  1 = high-vol trending  2 = mean-reverting  3 = crisis
     """
     vol_proxy = float(feature_seq[:, 184].mean())
     ret_proxy = float(feature_seq[:, 3].mean())
@@ -96,7 +125,7 @@ def infer_regime_label(feature_seq: np.ndarray) -> int:
     return 2  # mean-reverting
 
 
-# ── HMM regime labeling (§11.2 Phase 0, §11.3) ──────────────────────────────
+# ── HMM regime labeling ──────────────────────────────────────────────────────
 
 
 def _shard_returns(path: Path) -> np.ndarray:
@@ -112,39 +141,35 @@ def _shard_returns(path: Path) -> np.ndarray:
     return np.column_stack([returns, np.abs(returns)])
 
 
-def _canonicalize_hmm(
+def _canonicalize_hmm3(
     hmm: object, raw_labels: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Map raw HMM state integers to spec canonical IDs (§11.3).
+    """Map raw 3-state HMM integers to canonical IDs: 0=bull, 1=hi-vol, 2=mean-rev.
 
-    Ordering: highest mean return → 0 (bull), lowest → 3 (crisis);
-    of the two middle states, higher mean |return| → 1 (hi-vol), lower → 2 (mean-rev).
-    Returns (remap, canonical_labels) where remap[raw_state] = canonical_id.
+    Sorted by mean |return|: lowest → bull, highest → hi-vol, middle → mean-rev.
     """
-    means = hmm.means_  # type: ignore[attr-defined]  shape (n_states, 2)
-    mean_ret = means[:, 0]  # mean log-return per state
-    mean_abs = means[:, 1]  # mean |return| — volatility proxy
-    n = len(mean_ret)
-    mean_order = np.argsort(-mean_ret)  # descending: highest mean → index 0
+    means = hmm.means_  # type: ignore[attr-defined]
+    mean_abs = means[:, 1]
+    if len(mean_abs) != 3:
+        raise ValueError(f"_canonicalize_hmm3 expects 3 states, got {len(mean_abs)}")
 
-    remap = np.empty(n, dtype=np.int64)
-    remap[mean_order[0]] = 0   # highest mean return → bull
-    remap[mean_order[-1]] = 3  # lowest mean return  → crisis
-    mid = sorted(mean_order[1:-1].tolist(), key=lambda s: -mean_abs[s])
-    remap[mid[0]] = 1  # higher |return| → high-vol trending
-    remap[mid[1]] = 2  # lower  |return| → mean-reverting
+    abs_order = np.argsort(mean_abs)
+    remap = np.empty(3, dtype=np.int64)
+    remap[abs_order[0]] = 0
+    remap[abs_order[2]] = 1
+    remap[abs_order[1]] = 2
 
     return remap, remap[raw_labels]
 
 
 def build_spy_regime_labels(
     data_dir: Path,
-    n_states: int = 4,
+    crisis_percentile: float = 95.0,
 ) -> tuple[np.ndarray | None, np.ndarray | None]:
-    """Fit a 4-state Gaussian HMM on SPY returns and return per-row canonical
-    regime labels for train and validation splits (§11.2 / §11.3).
+    """Fit 4-class regime labels on SPY returns for train and val splits.
 
-    HMM fit on train split only (no look-ahead); labels cached for fast restarts.
+    Crisis (id=3): |ret| ≥ training-set percentile threshold (no look-ahead).
+    Remaining rows: 3-state Gaussian HMM → bull / hi-vol / mean-rev.
     Returns (train_labels, val_labels) or (None, None) if SPY shard is absent.
     """
     from hmmlearn.hmm import GaussianHMM
@@ -157,7 +182,6 @@ def build_spy_regime_labels(
     if not spy_train.exists():
         return None, None
 
-    # Cache hit: verify the label count still matches the shard row count.
     if cache_train.exists():
         cached = np.load(cache_train)
         raw_check = np.memmap(spy_train, dtype="float32", mode="r")
@@ -166,22 +190,33 @@ def build_spy_regime_labels(
             val_labels = np.load(cache_val) if cache_val.exists() else None
             return cached, val_labels
 
-    # Fit on training split only (no look-ahead).
     train_returns = _shard_returns(spy_train)
+    abs_train = train_returns[:, 1]
+    crisis_threshold = float(np.percentile(abs_train, crisis_percentile))
+    train_crisis = abs_train >= crisis_threshold
+
+    train_non_crisis_idx = np.where(~train_crisis)[0]
+    train_non_crisis_returns = train_returns[train_non_crisis_idx]
     hmm = GaussianHMM(
-        n_components=n_states,
+        n_components=3,
         covariance_type="diag",
         n_iter=500,
         random_state=42,
         verbose=False,
     )
-    hmm.fit(train_returns)
-    remap, train_labels = _canonicalize_hmm(hmm, hmm.predict(train_returns))
+    hmm.fit(train_non_crisis_returns)
+    raw_train_nc = hmm.predict(train_non_crisis_returns)
+    remap, canonical_nc = _canonicalize_hmm3(hmm, raw_train_nc)
+
+    train_labels = np.empty(len(train_returns), dtype=np.int64)
+    train_labels[train_non_crisis_idx] = canonical_nc
+    train_labels[train_crisis] = 3
     np.save(cache_train, train_labels)
 
-    counts = np.bincount(train_labels, minlength=n_states)
+    counts = np.bincount(train_labels, minlength=4)
     print(
-        f"HMM regime labels fit on {len(train_labels)} SPY rows — "
+        f"Regime labels fit on {len(train_labels)} SPY rows "
+        f"(crisis pctile={crisis_percentile}, |ret|≥{crisis_threshold:.4f}) — "
         f"bull={counts[0]}  hi-vol={counts[1]}  "
         f"mean-rev={counts[2]}  crisis={counts[3]}"
     )
@@ -189,9 +224,20 @@ def build_spy_regime_labels(
     val_labels: np.ndarray | None = None
     if spy_val.exists():
         val_returns = _shard_returns(spy_val)
-        raw_val = hmm.predict(val_returns)
-        val_labels = remap[raw_val]
+        val_crisis = val_returns[:, 1] >= crisis_threshold
+        val_non_crisis_idx = np.where(~val_crisis)[0]
+        val_labels = np.empty(len(val_returns), dtype=np.int64)
+        if len(val_non_crisis_idx) > 0:
+            raw_val_nc = hmm.predict(val_returns[val_non_crisis_idx])
+            val_labels[val_non_crisis_idx] = remap[raw_val_nc]
+        val_labels[val_crisis] = 3
         np.save(cache_val, val_labels)
+        v_counts = np.bincount(val_labels, minlength=4)
+        print(
+            f"Val regime labels ({len(val_labels)} rows) — "
+            f"bull={v_counts[0]}  hi-vol={v_counts[1]}  "
+            f"mean-rev={v_counts[2]}  crisis={v_counts[3]}"
+        )
 
     return train_labels, val_labels
 
@@ -395,6 +441,205 @@ class ShardDataset(IterableDataset):
             active = next_active
 
 
+# ── Regime-balanced sampling ─────────────────────────────────────────────────
+
+
+def _shard_n_rows(path: Path) -> int:
+    raw = np.memmap(path, dtype="float32", mode="r")
+    return int(raw.size) // TOTAL_FEATURE_DIM
+
+
+class RegimeBalancedShardDataset(IterableDataset):
+    """Streams TCP tuples sampled uniformly across the 4 HMM regimes.
+
+    Real shards share the SPY trading calendar so a single per-regime start-idx
+    index applies to all of them. Synthetic shards are interleaved at
+    `synthetic_fraction` to preserve their loss contribution.
+    """
+
+    PER_ASSET_DIM = PER_ASSET_FEATURE_DIM
+    FEATURE_DIM = TOTAL_FEATURE_DIM
+    MARKET_DIM = MARKET_FEATURE_DIM
+
+    def __init__(
+        self,
+        shard_paths: list[Path],
+        seq_len: int,
+        positive_offset: int,
+        global_regime_labels: np.ndarray,
+        symbol_to_id: dict[str, int],
+        symbol_to_sector: dict[str, int] | None = None,
+        synthetic_prefix: str = SYNTHETIC_SHARD_PREFIX,
+        synthetic_loss_weight: float = 0.5,
+        synthetic_fraction: float = 0.2,
+        n_regimes: int = 4,
+        seed: int = 0,
+    ) -> None:
+        if positive_offset == 0:
+            raise ValueError("positive_offset must be non-zero for TCP views")
+        if global_regime_labels is None or len(global_regime_labels) == 0:
+            raise ValueError("global_regime_labels required for regime balancing")
+
+        self.seq_len = seq_len
+        self.positive_offset = positive_offset
+        self.global_regime_labels = global_regime_labels
+        self.symbol_to_id = symbol_to_id
+        self.symbol_to_sector = symbol_to_sector or {}
+        self.synthetic_prefix = synthetic_prefix
+        self.synthetic_loss_weight = synthetic_loss_weight
+        self.synthetic_fraction = float(synthetic_fraction)
+        self.n_regimes = n_regimes
+        self.seed = seed
+
+        self.real_paths = [
+            p for p in shard_paths if not p.stem.startswith(synthetic_prefix)
+        ]
+        self.synthetic_paths = [
+            p for p in shard_paths if p.stem.startswith(synthetic_prefix)
+        ]
+        if not self.real_paths:
+            raise ValueError("RegimeBalancedShardDataset needs at least one real shard")
+
+        # Determine valid starts shared across real shards (calendar-aligned).
+        # Use the shortest real shard as the row count to stay within bounds.
+        n_rows_min = min(_shard_n_rows(p) for p in self.real_paths)
+        min_start = max(0, -positive_offset)
+        max_start = n_rows_min - seq_len - max(positive_offset, 0) + 1
+        if max_start <= min_start:
+            raise ValueError(
+                f"Real shards too short for seq_len={seq_len} "
+                f"offset={positive_offset} (n_rows={n_rows_min})"
+            )
+
+        starts = np.arange(min_start, max_start, dtype=np.int64)
+        label_idx = starts + seq_len - 1
+        valid = label_idx < len(global_regime_labels)
+        starts = starts[valid]
+        labels = global_regime_labels[label_idx[valid]].astype(np.int64)
+        self.starts_by_regime: dict[int, np.ndarray] = {
+            r: starts[labels == r] for r in range(n_regimes)
+        }
+        self.present_regimes: list[int] = [
+            r for r in range(n_regimes) if len(self.starts_by_regime[r]) > 0
+        ]
+        if not self.present_regimes:
+            raise ValueError("no valid regime buckets — regime labels missing")
+        empty_regimes = [r for r in range(n_regimes) if r not in self.present_regimes]
+        if empty_regimes:
+            print(
+                f"RegimeBalancedShardDataset: regimes {empty_regimes} have 0 "
+                f"windows in this split; sampling uniformly across "
+                f"{self.present_regimes} only."
+            )
+        regime_names = ["bull", "hi-vol", "mean-rev", "crisis"]
+        bucket_summary = "  ".join(
+            f"{regime_names[r]}={len(self.starts_by_regime[r])}"
+            for r in range(n_regimes)
+        )
+        print(f"RegimeBalancedShardDataset bucket sizes:  {bucket_summary}")
+
+    def _load_rows(self, path: Path) -> np.ndarray:
+        raw = np.memmap(path, dtype="float32", mode="r")
+        n_floats = int(raw.size)
+        if n_floats % self.FEATURE_DIM != 0:
+            raise ValueError(
+                f"shard {path} has unsupported row width "
+                f"(floats={n_floats}, expected multiple of {self.FEATURE_DIM})"
+            )
+        return raw.reshape(-1, self.FEATURE_DIM)
+
+    def _emit_real(
+        self,
+        rng: np.random.Generator,
+    ) -> tuple[np.ndarray, np.ndarray, float, int, int, int, float, int]:
+        regime_id = int(self.present_regimes[rng.integers(len(self.present_regimes))])
+        bucket = self.starts_by_regime[regime_id]
+        start_idx = int(bucket[rng.integers(len(bucket))])
+        path = self.real_paths[rng.integers(len(self.real_paths))]
+        data = self._load_rows(path)
+
+        pos_start = start_idx + self.positive_offset
+        seq_a = data[start_idx : start_idx + self.seq_len].copy()
+        seq_b = data[pos_start : pos_start + self.seq_len].copy()
+        next_return = float(data[start_idx + self.seq_len, RETURN_FEATURE_INDEX])
+        asset_id = int(self.symbol_to_id.get(path.stem, 0))
+        sector_id = int(self.symbol_to_sector.get(path.stem, UNKNOWN_SECTOR_ID))
+        return (
+            seq_a,
+            seq_b,
+            next_return,
+            asset_id,
+            regime_id,
+            sector_id,
+            1.0,
+            start_idx,
+        )
+
+    def _emit_synthetic(
+        self,
+        rng: np.random.Generator,
+    ) -> tuple[np.ndarray, np.ndarray, float, int, int, int, float, int] | None:
+        path = self.synthetic_paths[rng.integers(len(self.synthetic_paths))]
+        data = self._load_rows(path)
+        n_rows = data.shape[0]
+        min_start = max(0, -self.positive_offset)
+        max_start = n_rows - self.seq_len - max(self.positive_offset, 0) + 1
+        if max_start <= min_start:
+            return None
+        start_idx = int(rng.integers(min_start, max_start))
+        pos_start = start_idx + self.positive_offset
+        seq_a = data[start_idx : start_idx + self.seq_len].copy()
+        seq_b = data[pos_start : pos_start + self.seq_len].copy()
+        next_return = float(data[start_idx + self.seq_len, RETURN_FEATURE_INDEX])
+        regime_id = infer_regime_label(seq_a)
+        return (
+            seq_a,
+            seq_b,
+            next_return,
+            0,
+            regime_id,
+            UNKNOWN_SECTOR_ID,
+            self.synthetic_loss_weight,
+            start_idx,
+        )
+
+    def __iter__(self):
+        worker = torch.utils.data.get_worker_info()
+        worker_seed = self.seed + (worker.id if worker is not None else 0)
+        rng = np.random.default_rng(worker_seed)
+        while True:
+            use_synth = (
+                len(self.synthetic_paths) > 0
+                and rng.random() < self.synthetic_fraction
+            )
+            if use_synth:
+                t = self._emit_synthetic(rng)
+                if t is None:
+                    continue
+            else:
+                t = self._emit_real(rng)
+            (
+                seq_a,
+                seq_b,
+                next_return,
+                asset_id,
+                regime_id,
+                sector_id,
+                sample_weight,
+                start_idx,
+            ) = t
+            yield (
+                torch.from_numpy(seq_a),
+                torch.from_numpy(seq_b),
+                torch.tensor(next_return, dtype=torch.float32),
+                torch.tensor(asset_id, dtype=torch.long),
+                torch.tensor(regime_id, dtype=torch.long),
+                torch.tensor(sector_id, dtype=torch.long),
+                torch.tensor(sample_weight, dtype=torch.float32),
+                torch.tensor(start_idx, dtype=torch.long),
+            )
+
+
 class TarShardDataset(ShardDataset):
     """Streams TCP training tuples from WebDataset-format tar archives.
 
@@ -573,6 +818,40 @@ def build_dataloader(
     )
 
 
+def build_regime_balanced_loader(
+    shard_paths: list[Path],
+    seq_len: int,
+    batch_size: int,
+    positive_offset: int,
+    global_regime_labels: np.ndarray,
+    symbol_to_id: dict[str, int],
+    symbol_to_sector: dict[str, int] | None = None,
+    synthetic_loss_weight: float = 0.5,
+    synthetic_fraction: float = 0.2,
+    num_workers: int = 4,
+    seed: int = 0,
+) -> DataLoader:
+    ds = RegimeBalancedShardDataset(
+        shard_paths,
+        seq_len=seq_len,
+        positive_offset=positive_offset,
+        global_regime_labels=global_regime_labels,
+        symbol_to_id=symbol_to_id,
+        symbol_to_sector=symbol_to_sector,
+        synthetic_loss_weight=synthetic_loss_weight,
+        synthetic_fraction=synthetic_fraction,
+        seed=seed,
+    )
+    return DataLoader(
+        ds,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=num_workers > 0,
+        prefetch_factor=4 if num_workers > 0 else None,
+    )
+
+
 def build_split_loaders(
     data_dir: Path,
     seq_len: int,
@@ -581,7 +860,9 @@ def build_split_loaders(
     positive_offset: int = 4,
     synthetic_loss_weight: float = 0.5,
     symbol_to_sector: dict[str, int] | None = None,
-) -> tuple[DataLoader, DataLoader]:
+    regime_balanced: bool = False,
+    synthetic_fraction: float = 0.2,
+) -> tuple[DataLoader, DataLoader, DataLoader | None]:
     """Build train/val DataLoaders from {data_dir}/train/ and {data_dir}/validation/.
 
     Fits HMM regime labels on the train split (§11.2 / §11.3) and assigns
@@ -610,18 +891,38 @@ def build_split_loaders(
             "Run 'make collect' and ensure SPY is in symbols.txt."
         )
 
-    train_loader = build_dataloader(
-        train_shards,
-        seq_len,
-        batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        positive_offset=positive_offset,
-        synthetic_loss_weight=synthetic_loss_weight,
-        symbol_to_sector=symbol_to_sector,
-        symbol_to_id=symbol_to_id,
-        global_regime_labels=train_regime_labels,
-    )
+    if regime_balanced and train_regime_labels is not None:
+        train_loader = build_regime_balanced_loader(
+            train_shards,
+            seq_len=seq_len,
+            batch_size=batch_size,
+            positive_offset=positive_offset,
+            global_regime_labels=train_regime_labels,
+            symbol_to_id=symbol_to_id,
+            symbol_to_sector=symbol_to_sector,
+            synthetic_loss_weight=synthetic_loss_weight,
+            synthetic_fraction=synthetic_fraction,
+            num_workers=num_workers,
+        )
+        print(
+            "Train loader: regime-balanced sampling enabled "
+            f"(target ~{1.0 / 4:.0%} per regime, synthetic fraction "
+            f"{synthetic_fraction:.0%})"
+        )
+    else:
+        train_loader = build_dataloader(
+            train_shards,
+            seq_len,
+            batch_size,
+            shuffle=True,
+            num_workers=num_workers,
+            positive_offset=positive_offset,
+            synthetic_loss_weight=synthetic_loss_weight,
+            symbol_to_sector=symbol_to_sector,
+            symbol_to_id=symbol_to_id,
+            global_regime_labels=train_regime_labels,
+        )
+
     val_loader = build_dataloader(
         val_shards,
         seq_len,
@@ -635,7 +936,25 @@ def build_split_loaders(
         global_regime_labels=val_regime_labels,
     )
 
-    return train_loader, val_loader
+    # Regime-stratified loader from train data for cluster/t-SNE evaluation.
+    # Val may lack rare regimes; this guarantees all 4 are represented.
+    diagnostic_loader: DataLoader | None = None
+    if train_regime_labels is not None:
+        diagnostic_loader = build_regime_balanced_loader(
+            train_shards,
+            seq_len=seq_len,
+            batch_size=batch_size,
+            positive_offset=positive_offset,
+            global_regime_labels=train_regime_labels,
+            symbol_to_id=symbol_to_id,
+            symbol_to_sector=symbol_to_sector,
+            synthetic_loss_weight=synthetic_loss_weight,
+            synthetic_fraction=0.0,  # no synth for diagnostic — real regimes only
+            num_workers=max(1, num_workers // 2),
+            seed=12345,
+        )
+
+    return train_loader, val_loader, diagnostic_loader
 
 
 # ── Checkpoint ───────────────────────────────────────────────────────────────
@@ -755,6 +1074,7 @@ def _build_contrastive_logits_and_mask(
     hard_negative_boost: float = 0.25,
     correlation_threshold: float = 0.6,
     min_negative_gap: int = 50,
+    require_same_sector: bool = True,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     if temperature <= 0.0:
         raise ValueError(f"temperature must be > 0, got {temperature}")
@@ -776,24 +1096,27 @@ def _build_contrastive_logits_and_mask(
     if (
         asset_ids is not None
         and regime_ids is not None
-        and sector_ids is not None
         and return_windows is not None
     ):
-        if sector_ids.ndim != 1 or sector_ids.shape[0] != z_a.shape[0]:
+        if sector_ids is not None and (
+            sector_ids.ndim != 1 or sector_ids.shape[0] != z_a.shape[0]
+        ):
             raise ValueError("sector_ids must be rank-1 and batch-aligned")
         corr = _pairwise_return_correlation(return_windows)
-        known_sector = sector_ids >= 0
-        same_sector = sector_ids[:, None] == sector_ids[None, :]
         same_regime = regime_ids[:, None] == regime_ids[None, :]
         diff_asset = asset_ids[:, None] != asset_ids[None, :]
         additional_positives = (
-            known_sector[:, None]
-            & known_sector[None, :]
-            & same_sector
-            & same_regime
-            & diff_asset
-            & (corr > correlation_threshold)
+            same_regime & diff_asset & (corr > correlation_threshold)
         )
+        if require_same_sector and sector_ids is not None:
+            known_sector = sector_ids >= 0
+            same_sector = sector_ids[:, None] == sector_ids[None, :]
+            additional_positives = (
+                additional_positives
+                & known_sector[:, None]
+                & known_sector[None, :]
+                & same_sector
+            )
         positive_mask = positive_mask | additional_positives
 
     if asset_ids is not None and time_indices is not None and min_negative_gap >= 0:
@@ -820,6 +1143,7 @@ def regime_aware_contrastive_terms(
     hard_negative_boost: float = 0.25,
     correlation_threshold: float = 0.6,
     min_negative_gap: int = 50,
+    require_same_sector: bool = True,
     sample_weights: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Symmetric multi-positive InfoNCE with regime-aware hard negatives."""
@@ -835,6 +1159,7 @@ def regime_aware_contrastive_terms(
         hard_negative_boost=hard_negative_boost,
         correlation_threshold=correlation_threshold,
         min_negative_gap=min_negative_gap,
+        require_same_sector=require_same_sector,
     )
     weights = None
     if sample_weights is not None:
@@ -887,6 +1212,11 @@ class TrainConfig:
     hard_negative_boost: float = 0.25
     multi_asset_corr_threshold: float = 0.6
     negative_min_separation: int = 50
+    require_same_sector: bool = True
+    # Asset-adversarial loss to break the asset-identity shortcut (§11.3 audit).
+    # Schedule ramps λ from 0 → adversarial_lambda over `adversarial_warmup_steps`.
+    adversarial_lambda: float = 0.0
+    adversarial_warmup_steps: int = 2_000
     early_stop_patience_evals: int = 20
     early_stop_min_delta: float = 1e-4
     checkpoint_dir: Path = field(default_factory=lambda: Path("checkpoints"))
@@ -931,6 +1261,10 @@ class SelfSupervisedPretrainer:
         self.input_projection = input_projection.to(self.device)
         self.projection_head = ProjectionHead(d_model=d_model).to(self.device)
         self.prediction_head = ReturnPredictionHead(d_model=d_model).to(self.device)
+        self.adversarial_head = AssetAdversarialHead(
+            d_model=d_model, n_assets=n_assets
+        ).to(self.device)
+        self.n_assets = n_assets
 
         self._all_modules = nn.ModuleList(
             [
@@ -940,6 +1274,7 @@ class SelfSupervisedPretrainer:
                 input_projection,
                 self.projection_head,
                 self.prediction_head,
+                self.adversarial_head,
             ]
         )
 
@@ -987,6 +1322,7 @@ class SelfSupervisedPretrainer:
             "input_projection": self.input_projection.state_dict(),
             "projection_head": self.projection_head.state_dict(),
             "prediction_head": self.prediction_head.state_dict(),
+            "adversarial_head": self.adversarial_head.state_dict(),
         }
 
     def _load_model_state(self, state: dict) -> None:
@@ -997,18 +1333,29 @@ class SelfSupervisedPretrainer:
         self.input_projection.load_state_dict(state["input_projection"])
         self.projection_head.load_state_dict(state["projection_head"])
         self.prediction_head.load_state_dict(state["prediction_head"])
+        # Adversarial head is new; older checkpoints don't have it. Init from
+        # scratch in that case rather than failing the load.
+        adv_state = state.get("adversarial_head")
+        if adv_state is not None:
+            try:
+                self.adversarial_head.load_state_dict(adv_state)
+            except RuntimeError as e:
+                print(f"adversarial_head state mismatch ({e}); initializing fresh.")
 
     def evaluate(
         self,
         val_loader: DataLoader,
         cfg: TrainConfig,
         max_batches: int | None = None,
+        diagnostic_loader: DataLoader | None = None,
     ) -> dict[str, float]:
         self._all_modules.eval()
         max_eval_batches = cfg.eval_max_batches if max_batches is None else max_batches
         totals: dict[str, float] = {
             "contrastive": 0.0,
             "prediction": 0.0,
+            "adversarial": 0.0,
+            "adversarial_acc": 0.0,
             "total": 0.0,
             "contrastive_acc": 0.0,
         }
@@ -1049,9 +1396,18 @@ class SelfSupervisedPretrainer:
                         hard_negative_boost=cfg.hard_negative_boost,
                         correlation_threshold=cfg.multi_asset_corr_threshold,
                         min_negative_gap=cfg.negative_min_separation,
+                        require_same_sector=cfg.require_same_sector,
+                        adversarial_lambda=cfg.adversarial_lambda,
                         return_aux=True,
                     )
-                for k in ("contrastive", "prediction", "total", "contrastive_acc"):
+                for k in (
+                    "contrastive",
+                    "prediction",
+                    "adversarial",
+                    "adversarial_acc",
+                    "total",
+                    "contrastive_acc",
+                ):
                     v = losses[k]
                     totals[k] += v.item()
                 pred_values.append(losses["pred_returns"].detach().cpu())
@@ -1079,8 +1435,12 @@ class SelfSupervisedPretrainer:
         metrics["swa_entropy"] = self.eval_swa_entropy(
             val_loader, max_batches=min(max_eval_batches, 10)
         )
+        # Cluster silhouette runs on the regime-stratified diagnostic loader
+        # when available — val (calendar 2023) has 0% hi-vol/crisis and cannot
+        # show 4 clusters regardless of model quality.
+        sep_loader = diagnostic_loader if diagnostic_loader is not None else val_loader
         metrics["regime_separation"] = self.eval_regime_separation(
-            val_loader, max_batches=min(max_eval_batches, 20)
+            sep_loader, max_batches=min(max_eval_batches, 20)
         )
         return metrics
 
@@ -1089,11 +1449,7 @@ class SelfSupervisedPretrainer:
         val_loader: DataLoader,
         max_batches: int = 10,
     ) -> float:
-        """Mean normalized SWA attention entropy over val batches (§11.3 gate: < 0.80).
-
-        Derived from the SWA cache states returned by _encode_sequence — no extra
-        forward pass required.
-        """
+        """Mean normalized SWA attention entropy over val batches (gate: < 0.80)."""
         if not self.backbone.swa_blocks:
             return float("nan")
 
@@ -1114,12 +1470,7 @@ class SelfSupervisedPretrainer:
         val_loader: DataLoader,
         max_batches: int = 20,
     ) -> float:
-        """Silhouette score of k=4 clustering on backbone embeddings (§11.3 gate: > 0.10).
-
-        Operationalises the qualitative "t-SNE shows 4 clusters" criterion with
-        k-means silhouette. Does not use HMM labels — label-based separation
-        breaks when the val period is dominated by a single regime.
-        """
+        """k-means silhouette score on backbone embeddings (gate: > 0.10)."""
         from sklearn.cluster import KMeans
         from sklearn.metrics import silhouette_score
 
@@ -1154,11 +1505,7 @@ class SelfSupervisedPretrainer:
         reports_dir: Path,
         max_batches: int = 20,
     ) -> Path | None:
-        """t-SNE scatter coloured by regime label for the §11.3 cluster gate.
-
-        Saves a PNG to reports_dir; returns the path or None if matplotlib/sklearn
-        are unavailable.
-        """
+        """t-SNE scatter coloured by regime label. Saves a PNG to reports_dir."""
         try:
             import matplotlib
             matplotlib.use("Agg")
@@ -1220,10 +1567,9 @@ class SelfSupervisedPretrainer:
         features: torch.Tensor,
         return_states: bool = False,
     ) -> torch.Tensor | tuple[torch.Tensor, list[torch.Tensor]]:
-        """Encode a temporal window to a pooled representation (§11.3: z = MLP(pool(backbone(W)))).
+        """Encode a temporal window to a pooled representation: z = MLP(pool(backbone(W))).
 
-        n_assets=1 — cross-asset fusion is Phase-2 only (§11.4a).
-        Portfolio and calendar inputs are zeros; only relevant after head training.
+        Portfolio and calendar inputs are zeros during pretraining; only used after head training.
         """
         B, T, _ = features.shape
         asset_feats = features[..., :184].unsqueeze(2)  # (B, T, 1, 184)
@@ -1294,6 +1640,8 @@ class SelfSupervisedPretrainer:
         hard_negative_boost: float = 0.25,
         correlation_threshold: float = 0.6,
         min_negative_gap: int = 50,
+        require_same_sector: bool = True,
+        adversarial_lambda: float = 0.0,
         return_aux: bool = False,
     ) -> dict[str, torch.Tensor]:
         features = features.to(self.device)
@@ -1327,12 +1675,10 @@ class SelfSupervisedPretrainer:
             hard_negative_boost=hard_negative_boost,
             correlation_threshold=correlation_threshold,
             min_negative_gap=min_negative_gap,
+            require_same_sector=require_same_sector,
             sample_weights=sample_weights,
         )
 
-        # §11.3: L_pred = MSE(predict_return, actual_return_{t+1}).
-        # The head also outputs log-vol (§7.9, used for surprise signal at
-        # inference), but vol is not supervised during Phase-1 pretraining.
         pred_returns_raw, _ = self.prediction_head(view_a)
         pred_returns = pred_returns_raw.to(torch.float32)
         pred_errors = (pred_returns - next_returns) ** 2
@@ -1343,12 +1689,34 @@ class SelfSupervisedPretrainer:
             denom = sample_weights.sum().clamp_min(1e-8)
             loss_prediction = (pred_errors * sample_weights).sum() / denom
 
+        if adversarial_lambda > 0.0 and asset_ids is not None:
+            asset_logits = self.adversarial_head(view_a, lambda_=adversarial_lambda)
+            adv_targets = asset_ids.clamp(0, self.n_assets - 1)
+            adv_per_sample = F.cross_entropy(
+                asset_logits.float(), adv_targets, reduction="none"
+            )
+            if sample_weights is None:
+                loss_adversarial = adv_per_sample.mean()
+            else:
+                denom = sample_weights.sum().clamp_min(1e-8)
+                loss_adversarial = (adv_per_sample * sample_weights).sum() / denom
+            adv_acc = (
+                asset_logits.argmax(dim=-1) == adv_targets
+            ).float().mean().detach()
+        else:
+            loss_adversarial = torch.zeros((), device=self.device, dtype=torch.float32)
+            adv_acc = torch.zeros((), device=self.device, dtype=torch.float32)
+
         loss_total = (
-            contrastive_weight * loss_contrastive + prediction_weight * loss_prediction
+            contrastive_weight * loss_contrastive
+            + prediction_weight * loss_prediction
+            + loss_adversarial
         )
         out: dict[str, torch.Tensor] = {
             "contrastive": loss_contrastive,
             "prediction": loss_prediction,
+            "adversarial": loss_adversarial,
+            "adversarial_acc": adv_acc,
             "total": loss_total,
             "contrastive_acc": contrastive_acc,
         }
@@ -1363,6 +1731,7 @@ class SelfSupervisedPretrainer:
         cfg: TrainConfig,
         val_loader: DataLoader | None = None,
         resume_from: Path | None = None,
+        diagnostic_loader: DataLoader | None = None,
     ) -> None:
         # Prediction head sits on near-unpredictable log-return targets; at the
         # backbone lr it chases batch-mean drift and oscillates. Give it a 10×
@@ -1370,18 +1739,22 @@ class SelfSupervisedPretrainer:
         # moves off it when backbone features carry real signal.
         pred_head_params = list(self.prediction_head.parameters())
         pred_head_ids = {id(p) for p in pred_head_params}
-        # Fusion is Phase-2 only (§11.4a) — never called during Phase-1 _encode_sequence.
-        # Exclude its params from the optimizer so weight decay doesn't decay them
-        # toward zero before Phase 2 starts.
+        # Fusion is only active during portfolio training; exclude from optimizer
+        # so weight decay doesn't pull it toward zero during pretraining.
         fusion_param_ids = {id(p) for p in self.fusion.parameters()}
+        adv_head_params = list(self.adversarial_head.parameters())
+        adv_head_ids = {id(p) for p in adv_head_params}
         other_params = [
             p for p in self._all_modules.parameters()
-            if id(p) not in pred_head_ids and id(p) not in fusion_param_ids
+            if id(p) not in pred_head_ids
+            and id(p) not in fusion_param_ids
+            and id(p) not in adv_head_ids
         ]
         optimizer = torch.optim.AdamW(
             [
                 {"params": other_params, "lr": cfg.lr},
                 {"params": pred_head_params, "lr": cfg.lr * 0.1},
+                {"params": adv_head_params, "lr": cfg.lr, "weight_decay": 0.0},
             ],
             lr=cfg.lr,
             weight_decay=0.01,
@@ -1459,6 +1832,15 @@ class SelfSupervisedPretrainer:
                 time_indices,
             ) = self._unpack_batch(batch)
 
+            # Adversarial λ ramps from 0 → cfg.adversarial_lambda over warmup
+            # so early optimization isn't destabilised by a strong reversed
+            # gradient before the encoder has any structure to fight against.
+            if cfg.adversarial_lambda > 0.0 and cfg.adversarial_warmup_steps > 0:
+                ramp = min(1.0, step / max(cfg.adversarial_warmup_steps, 1))
+                adv_lambda_now = cfg.adversarial_lambda * ramp
+            else:
+                adv_lambda_now = cfg.adversarial_lambda
+
             optimizer.zero_grad(set_to_none=True)
             with torch.autocast(
                 device_type=self.device.type,
@@ -1480,6 +1862,8 @@ class SelfSupervisedPretrainer:
                     hard_negative_boost=cfg.hard_negative_boost,
                     correlation_threshold=cfg.multi_asset_corr_threshold,
                     min_negative_gap=cfg.negative_min_separation,
+                    require_same_sector=cfg.require_same_sector,
+                    adversarial_lambda=adv_lambda_now,
                 )
             losses["total"].backward()
             nn.utils.clip_grad_norm_(self._all_modules.parameters(), cfg.grad_clip)
@@ -1491,19 +1875,27 @@ class SelfSupervisedPretrainer:
                 lr_now = scheduler.get_last_lr()[0]
                 parts = "  ".join(
                     f"{k}={losses[k].item():.4f}"
-                    for k in ("contrastive", "prediction", "total", "contrastive_acc")
+                    for k in (
+                        "contrastive",
+                        "prediction",
+                        "adversarial",
+                        "adversarial_acc",
+                        "total",
+                        "contrastive_acc",
+                    )
                 )
-                print(f"step={step:>7d}  {parts}  lr={lr_now:.2e}")
+                print(
+                    f"step={step:>7d}  {parts}  "
+                    f"adv_lambda={adv_lambda_now:.3f}  lr={lr_now:.2e}"
+                )
 
             if val_loader is not None and step % cfg.eval_every == 0:
-                val_metrics = self.evaluate(val_loader, cfg)
+                val_metrics = self.evaluate(
+                    val_loader, cfg, diagnostic_loader=diagnostic_loader
+                )
                 val_loss = val_metrics["total"]
                 val_contrastive_acc = val_metrics["contrastive_acc"]
                 val_pred_r2 = val_metrics["prediction_r2"]
-                # At B=128 contrastive_acc saturates near 1.0 quickly — the batch
-                # is too small to surface hard negatives. Gate saves and patience
-                # on contrastive_acc per spec §11.3; best_val_loss is tracked
-                # separately for logging.
                 best_val_loss = min(best_val_loss, val_loss)
                 if val_contrastive_acc > (
                     best_val_contrastive_acc + cfg.early_stop_min_delta
@@ -1549,14 +1941,14 @@ class SelfSupervisedPretrainer:
                     f"stale={stale_eval_count}"
                 )
 
-            # §11.3 t-SNE cluster gate — generate plot at tsne_every interval.
+            tsne_source = diagnostic_loader if diagnostic_loader is not None else val_loader
             if (
-                val_loader is not None
+                tsne_source is not None
                 and cfg.tsne_every > 0
                 and step % cfg.tsne_every == 0
             ):
                 self.eval_tsne_plot(
-                    val_loader, step, cfg.tsne_reports_dir,
+                    tsne_source, step, cfg.tsne_reports_dir,
                     max_batches=cfg.eval_max_batches,
                 )
 
