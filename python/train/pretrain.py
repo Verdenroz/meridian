@@ -212,6 +212,39 @@ def main() -> None:
     )
     parser.add_argument("--multi-asset-corr-threshold", type=float, default=0.6)
     parser.add_argument("--negative-min-separation", type=int, default=50)
+    parser.add_argument(
+        "--cross-asset-no-sector",
+        action="store_true",
+        help="Drop the same-sector requirement on cross-asset positive pairs. "
+        "Combined with a lower correlation threshold, widens the cross-asset "
+        "positive pool — anti-shortcut measure.",
+    )
+    parser.add_argument(
+        "--adversarial-lambda",
+        type=float,
+        default=0.0,
+        help="Weight on the asset-adversarial loss (gradient-reversal head). "
+        "0 disables; 0.1–0.3 typically breaks asset-identity shortcuts.",
+    )
+    parser.add_argument(
+        "--adversarial-warmup-steps",
+        type=int,
+        default=2_000,
+        help="Linearly ramp adversarial λ from 0 over this many steps.",
+    )
+    parser.add_argument(
+        "--regime-balanced-sampling",
+        action="store_true",
+        help="Sample TCP windows uniformly across the 4 HMM regimes instead of "
+        "the natural distribution (89%% bull). Anti-imbalance measure.",
+    )
+    parser.add_argument(
+        "--synthetic-fraction",
+        type=float,
+        default=0.2,
+        help="When regime-balanced sampling is on, fraction of windows drawn "
+        "from FDA synthetic shards.",
+    )
     parser.add_argument("--early-stop-patience-evals", type=int, default=20)
     parser.add_argument("--early-stop-min-delta", type=float, default=1e-4)
     parser.add_argument(
@@ -313,7 +346,7 @@ def main() -> None:
             f"Loaded sector IDs for {len(symbol_to_sector)} equity symbols "
             f"(ETFs get sector_id=-1 and are excluded from cross-asset positive pairs)"
         )
-        train_loader, val_loader = build_split_loaders(
+        train_loader, val_loader, diagnostic_loader = build_split_loaders(
             args.data_dir,
             seq_len=args.seq_len,
             batch_size=args.batch_size,
@@ -321,6 +354,8 @@ def main() -> None:
             positive_offset=args.positive_offset,
             synthetic_loss_weight=args.fda_loss_weight,
             symbol_to_sector=symbol_to_sector,
+            regime_balanced=args.regime_balanced_sampling,
+            synthetic_fraction=args.synthetic_fraction,
         )
         cfg = TrainConfig(
             total_steps=args.steps,
@@ -341,6 +376,9 @@ def main() -> None:
             fda_loss_weight=args.fda_loss_weight,
             multi_asset_corr_threshold=args.multi_asset_corr_threshold,
             negative_min_separation=args.negative_min_separation,
+            require_same_sector=not args.cross_asset_no_sector,
+            adversarial_lambda=args.adversarial_lambda,
+            adversarial_warmup_steps=args.adversarial_warmup_steps,
             early_stop_patience_evals=args.early_stop_patience_evals,
             early_stop_min_delta=args.early_stop_min_delta,
             checkpoint_dir=args.checkpoint_dir,
@@ -353,6 +391,7 @@ def main() -> None:
             cfg=cfg,
             val_loader=val_loader,
             resume_from=args.resume_from,
+            diagnostic_loader=diagnostic_loader,
         )
 
 
@@ -412,6 +451,9 @@ def _run_with_smoke_data(
         fda_loss_weight=args.fda_loss_weight,
         multi_asset_corr_threshold=args.multi_asset_corr_threshold,
         negative_min_separation=args.negative_min_separation,
+        require_same_sector=not args.cross_asset_no_sector,
+        adversarial_lambda=args.adversarial_lambda,
+        adversarial_warmup_steps=args.adversarial_warmup_steps,
         early_stop_patience_evals=args.early_stop_patience_evals,
         early_stop_min_delta=args.early_stop_min_delta,
         checkpoint_dir=tmp_dir / "checkpoints",
