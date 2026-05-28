@@ -853,9 +853,9 @@ dependencies = [
 
 [[package]]
 name = "finance-query"
-version = "2.4.3"
+version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "933e7a15c30392a0ba803744917e73f679e4686f8c533b3966bf81076e77abe5"
+checksum = "8cd09963ee8972bb7688459ea1ac0759a0d093e43a5fbc8f1e794365c72e19b9"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -866,7 +866,7 @@ dependencies = [
  "feed-rs",
  "finance-query-derive",
  "futures",
- "once_cell",
+ "percent-encoding",
  "polars",
  "prost",
  "rayon",
@@ -886,9 +886,9 @@ dependencies = [
 
 [[package]]
 name = "finance-query-derive"
-version = "2.4.3"
+version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ca518305e12e926d12c914dc4ce847f22cbefde8a37e97802c7ceeea48763ea"
+checksum = "acb67d19e1c6b67ee3a6888bbf8138d651c1897d9f6dac0e9d68a6717be9ea76"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -24,7 +24,7 @@ name = "meridian-bus"
 path = "src/main.rs"
 
 [dependencies]
-finance-query = { version = "=2.4.3", features = [
+finance-query = { version = "=2.6.1", features = [
     "dataframe",
     "indicators",
     "backtesting",
