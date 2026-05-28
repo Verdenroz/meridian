@@ -108,7 +108,7 @@ _GICS_SECTOR_NAMES = (
     "Utilities",
 )
 _SECTOR_NAME_TO_ID = {name: idx for idx, name in enumerate(_GICS_SECTOR_NAMES)}
-_DEFAULT_RETURN_CROSS_ASSET_WARMUP_STEPS = 180_000
+_DEFAULT_RETURN_CROSS_ASSET_WARMUP_STEPS = 180_000  # ~10 H100h (spec §11.4a)
 
 
 def load_symbol_sector_map(symbols_file: Path) -> dict[str, int]:
@@ -164,7 +164,12 @@ def build_asset_sector_ids(
 
 @dataclass(frozen=True)
 class PTAAugmentationConfig:
-    """PTA controls aligned with Section 11.4b defaults."""
+    """PTA controls aligned with Section 11.4b defaults.
+
+    Effective multiplier with defaults: 1 + 4 perms + 4 vol = ~9× (sign-flip
+    off — long-only). Spec's 96× target assumes 12 perms × 2 sign × 4 vol;
+    raise permutations_per_batch to 12 to hit it, at proportional VRAM cost.
+    """
 
     apply_prob: float = 0.5
     permutations_per_batch: int = 4
@@ -859,9 +864,9 @@ def build_synthetic_portfolio_loader(
 class PortfolioTrainConfig:
     head: str = "return"  # "return" or "sharpe"
     total_steps: int = 50_000
-    # Spec §11.4a: ~10 H100-hours. At ~5 steps/s on H100 (B=8, N=100, T=64)
-    # this is ~180 k steps.
-    cross_asset_warmup_steps: int = _DEFAULT_RETURN_CROSS_ASSET_WARMUP_STEPS
+    # 0 default so programmatic construction (e.g. sharpe head resume) doesn't
+    # silently rerun a 10h warmup; main() overrides to 180k for return head.
+    cross_asset_warmup_steps: int = 0
     cross_asset_corr_window: int = 20
     cross_asset_warmup_batch_size: int = 8
     batch_size: int = 4
@@ -1257,14 +1262,10 @@ class PortfolioTrainer:
         market_step: torch.Tensor,
         time_index: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        """Spec §6.7: 20-dim financial calendar embedding.
+        """Spec §6.7 calendar embed (sinusoid + market tail).
 
-        Composes a sinusoidal positional encoding over a market time-index proxy
-        (derived from market features when no absolute calendar is available)
-        with the trailing market features. Sinusoids capture day-of-week /
-        month-of-year periodicity at multiple frequencies; the trailing market
-        features carry slow regime context (yield-curve slope, breadth tail).
-        Result is L2-normalised to keep numerical scale bounded across regimes.
+        TODO: spec calls for true day-of-week / month / FOMC proximity. The
+        time_index here is a feature-derived proxy, not an absolute calendar.
         """
         if market_step.ndim != 2:
             raise ValueError(
@@ -1672,7 +1673,9 @@ class PortfolioTrainer:
                 "portfolio_state_dim must equal 2*n_assets + 1, got "
                 f"{self.spec.portfolio_state_dim} for n_assets={n_full}"
             )
-        asset_cum_log_returns = torch.zeros(B, n_full, device=self.device)
+        # Spec §6.6 unrealized P&L per asset = w_{t-1} · (exp(r_t)−1).
+        prev_weight_padded = torch.zeros(B, n_full, device=self.device)
+        prev_weight_padded[:, :N] = 1.0 / float(N)
 
         # Pre-compute sector bias (constant across all timesteps)
         with torch.no_grad():
@@ -1700,7 +1703,7 @@ class PortfolioTrainer:
             prev_regime_emb_in: torch.Tensor,
             prev_port_return_in: torch.Tensor,
             portfolio_value_in: torch.Tensor,
-            asset_cum_log_returns_in: torch.Tensor,
+            prev_weight_padded_in: torch.Tensor,
             *state_tensors: torch.Tensor,
         ) -> tuple[torch.Tensor, ...]:
             local_states = list(state_tensors)
@@ -1709,7 +1712,7 @@ class PortfolioTrainer:
             prev_r = prev_regime_emb_in
             prev_pr = prev_port_return_in
             pv = portfolio_value_in
-            acum = asset_cum_log_returns_in
+            prev_w_pad = prev_weight_padded_in
             Bc, Nc, K, _ = af_chunk.shape
 
             w_list: list[torch.Tensor] = []
@@ -1771,13 +1774,13 @@ class PortfolioTrainer:
                 else:
                     w_padded = F.pad(w_det, (0, n_full - Nc))
                     asset_step_log_returns = F.pad(asset_log_ret_det, (0, n_full - Nc))
-                acum = acum + asset_step_log_returns
-                unrealized_pnl = torch.expm1(acum)
+                unrealized_pnl = prev_w_pad * torch.expm1(asset_step_log_returns)
                 step_port_return = (w_t.detach() * af_t[:, :, 3]).sum(dim=-1)
                 next_pv = pv * (1.0 + step_port_return)
                 pv_log = next_pv.clamp(min=1e-6).log().unsqueeze(-1)
                 ps = torch.cat([w_padded, unrealized_pnl, pv_log], dim=-1)
                 prev_pr = step_port_return
+                prev_w_pad = w_padded
 
             w_stack = torch.stack(w_list, dim=1)  # (B, K, N)
             v_stack = (
@@ -1799,7 +1802,7 @@ class PortfolioTrainer:
                 prev_r,
                 prev_pr,
                 pv,
-                acum,
+                prev_w_pad,
                 *local_states,
             )
 
@@ -1824,7 +1827,7 @@ class PortfolioTrainer:
             prev_regime_emb = prev_regime_emb.detach()
             prev_port_return = prev_port_return.detach()
             portfolio_value = portfolio_value.detach()
-            asset_cum_log_returns = asset_cum_log_returns.detach()
+            prev_weight_padded = prev_weight_padded.detach()
 
             if use_checkpoint:
                 result = _activation_checkpoint(
@@ -1836,7 +1839,7 @@ class PortfolioTrainer:
                     prev_regime_emb,
                     prev_port_return,
                     portfolio_value,
-                    asset_cum_log_returns,
+                    prev_weight_padded,
                     *states,
                     use_reentrant=False,
                 )
@@ -1849,7 +1852,7 @@ class PortfolioTrainer:
                     prev_regime_emb,
                     prev_port_return,
                     portfolio_value,
-                    asset_cum_log_returns,
+                    prev_weight_padded,
                     *states,
                 )
 
@@ -1859,7 +1862,7 @@ class PortfolioTrainer:
             prev_regime_emb = result[5]
             prev_port_return = result[6]
             portfolio_value = result[7]
-            asset_cum_log_returns = result[8]
+            prev_weight_padded = result[8]
             states = list(result[9:])
 
             all_weights.append(w_stack)
@@ -2309,7 +2312,8 @@ class PortfolioTrainer:
                 feats_cat = torch.cat(feats_pool, dim=0)
                 shifts_cat = torch.cat(shifts_pool, dim=0)
 
-                labels = self._batch_regime_ids(feats_cat)
+                # Quantile labels — absolute-threshold variant collapses to one class on z-scored features.
+                labels = self._quantile_regime_labels(feats_cat)
                 selected_idx: list[int] = []
                 for r in range(self.spec.n_regimes):
                     cand = (labels == r).nonzero(as_tuple=True)[0]

@@ -46,6 +46,7 @@ def dsr_loss(
     weights: torch.Tensor,       # (B, T, N)
     asset_returns: torch.Tensor, # (B, T, N)
     eta: float = 0.01,
+    warmup_steps: int | None = None,
 ) -> torch.Tensor:               # scalar
     """Differential Sharpe Ratio loss (Moody & Saffell 2001).
 
@@ -62,27 +63,38 @@ def dsr_loss(
         ΔA_t  = R_t - A_{t-1}
         ΔB_t  = R_t² - B_{t-1}
 
+    A,Bm are bootstrapped from the first `warmup_steps` (mean / E[R²]) so the
+    EMA is unbiased before the first DSR contribution — at η=0.01, T=64,
+    zero-init takes >200 steps to converge. Bootstrap is detached so gradient
+    flows through ΔA,ΔB only (consistent with Moody-Saffell treating moments
+    as stale). Default warmup: ⌈1/η⌉, capped at T//4.
+
     Returns the *negative* mean DSR (to be minimised).
     """
     R = portfolio_returns(weights, asset_returns)  # (B, T)
     B, T = R.shape
+    if warmup_steps is None:
+        warmup_steps = max(1, min(int(1.0 / max(eta, 1e-6)), T // 4))
+    warmup_steps = min(warmup_steps, T)
 
-    A = torch.zeros(B, device=R.device)
-    Bm = torch.ones(B, device=R.device) * 1e-6  # B_moment, init > 0 to avoid div/0
+    boot = R[:, :warmup_steps].detach()
+    A = boot.mean(dim=1)
+    Bm = boot.pow(2).mean(dim=1).clamp(min=1e-6)
 
     dsr_values = []
-    for t in range(T):
+    for t in range(warmup_steps, T):
         Rt = R[:, t]
         dA = Rt - A
         dB = Rt.pow(2) - Bm
         denom = (Bm - A.pow(2)).clamp(min=1e-4).pow(1.5)
         dsr_t = ((Bm * dA - 0.5 * A * dB) / denom).clamp(-100, 100)
         dsr_values.append(dsr_t)
-        # Update moments
         A  = (1 - eta) * A  + eta * Rt
         Bm = (1 - eta) * Bm + eta * Rt.pow(2)
 
-    dsr = torch.stack(dsr_values, dim=1)  # (B, T)
+    if not dsr_values:
+        return R.new_zeros(())
+    dsr = torch.stack(dsr_values, dim=1)
     return -dsr.mean()
 
 
