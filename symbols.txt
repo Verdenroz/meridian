@@ -45,7 +45,7 @@ BMY     # Bristol-Myers Squibb — oncology, cardiovascular
 MRK     # Merck — oncology (Keytruda), vaccines
 TMO     # Thermo Fisher — lab instruments, life sciences tools
 ABT     # Abbott Labs — diagnostics, medical devices
-ISRG    # Intuitive Surgical — robotic surgery
+MDT     # Medtronic — medical devices (cardiac, surgical, diabetes)
 AMGN    # Amgen — large-cap biotech, biosimilars
 
 # ── Financials (9) ───────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ BAC     # Bank of America — major money-center bank
 GS      # Goldman Sachs — investment banking, trading
 MS      # Morgan Stanley — wealth management, IB
 BLK     # BlackRock — largest asset manager
-SPGI    # S&P Global — financial data, ratings, indices
+ICE     # Intercontinental Exchange — exchanges, financial data/indices
 
 # ── Consumer Discretionary (7) ───────────────────────────────────────────────
 AMZN    # Amazon — e-commerce, AWS
@@ -78,7 +78,7 @@ CMCSA   # Comcast — cable, NBCUniversal
 
 # ── Industrials (8) ──────────────────────────────────────────────────────────
 CAT     # Caterpillar — heavy equipment, mining
-HON     # Honeywell — aerospace, building automation
+MMM     # 3M — diversified industrials (safety, electronics, healthcare)
 UPS     # UPS — parcel delivery logistics
 BA      # Boeing — commercial/defense aerospace
 GE      # GE Aerospace — jet engines, defense
