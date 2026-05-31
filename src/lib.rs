@@ -7,4 +7,5 @@ pub mod output;
 pub mod poller;
 pub mod py;
 pub mod scheduler;
+pub mod sentiment;
 pub mod store;
