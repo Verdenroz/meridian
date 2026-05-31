@@ -4,5 +4,6 @@ pub mod edgar_text;
 pub mod embedder;
 pub mod fnspid;
 pub mod macro_lookup;
+pub mod market_news_flow;
 pub mod market_news_pca;
 pub mod risk;

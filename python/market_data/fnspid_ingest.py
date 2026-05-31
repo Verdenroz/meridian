@@ -224,7 +224,43 @@ def ingest(cfg: IngestConfig) -> dict[str, int]:
         f"symbols → {cache_dir}",
         file=sys.stderr,
     )
+
+    _write_market_daily_aggregate(per_symbol, cfg.data_dir)
     return summary
+
+
+def _write_market_daily_aggregate(
+    per_symbol: dict[str, set[tuple[int, str]]], data_dir: Path
+) -> None:
+    """Emit the universe-wide daily news aggregate for the market news block (M1).
+
+    For each UTC day, records the total article count and the breadth (number of
+    distinct symbols with news) across the whole universe. The Rust collector
+    (`src/historical/market_news_flow.rs`) loads this, EMA-detrends + z-scores it,
+    and overlays two of the 12 market-news dims so the block carries real DAILY
+    variation instead of the near-constant ~monthly FRED-PCA proxy.
+    """
+    day_secs = 86_400
+    counts: dict[int, int] = {}
+    breadth: dict[int, set[str]] = {}
+    for sym, rows in per_symbol.items():
+        for ts, _text in rows:
+            day_ts = (ts // day_secs) * day_secs
+            counts[day_ts] = counts.get(day_ts, 0) + 1
+            breadth.setdefault(day_ts, set()).add(sym)
+
+    days = {
+        str(day_ts): [counts[day_ts], len(breadth[day_ts])]
+        for day_ts in sorted(counts)
+    }
+    out_path = data_dir / ".market_news_daily.json"
+    out_path.write_text(
+        json.dumps({"built_from": "fnspid", "days": days}, ensure_ascii=False)
+    )
+    print(
+        f"[fnspid] wrote market daily news aggregate ({len(days):,} days) → {out_path}",
+        file=sys.stderr,
+    )
 
 
 def _cli() -> None:

@@ -601,6 +601,11 @@ struct MarketFeatureLookup {
     /// time-decay-weighted-mean release embeddings. Forward-filled at
     /// `vector_at(ts)` via `range(..=ts).next_back()`.
     news_pca: BTreeMap<i64, [f32; 12]>,
+    /// Universe-wide daily news-flow (intensity + breadth), z-scored. Overlays
+    /// the first two of the 12 news dims so the block carries real DAILY
+    /// variation instead of the ~monthly FRED-PCA proxy alone (M1). Empty when
+    /// the FNSPID daily aggregate is absent — block then keeps pure FRED-PCA.
+    news_flow: crate::historical::market_news_flow::NewsFlowLookup,
 }
 
 impl MarketFeatureLookup {
@@ -757,6 +762,15 @@ impl MarketFeatureLookup {
         if let Some((_, v)) = self.news_pca.range(..=ts).next_back() {
             out[84..96].copy_from_slice(v);
         }
+        // M1: overlay the first two news dims with real, daily-varying universe
+        // news flow (FNSPID-derived intensity + breadth, z-scored). The FRED-PCA
+        // projection only moves on ~monthly release dates, so on its own the
+        // block was near-constant; these two dims give it genuine daily signal.
+        // Absent aggregate ⇒ the FRED-PCA values stay in place untouched.
+        if let Some([z_intensity, z_breadth]) = self.news_flow.value_at(ts) {
+            out[84] = z_intensity;
+            out[85] = z_breadth;
+        }
 
         out
     }
@@ -814,6 +828,14 @@ async fn build_market_feature_lookup(args: &HistoricalArgs, end_ts: i64) -> Mark
     ];
 
     let mut out = MarketFeatureLookup::default();
+
+    // M1: universe-wide daily news-flow overlay for the market news block. Built
+    // once by `make fnspid` (Python) into `.market_news_daily.json`; loading here
+    // is a cheap single-file read shared by all per-symbol collectors.
+    out.news_flow = crate::historical::market_news_flow::NewsFlowLookup::load();
+    if !out.news_flow.is_empty() {
+        tracing::info!("market_news_flow: daily universe news overlay loaded");
+    }
 
     for &(alias, symbol) in MARKET_PROXIES
         .iter()

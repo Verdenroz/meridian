@@ -1242,6 +1242,9 @@ The FDA model is never deployed to the Pi 5 and is therefore trained and run in 
 **Honest assessment of the augmented dataset:**
 The 51,695 figure assumes the FDA generates fully independent samples, which overstates the effective sample count. A conservative estimate accounting for synthetic data dependency gives an effective independent sample count of ~8,000–15,000 rows per asset — a 5–9× improvement over the raw 1,695. This is meaningful but not the 290× gap needed to fully match the original spec's 490K assumption. The Sharpe > 1.0 target remains a stretch goal, not a guarantee.
 
+**Validation crisis-coverage limitation (regime imbalance).**
+The chronological split (train ≤ 2022, validation = 2023, test ≥ 2024) is strictly no-look-ahead, which means the **2023 validation slice contains zero crisis-regime days** (2023 never sustained VIX > 30; train-derived crisis labels: bull ~71% / hi-vol ~3% / mean-rev ~21% / crisis ~5%, val crisis = 0). We deliberately **do not** fabricate crisis rows in validation, nor carve a crisis eval window out of 2020/2022 — those crises sit inside the training window, and removing them would deplete the already-scarce ~170 real crisis windows. Instead: (1) **training** crisis coverage is supplied by FDA crisis oversampling (~10k synthetic crisis windows) plus regime-balanced sampling; (2) **crisis-regime evaluation** is performed on the test region (2024+, which can contain crisis days) and on held-out synthetic crisis windows; (3) the val-crisis gap is **reported explicitly** rather than masked. Consequence: 2023 validation metrics characterize normal/elevated-vol behavior only and must not be read as evidence of crisis robustness.
+
 ---
 
 ### 11.2 Phase 0 — FDA Pre-Training (Diffusion Model)
