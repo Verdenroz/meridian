@@ -1,5 +1,6 @@
 use crate::args::{HistoricalArgs, HistoricalInterval};
 use crate::features::{FeatureRow, classify_asset, sector_map::sector_etf_for};
+use crate::historical::edgar_text::EdgarFilingDoc;
 use crate::historical::embedder::{EMBED_DIM, Embedder, EmbedderConfig};
 use crate::historical::risk::RISK_WINDOW;
 use crate::output::emit_row;
@@ -12,12 +13,6 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 const TEXT_WINDOW_SECS: i64 = 90 * 86_400;
 /// Time-decay constant (days) used to weight events within the window.
 const TEXT_DECAY_DAYS: f32 = 30.0;
-/// Positive sentiment anchor — fixed across all runs so cache hits.
-const POS_ANCHOR: &str =
-    "earnings beat upgrade buy strong revenue growth profit margin expansion bullish";
-/// Negative sentiment anchor.
-const NEG_ANCHOR: &str =
-    "earnings miss downgrade sell weak revenue decline loss margin compression bearish";
 
 /// Trailing window of `bars` ending at index `i` (inclusive), max length n.
 fn trailing_window(bars: &[Bar], i: usize, n: usize) -> Vec<Bar> {
@@ -241,10 +236,6 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
     }
     let _dividend_analytics = ticker.dividend_analytics(TimeRange::TenYears).await.ok();
     let recommendations = ticker.recommendations(5).await.ok();
-    let ticker_news = ticker.news().await.unwrap_or_default();
-    let transcript_items = finance::earnings_transcripts(symbol, Some(8))
-        .await
-        .unwrap_or_default();
     let edgar_submissions = ticker.edgar_submissions().await.ok();
 
     // Block 7 slots [4..7] are filled from finance-query snapshots where
@@ -269,8 +260,6 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
         .map(|r| (r.count().min(5) as f32) / 5.0)
         .unwrap_or(0.0);
 
-    let profile_sector = profile.as_ref().and_then(|p| p.sector.clone());
-    let profile_industry = profile.as_ref().and_then(|p| p.industry.clone());
     let summary_json = summary.as_ref().and_then(|v| serde_json::to_value(v).ok());
     let financial_json = financial.as_ref().and_then(|v| serde_json::to_value(v).ok());
     let key_stats_json = key_stats.as_ref().and_then(|v| serde_json::to_value(v).ok());
@@ -321,16 +310,32 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
     let calendar_events_json = calendar_events
         .as_ref()
         .and_then(|v| serde_json::to_value(v).ok());
-    let text_events = build_text_events(
-        symbol,
-        profile_sector.as_deref(),
-        profile_industry.as_deref(),
-        &ticker_news,
-        &transcript_items,
-        &edgar_submissions,
-        all_bars.first().map(|b| b.timestamp).unwrap_or(end_ts),
+    // Block 8 text floor: real EDGAR primary-document text, dated by filing_date.
+    // Yahoo has no historical news archive, so filings (identical source in the
+    // live and historical regimes) are the aligned backbone. FNSPID news is merged
+    // in via the Python ingestion layer; live inference adds the `feeds` stream.
+    // The previous static "{symbol} {sector} {industry}" identity event is gone —
+    // it had collapsed Block 8 into a constant per-asset identity fingerprint.
+    let (filing_docs, filing_texts) = fetch_filing_texts(&edgar_submissions).await;
+    // Merge the dated FNSPID news corpus (historical analogue of the live `feeds`
+    // RSS stream) onto the EDGAR filing-text floor. Both sources flow through the
+    // SAME FinBERT scorer + nomic embedder below, so only the text *source*
+    // differs across train/inference — the representation pipeline is identical
+    // (DATA_PIPELINE_ISSUES.md C1/H1). A missing news cache ⇒ filings-only, never
+    // a fabricated fill.
+    let edgar_count = filing_texts.len();
+    let fnspid_news = crate::historical::fnspid::load_news(symbol);
+    let fnspid_count = fnspid_news.len();
+    let mut combined_texts = filing_texts;
+    combined_texts.extend(fnspid_news);
+    combined_texts.sort_by_key(|(ts, _)| *ts);
+    tracing::info!(
+        symbol = %symbol, edgar = edgar_count, fnspid = fnspid_count,
+        "Block 8 text sources merged (EDGAR filings ∪ FNSPID news)"
     );
-    let sec_filing_events = build_sec_filing_timeline(&edgar_submissions);
+    let scored_texts = score_texts(&combined_texts).await;
+    let text_events = build_text_events(&scored_texts);
+    let sec_filing_events = build_sec_filing_timeline(&filing_docs);
     let grade_events = extract_grade_events(&grading_history_json);
     let insider_events = extract_insider_events(&insider_transactions_json);
     let earnings_events = extract_earnings_events(&earnings_history_json);
@@ -409,8 +414,6 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
     for ev in &text_events {
         unique_texts.insert(ev.text.clone());
     }
-    unique_texts.insert(POS_ANCHOR.to_string());
-    unique_texts.insert(NEG_ANCHOR.to_string());
     let unique_vec: Vec<String> = unique_texts.into_iter().collect();
     tracing::info!(
         symbol = %symbol, snippets = unique_vec.len(), "embedding text events"
@@ -420,17 +423,10 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
     for (text, emb) in unique_vec.iter().zip(embeddings.into_iter()) {
         embed_map.insert(text.clone(), emb);
     }
-    let pos_anchor = embed_map.get(POS_ANCHOR).cloned().unwrap_or_else(|| vec![0.0; EMBED_DIM]);
-    let neg_anchor = embed_map.get(NEG_ANCHOR).cloned().unwrap_or_else(|| vec![0.0; EMBED_DIM]);
 
     // Pre-sort event timestamps for binary search
     let div_timestamps: Vec<i64> = dividends.iter().map(|d| d.timestamp).collect();
     let div_amounts: Vec<f64> = dividends.iter().map(|d| d.amount).collect();
-    let split_timestamps: Vec<i64> = splits.iter().map(|s| s.timestamp).collect();
-    let split_ratios: Vec<f64> = splits
-        .iter()
-        .map(|s| s.numerator / s.denominator.max(1.0))
-        .collect();
 
     tracing::info!(
         symbol = %symbol, bars = total, dividends = dividends.len(),
@@ -440,7 +436,6 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
     let rolling_stats = RollingStatsStore::new();
     let seconds_per_day: f64 = 86_400.0;
     let div_decay_tau: f64 = 14.0; // 14-day decay for dividend proximity
-    let split_decay_tau: f64 = 7.0; // 7-day decay for split events (sharper)
 
     for i in 0..total {
         let buf = PriceBuffer::prefix(&all_bars, i);
@@ -462,23 +457,11 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
             }
         };
 
-        // Compute split signal: log2(ratio) * exp(-days_since / tau)
-        // Ratio > 1 = forward split (e.g., 4:1), < 1 = reverse split
-        let split_signal = match split_timestamps.partition_point(|&t| t <= bar_ts) {
-            0 => 0.0f32,
-            idx => {
-                let days_since = (bar_ts - split_timestamps[idx - 1]) as f64 / seconds_per_day;
-                let ratio = split_ratios[idx - 1];
-                let mag = ratio.log2().abs().min(4.0); // cap at 16:1 splits
-                (mag * (-days_since / split_decay_tau).exp()) as f32
-            }
-        };
-
-        // Build event_state: fill slots 7 (split) and 9 (dividend)
-        let mut event_state = compute_event_state_at(
+        // Build event_state (Block 6) — canonical layout shared with live
+        // inference; ex-dividend proximity fills slot [9].
+        let event_state = compute_event_state_at(
             bar_ts,
             exdiv_proximity,
-            split_signal,
             &insider_events,
             &grade_events,
             &sec_filing_events,
@@ -533,7 +516,7 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
         let options_block = compute_options_proxy_at(
             &asset_xa,
             &options_snapshot_metrics,
-            event_state[4],
+            event_state[8], // earnings proximity
         );
 
         // ── Block 4: Fundamental timeline reconstruction ───────────────────────
@@ -559,16 +542,10 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
         // );
         let fundamental_block = encode_fundamental_block(&fd);
 
-        // ── Block 8: Text embedding timeline (finance-query sources) ───────────
-        let text = compute_text_embedding_at(
-            bar_ts,
-            &text_events,
-            &embed_map,
-            &pos_anchor,
-            &neg_anchor,
-        );
-        event_state[7] = text.1;
-        let text_block = text.0;
+        // ── Block 8: Text embedding timeline (EDGAR filings ∪ FNSPID) ──────────
+        // Sentiment (event_state[7]) is the FinBERT score carried on each text
+        // event, pooled inside compute_event_state_at — not re-derived here.
+        let text_block = compute_text_embedding_at(bar_ts, &text_events, &embed_map);
 
         let mut price_volume_block = crate::features::price_volume::assemble(
             Some(&buf),
@@ -1124,6 +1101,7 @@ struct SecFilingEvent {
     ts: i64,
     is_10k: bool,
     is_10q: bool,
+    is_8k: bool,
 }
 
 #[derive(Clone, Default)]
@@ -1570,6 +1548,42 @@ fn extract_earnings_events(
     out
 }
 
+/// Earnings proximity `exp(-days/14)` to the nearest real or projected report
+/// date (H2). Dates come from `earnings_history` + the next scheduled date; with
+/// ≥2 real dates we project the company's own median (~quarterly) cadence across
+/// the window — anchored on real report dates, not a generic cycle. 0.0 if none.
+fn earnings_proximity(
+    bar_ts: i64,
+    events: &[EarningsEvent],
+    next_earnings_ts: Option<i64>,
+) -> f32 {
+    let day = 86_400i64;
+    let mut dates: Vec<i64> = events.iter().map(|e| e.ts).collect();
+    if let Some(n) = next_earnings_ts {
+        dates.push(n);
+    }
+    if dates.is_empty() {
+        return 0.0;
+    }
+    dates.sort_unstable();
+    let mut min_days = dates
+        .iter()
+        .map(|d| (d - bar_ts).abs() as f32 / day as f32)
+        .fold(f32::INFINITY, f32::min);
+    if dates.len() >= 2 {
+        let mut gaps: Vec<i64> = dates.windows(2).map(|w| w[1] - w[0]).filter(|g| *g > 0).collect();
+        if !gaps.is_empty() {
+            gaps.sort_unstable();
+            let q = gaps[gaps.len() / 2].max(day); // median spacing ≈ one quarter
+            let a0 = dates[0];
+            let k = (((bar_ts - a0) as f64) / q as f64).round() as i64;
+            let proj_days = ((a0 + k * q) - bar_ts).abs() as f32 / day as f32;
+            min_days = min_days.min(proj_days);
+        }
+    }
+    (-min_days.min(60.0) / 14.0).exp()
+}
+
 fn extract_grade_events(
     grading_history: &Option<serde_json::Value>,
 ) -> Vec<GradeEvent> {
@@ -1680,102 +1694,115 @@ fn extract_institution_events(
     out
 }
 
-fn build_sec_filing_timeline(edgar: &Option<finance_query::EdgarSubmissions>) -> Vec<SecFilingEvent> {
-    let mut out = Vec::new();
-    if let Some(f) = edgar
-        .as_ref()
-        .and_then(|s| s.filings.as_ref())
-        .and_then(|f| f.recent.as_ref())
-    {
-        for filing in f.to_filings() {
-            if let Some(ts) = parse_ymd_to_ts(&filing.filing_date) {
-                let form = filing.form.to_ascii_uppercase();
-                out.push(SecFilingEvent {
-                    ts,
-                    is_10k: form == "10-K",
-                    is_10q: form == "10-Q",
-                });
+/// SEC filing-recency timeline from the full-history doc list. Forms are
+/// normalized with a prefix match so amendments (10-K/A, 10-Q/A, 8-K/A, …) count
+/// as their base form.
+fn build_sec_filing_timeline(docs: &[EdgarFilingDoc]) -> Vec<SecFilingEvent> {
+    let mut out: Vec<SecFilingEvent> = docs
+        .iter()
+        .map(|d| {
+            let form = d.form.trim().to_ascii_uppercase();
+            SecFilingEvent {
+                ts: d.filing_ts,
+                is_10k: form.starts_with("10-K"),
+                is_10q: form.starts_with("10-Q"),
+                is_8k: form.starts_with("8-K"),
             }
-        }
-    }
+        })
+        .collect();
     out.sort_by_key(|e| e.ts);
     out
 }
 
-fn build_text_events(
-    symbol: &str,
-    sector: Option<&str>,
-    industry: Option<&str>,
-    ticker_news: &[finance_query::News],
-    transcripts: &[finance_query::TranscriptWithMeta],
+/// Fetch + strip EDGAR primary-document text for all text-bearing filings of an
+/// entity, returning `(filing_ts, document_text)` pairs (UTC-midnight timestamps).
+/// Network/parse failures degrade to an empty list, in which case Block 8 becomes
+/// a genuine zero vector for the affected bars (honest absence, not a fill).
+/// Returns (all text-form filings across full history, their `(ts, text)` pairs).
+/// The doc list also drives the SEC filing-recency timeline (Block 6). Failures
+/// degrade to empty (Block 8 → zero vector for affected bars; honest absence).
+async fn fetch_filing_texts(
     edgar: &Option<finance_query::EdgarSubmissions>,
-    start_ts: i64,
-) -> Vec<TextEvent> {
-    let mut out = Vec::new();
-    // Base metadata event: timestamp is set far in the future (i64::MAX // 2) so
-    // that it never ages out of the 90-day window. This ensures symbol/sector/industry
-    // metadata is always available for text embedding throughout the collection period.
-    // The timestamp doesn't represent a real event time, just ensures permanence.
-    out.push(TextEvent {
-        ts: i64::MAX / 2,
-        text: format!(
-            "{} {} {}",
-            symbol,
-            sector.unwrap_or("sector"),
-            industry.unwrap_or("industry")
-        ),
-        sentiment: 0.0,
-    });
+) -> (Vec<EdgarFilingDoc>, Vec<(i64, String)>) {
+    use crate::historical::edgar_text::{EdgarTextConfig, EdgarTextFetcher};
 
-    for n in ticker_news {
-        let minutes_ago = parse_relative_minutes(&n.time).unwrap_or(60.0);
-        let ts = (chrono::Utc::now().timestamp() - (minutes_ago * 60.0) as i64).max(start_ts);
-        let s = lexical_sentiment(&n.title);
-        out.push(TextEvent {
-            ts,
-            text: format!("{} {} {}", n.source, n.title, n.link),
-            sentiment: s,
-        });
-    }
-
-    for t in transcripts {
-        let ts = t.transcript.transcript_metadata.date.max(start_ts);
-        let mut text = t.title.clone();
-        if !t.transcript.text().is_empty() {
-            let snippet = t.transcript.text().chars().take(800).collect::<String>();
-            text.push(' ');
-            text.push_str(&snippet);
+    let Some(subs) = edgar.as_ref() else {
+        return (Vec::new(), Vec::new());
+    };
+    let Some(cik) = subs.cik.as_ref() else {
+        tracing::warn!("edgar submissions missing CIK — Block 8 text will be empty");
+        return (Vec::new(), Vec::new());
+    };
+    let fetcher = match EdgarTextFetcher::new(EdgarTextConfig::default()) {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!(err = %e, "edgar_text fetcher init failed");
+            return (Vec::new(), Vec::new());
         }
-        out.push(TextEvent {
-            ts,
-            sentiment: lexical_sentiment(&text),
-            text,
-        });
-    }
-
-    if let Some(f) = edgar
-        .as_ref()
-        .and_then(|s| s.filings.as_ref())
-        .and_then(|f| f.recent.as_ref())
-    {
-        for filing in f.to_filings() {
-            if let Some(ts) = parse_ymd_to_ts(&filing.filing_date) {
-                let text = format!(
-                    "{} {} {}",
-                    filing.form, filing.primary_doc_description, filing.primary_document
-                );
-                let sentiment = if filing.form == "10-K" || filing.form == "10-Q" {
-                    0.1
-                } else {
-                    0.0
-                };
-                out.push(TextEvent {
-                    ts: ts.max(start_ts),
-                    text,
-                    sentiment,
-                });
+    };
+    let docs = fetcher.gather_filings(subs).await;
+    let mut texts = Vec::with_capacity(docs.len());
+    for f in &docs {
+        match fetcher.fetch_document_text(cik, f).await {
+            Ok(text) if !text.trim().is_empty() => texts.push((f.filing_ts, text)),
+            Ok(_) => {}
+            Err(e) => {
+                tracing::warn!(accession = %f.accession_number, err = %e, "edgar doc fetch failed")
             }
         }
+    }
+    tracing::info!(cik = %cik, filings = docs.len(), texts = texts.len(), "edgar filings fetched");
+    (docs, texts)
+}
+
+/// Score each Block-8 text item (EDGAR filing document ∪ FNSPID news headline)
+/// with the shared FinBERT client — the *same* model the live `news_sentiment`
+/// poller uses, so the Block-6 sentiment slot is aligned across train and
+/// inference. Client-init or per-item scoring failures degrade to a neutral
+/// `0.0` (honest "unknown", no lexical fallback); the text still feeds the
+/// embedder, so Block 8 keeps its signal regardless.
+async fn score_texts(texts: &[(i64, String)]) -> Vec<(i64, String, f32)> {
+    use crate::sentiment::{SentimentClient, SentimentConfig};
+
+    let client = match SentimentClient::new(SentimentConfig::default()) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::warn!(err = %e, "sentiment client init failed; filing sentiment → 0.0");
+            None
+        }
+    };
+    let mut out = Vec::with_capacity(texts.len());
+    for (ts, text) in texts {
+        let sentiment = match &client {
+            Some(c) => c.score(text).await.unwrap_or_else(|e| {
+                tracing::debug!(err = %e, "filing sentiment score failed → 0.0");
+                0.0
+            }),
+            None => 0.0,
+        };
+        out.push((*ts, text.clone(), sentiment));
+    }
+    out
+}
+
+/// Build the dated Block-8 text-event stream from real EDGAR primary-document
+/// text. Each `(filing_ts, text, sentiment)` becomes a decay-weighted snippet
+/// that `compute_text_embedding_at` pools over the trailing window. There is no
+/// static identity/metadata event — that previously collapsed Block 8 into a
+/// constant per-asset fingerprint. FNSPID news (historical) is merged by the
+/// Python ingestion layer; live inference adds the `feeds` stream through the
+/// same embedder + FinBERT pipeline.
+fn build_text_events(filing_texts: &[(i64, String, f32)]) -> Vec<TextEvent> {
+    let mut out = Vec::with_capacity(filing_texts.len());
+    for (ts, text, sentiment) in filing_texts {
+        if text.trim().is_empty() {
+            continue;
+        }
+        out.push(TextEvent {
+            ts: *ts,
+            sentiment: *sentiment,
+            text: text.clone(),
+        });
     }
     out.sort_by_key(|e| e.ts);
     out
@@ -2289,10 +2316,24 @@ fn encode_fundamental_block(d: &FundamentalData) -> [f32; 30] {
     ]
 }
 
+/// Historical Block-6 (event_state) vector — slot-for-slot identical to the live
+/// `EventState::to_block6` (`src/events/state.rs`) so the same model dimension
+/// means the same thing in training shards and at inference time. Each event
+/// dimension is `magnitude · exp(-Δt / τ)` of the most recent qualifying event,
+/// reusing the live per-kind magnitudes and decay constants (`EventKind`):
+///   [0] insider buy recency      mag = ln|value|, τ = 1d
+///   [1] insider buy magnitude    (live computes this identically to [0])
+///   [2] analyst upgrade recency   mag = 1,        τ = 30d
+///   [3] analyst downgrade recency mag = 1,        τ = 30d
+///   [4] SEC filing recency        8-K (1.5, τ=7d) ∨ other (0.5, τ=30d)
+///   [5] 10-K/10-Q recency         mag = 1,        τ = 30d
+///   [6] news/event intensity      log-count of dated text events, decayed
+///   [7] news sentiment            decay-weighted mean FinBERT score over window
+///   [8] earnings proximity        (external, exp(-days/14))
+///   [9] ex-dividend proximity     (external)
 fn compute_event_state_at(
     bar_ts: i64,
     exdiv_proximity: f32,
-    split_signal: f32,
     insider_events: &[InsiderEvent],
     grade_events: &[GradeEvent],
     sec_filing_events: &[SecFilingEvent],
@@ -2301,175 +2342,112 @@ fn compute_event_state_at(
     text_events: &[TextEvent],
 ) -> [f32; 10] {
     let mut out = [0.0f32; 10];
-    let day = 86_400;
-    let week = 7 * day;
-    let month = 30 * day;
-    let quarter = 90 * day;
+    let day = 86_400i64;
 
-    let insider_recent: Vec<_> = insider_events
-        .iter()
-        .copied()
-        .filter(|e| e.ts <= bar_ts && e.ts >= bar_ts - week)
-        .collect();
-    let insider_flow = insider_recent.iter().fold(0.0f32, |acc, e| {
-        let sign = match e.is_buy {
-            Some(true) => 1.0,
-            Some(false) => -1.0,
-            None => 0.0,
-        };
-        acc + sign * (e.value.abs().ln_1p())
-    });
-    out[0] = if insider_events.is_empty() {
-        // No historical insider data (pre-2022 coverage gap): use a tiny quarterly
-        // cycle signal so this dim is never a structural zero in training shards.
-        0.03 * f32::sin(std::f32::consts::TAU * bar_ts as f32 / (day as f32 * 90.0))
-    } else {
-        (insider_flow / 20.0).tanh()
+    // Most-recent qualifying event → `mag · exp(-Δdays / τ_days)`, else 0.
+    let recency = |hit: Option<(i64, f32)>, tau_days: f32| -> f32 {
+        match hit {
+            Some((ts, mag)) if ts <= bar_ts => {
+                let days = ((bar_ts - ts) as f32 / day as f32).max(0.0);
+                mag * (-days / tau_days).exp()
+            }
+            _ => 0.0,
+        }
+    };
+    let latest = |pred: &dyn Fn(&&InsiderEvent) -> bool, mag: &dyn Fn(&InsiderEvent) -> f32| {
+        insider_events
+            .iter()
+            .rev()
+            .find(|e| e.ts <= bar_ts && pred(e))
+            .map(|e| (e.ts, mag(e)))
     };
 
-    let grade_recent: Vec<_> = grade_events
-        .iter()
-        .copied()
-        .filter(|g| g.ts <= bar_ts && g.ts >= bar_ts - month)
-        .collect();
-    let grade_mom = if grade_recent.is_empty() {
-        0.0
-    } else {
-        grade_recent.iter().map(|g| g.direction).sum::<f32>() / grade_recent.len() as f32
-    };
-    out[2] = grade_mom.clamp(-1.0, 1.0);
-    out[6] = grade_recent
-        .iter()
-        .max_by_key(|g| g.ts)
-        .map(|g| g.direction)
-        .unwrap_or(0.0);
+    // [0]/[1] insider buy: live magnitude is ln|value|; the two slots are equal.
+    let buy = recency(
+        latest(&|e| e.is_buy == Some(true), &|e| (e.value.abs() as f64).ln().max(0.0) as f32),
+        1.0,
+    );
+    out[0] = buy;
+    out[1] = buy;
 
-    let sec_recent: Vec<_> = sec_filing_events
-        .iter()
-        .copied()
-        .filter(|e| e.ts <= bar_ts && e.ts >= bar_ts - quarter)
-        .collect();
-    let filings_10k = sec_recent.iter().filter(|e| e.is_10k).count() as f32;
-    let filings_10q = sec_recent.iter().filter(|e| e.is_10q).count() as f32;
-    let filings_other = (sec_recent.len() as f32 - filings_10k - filings_10q).max(0.0);
-    let sec_density = ((filings_10k * 1.2 + filings_10q + 0.35 * filings_other) / 5.0).clamp(0.0, 1.0);
-    let grade_quarter_count = grade_events
-        .iter()
-        .filter(|g| g.ts <= bar_ts && g.ts >= bar_ts - quarter)
-        .count() as f32;
-    let insider_quarter_count = insider_events
-        .iter()
-        .filter(|e| e.ts <= bar_ts && e.ts >= bar_ts - quarter)
-        .count() as f32;
-    let activity_proxy = ((grade_quarter_count + insider_quarter_count).ln_1p() / 3.0).clamp(0.0, 1.0);
-    out[3] = if sec_recent.is_empty() && activity_proxy == 0.0 {
-        // No SEC/insider/grade data for this bar: proxy filing density from the
-        // quarterly earnings cycle so this dim is never a structural zero.
-        let cycle_d = ((bar_ts / day) % 90) as f32;
-        let cycle_prox = (-(cycle_d.min(90.0 - cycle_d)) / 18.0).exp();
-        (cycle_prox * 0.25).clamp(0.0, 1.0)
-    } else {
-        sec_density.max(activity_proxy)
-    };
-
-    let timeline_earnings_prox = earnings_events
-        .iter()
-        .filter(|e| e.ts >= bar_ts - 180 * day && e.ts <= bar_ts + 180 * day)
-        .map(|e| ((e.ts - bar_ts).abs() as f32) / day as f32)
-        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-        .map(|days| (-days.min(60.0) / 14.0).exp())
-        .unwrap_or(0.0);
-    let static_earnings_prox = next_earnings_ts
-        .filter(|next| (next - bar_ts).abs() <= 180 * day)
-        .map(|next| {
-            let days = ((next - bar_ts).abs() as f32 / day as f32).min(60.0);
-            (-days / 14.0).exp()
-        })
-        .unwrap_or_else(|| {
-            let cycle_days = ((bar_ts / day) % 90) as f32;
-            (-(cycle_days.min(90.0 - cycle_days)) / 18.0).exp()
-        });
-    let earnings_prox = timeline_earnings_prox.max(static_earnings_prox);
-    out[4] = earnings_prox.clamp(0.0, 1.0);
-
-    let insider_buy_recent = insider_events
+    // [2]/[3] analyst up/down-grade recency (magnitude 1.0, τ = 30d).
+    let last_up = grade_events
         .iter()
         .rev()
-        .find(|e| e.ts <= bar_ts && e.is_buy == Some(true))
-        .map(|e| {
-            let days = ((bar_ts - e.ts) as f32 / day as f32).max(0.0);
-            (-days / 21.0).exp()
-        })
-        .unwrap_or(0.0);
-    let insider_any_recent = insider_events
+        .find(|g| g.ts <= bar_ts && g.direction > 0.0)
+        .map(|g| (g.ts, 1.0));
+    let last_down = grade_events
         .iter()
         .rev()
-        .find(|e| e.ts <= bar_ts)
-        .map(|e| {
-            let days = ((bar_ts - e.ts) as f32 / day as f32).max(0.0);
-            (-days / 21.0).exp()
-        })
-        .unwrap_or(0.0);
-    out[5] = if insider_events.is_empty() {
-        // No historical insider data: small positive baseline distinguishes
-        // "unknown" from confirmed-zero activity observed in dim[0].
-        0.05
-    } else {
-        insider_buy_recent.max(insider_any_recent).clamp(0.0, 1.0)
-    };
+        .find(|g| g.ts <= bar_ts && g.direction < 0.0)
+        .map(|g| (g.ts, 1.0));
+    out[2] = recency(last_up, 30.0);
+    out[3] = recency(last_down, 30.0);
 
-    let text_recent: Vec<_> = text_events
-        .iter()
-        .filter(|e| e.ts <= bar_ts && e.ts >= bar_ts - day)
-        .collect();
-    let text_week: Vec<_> = text_events
-        .iter()
-        .filter(|e| e.ts <= bar_ts && e.ts >= bar_ts - week)
-        .collect();
-    out[7] = if text_recent.is_empty() {
+    // [4] SEC filing recency: 8-K (high-freq) vs other; [5] 10-K/10-Q.
+    let last_sec = |pred: &dyn Fn(&SecFilingEvent) -> bool, mag: f32| {
+        sec_filing_events
+            .iter()
+            .rev()
+            .find(|f| f.ts <= bar_ts && pred(f))
+            .map(|f| (f.ts, mag))
+    };
+    let recency_8k = recency(last_sec(&|f| f.is_8k, 1.5), 7.0);
+    let recency_other = recency(last_sec(&|f| !f.is_8k && !f.is_10k && !f.is_10q, 0.5), 30.0);
+    out[4] = recency_8k.max(recency_other);
+    let recency_10k = recency(last_sec(&|f| f.is_10k, 1.0), 30.0);
+    let recency_10q = recency(last_sec(&|f| f.is_10q, 1.0), 30.0);
+    out[5] = recency_10k.max(recency_10q);
+
+    // [6]/[7] text-derived intensity + sentiment over a trailing window. Live
+    // draws these from realtime news; historically the dated EDGAR-filing (∪
+    // FNSPID) stream fills the same slots through the same FinBERT scorer, so the
+    // slot meaning is shared even though the source cadence differs (the values
+    // are z-scored downstream, normalizing the cadence gap).
+    const TEXT_TAU_DAYS: f32 = 7.0;
+    let window = 30 * day;
+    let mut intensity = 0.0f32;
+    let mut sent_sum = 0.0f32;
+    let mut sent_w = 0.0f32;
+    for e in text_events.iter().filter(|e| e.ts <= bar_ts && e.ts >= bar_ts - window) {
+        let days = ((bar_ts - e.ts) as f32 / day as f32).max(0.0);
+        let w = (-days / TEXT_TAU_DAYS).exp();
+        intensity += w;
+        sent_sum += w * e.sentiment;
+        sent_w += w;
+    }
+    out[6] = intensity.ln_1p();
+    out[7] = if sent_w > 0.0 {
+        (sent_sum / sent_w).clamp(-1.0, 1.0)
+    } else {
         0.0
-    } else {
-        (text_recent.iter().map(|e| e.sentiment).sum::<f32>() / text_recent.len() as f32)
-            .clamp(-1.0, 1.0)
     };
-    out[8] = ((text_week.len() as f32 + 0.5 * text_recent.len() as f32) / 24.0).clamp(0.0, 1.0);
 
+    // [8] earnings proximity (nearest real or real-anchored quarterly projection).
+    out[8] = earnings_proximity(bar_ts, earnings_events, next_earnings_ts).clamp(0.0, 1.0);
+    // [9] ex-dividend proximity (computed by the caller from the dividend series).
     out[9] = exdiv_proximity.clamp(0.0, 4.0);
-    out[1] = (0.35 * out[0] + 0.25 * out[2] + 0.15 * out[3] + 0.25 * split_signal.tanh()).clamp(-1.0, 1.0);
     out
 }
 
-/// Block 8 text vector + Block 6 news-sentiment slot.
+/// Block 8 text vector.
 ///
 /// Pools pre-computed 768-dim embeddings of every TextEvent in the trailing
 /// 90-day window with `weight = exp(-Δdays / 30)`. The pooled vector is
-/// L2-normalized, Matryoshka-truncated to the first 64 dims, then re-
-/// normalized — that's Block 8.
-///
-/// Sentiment = `cos(pooled, pos_anchor) - cos(pooled, neg_anchor)` clipped to
-/// [-1, 1]. Anchors are fixed strings; their embeddings sit in `embed_map`.
+/// L2-normalized, Matryoshka-truncated to the first 64 dims, then re-normalized.
+/// (Block 6 news sentiment is the FinBERT score on each event, pooled separately
+/// in `compute_event_state_at` — not derived from this embedding.)
 fn compute_text_embedding_at(
     bar_ts: i64,
     events: &[TextEvent],
     embed_map: &HashMap<String, Vec<f32>>,
-    pos_anchor: &[f32],
-    neg_anchor: &[f32],
-) -> ([f32; 64], f32) {
+) -> [f32; 64] {
     let mut acc = vec![0.0f32; EMBED_DIM];
     let mut wsum = 0.0f32;
     let cutoff = bar_ts - TEXT_WINDOW_SECS;
     for ev in events
         .iter()
-        .filter(|e| {
-            // Allow metadata events (with very high timestamps) to bypass window check.
-            // They represent static metadata (symbol, sector, industry) that should be
-            // available for all bars throughout the collection.
-            if e.ts >= i64::MAX / 2 {
-                true  // Metadata event, always include
-            } else {
-                e.ts <= bar_ts && e.ts >= cutoff  // Real event, apply window check
-            }
-        })
+        .filter(|e| e.ts <= bar_ts && e.ts >= cutoff)
     {
         let Some(emb) = embed_map.get(&ev.text) else {
             continue;
@@ -2477,12 +2455,7 @@ fn compute_text_embedding_at(
         if emb.len() != EMBED_DIM {
             continue;
         }
-        // Metadata events get weight 1.0 (always "fresh"), others decay with age
-        let age_days = if ev.ts >= i64::MAX / 2 {
-            0.0  // Metadata event is always fresh
-        } else {
-            ((bar_ts - ev.ts).max(0) as f32) / 86_400.0
-        };
+        let age_days = ((bar_ts - ev.ts).max(0) as f32) / 86_400.0;
         let w = (-age_days / TEXT_DECAY_DAYS).exp();
         if w < 1e-4 {
             continue;
@@ -2493,13 +2466,11 @@ fn compute_text_embedding_at(
         wsum += w;
     }
     if wsum <= 0.0 {
-        return ([0.0; 64], 0.0);
+        return [0.0; 64];
     }
     for a in &mut acc {
         *a /= wsum;
     }
-
-    let sentiment = (cosine(&acc, pos_anchor) - cosine(&acc, neg_anchor)).clamp(-1.0, 1.0);
 
     l2_normalize_inplace(&mut acc);
     let mut out = [0.0f32; 64];
@@ -2510,24 +2481,9 @@ fn compute_text_embedding_at(
             *x /= n;
         }
     }
-    (out, sentiment)
+    out
 }
 
-fn cosine(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() {
-        return 0.0;
-    }
-    let mut dot = 0.0f32;
-    let mut na = 0.0f32;
-    let mut nb = 0.0f32;
-    for (&x, &y) in a.iter().zip(b.iter()) {
-        dot += x * y;
-        na += x * x;
-        nb += y * y;
-    }
-    let denom = na.sqrt() * nb.sqrt();
-    if denom > 1e-12 { dot / denom } else { 0.0 }
-}
 
 fn l2_normalize_inplace(v: &mut [f32]) {
     let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -2625,52 +2581,6 @@ fn parse_ymd_to_ts(s: &str) -> Option<i64> {
     Some(d.and_hms_opt(0, 0, 0)?.and_utc().timestamp())
 }
 
-fn parse_relative_minutes(s: &str) -> Option<f64> {
-    let t = s.trim().to_ascii_lowercase();
-    if t == "just now" {
-        return Some(1.0);
-    }
-    if t == "yesterday" {
-        return Some(24.0 * 60.0);
-    }
-    let n: f64 = t.split_whitespace().next()?.parse().ok()?;
-    if t.contains("min") {
-        Some(n)
-    } else if t.contains("hour") {
-        Some(n * 60.0)
-    } else if t.contains("day") {
-        Some(n * 24.0 * 60.0)
-    } else if t.contains("week") {
-        Some(n * 7.0 * 24.0 * 60.0)
-    } else {
-        None
-    }
-}
-
-fn lexical_sentiment(text: &str) -> f32 {
-    const POS: &[&str] = &[
-        "beat", "beats", "growth", "surge", "bullish", "upgrade", "buy", "strong", "record",
-        "profit", "expands", "outperform",
-    ];
-    const NEG: &[&str] = &[
-        "miss", "decline", "drops", "bearish", "downgrade", "sell", "weak", "lawsuit", "loss",
-        "cuts", "underperform", "recession",
-    ];
-    let t = text.to_ascii_lowercase();
-    let mut s = 0.0f32;
-    for p in POS {
-        if t.contains(p) {
-            s += 1.0;
-        }
-    }
-    for n in NEG {
-        if t.contains(n) {
-            s -= 1.0;
-        }
-    }
-    (s / 6.0).clamp(-1.0, 1.0)
-}
-
 fn sector_to_idx(sector: &str) -> f64 {
     let s = sector.to_ascii_lowercase();
     let idx = if s.contains("technology") {
@@ -2708,10 +2618,41 @@ fn simple_symbol_hash(symbol: &str) -> f64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{MarketFeatureLookup, argmax_min, build_close_series, build_return_series, stddev};
+    use super::{
+        EarningsEvent, MarketFeatureLookup, argmax_min, build_close_series, build_return_series,
+        earnings_proximity, stddev,
+    };
     use crate::store::Bar;
     use serde_json::json;
     use std::collections::BTreeMap;
+
+    const DAY: i64 = 86_400;
+
+    #[test]
+    fn earnings_proximity_zero_without_dates() {
+        assert_eq!(earnings_proximity(0, &[], None), 0.0);
+    }
+
+    #[test]
+    fn earnings_proximity_peaks_on_report_date() {
+        let ev = [EarningsEvent { ts: 1000 * DAY, surprise_pct: 0.0 }];
+        let on = earnings_proximity(1000 * DAY, &ev, None);
+        let off = earnings_proximity(1014 * DAY, &ev, None); // +14d → exp(-1)
+        assert!((on - 1.0).abs() < 1e-6);
+        assert!(off < on && off > 0.0);
+    }
+
+    #[test]
+    fn earnings_proximity_projects_quarterly_into_gap() {
+        // Two real dates one quarter apart; a bar far before them should still
+        // see a nearby projected report date (real-anchored cadence, not zero).
+        let ev = [
+            EarningsEvent { ts: 1000 * DAY, surprise_pct: 0.0 },
+            EarningsEvent { ts: 1091 * DAY, surprise_pct: 0.0 },
+        ];
+        let far_past = earnings_proximity(727 * DAY, &ev, None); // ~3 quarters before, on grid
+        assert!(far_past > 0.9, "projected on-grid bar should be high, got {far_past}");
+    }
 
     #[test]
     fn return_series_uses_log_returns() {
@@ -2817,31 +2758,41 @@ mod tests {
         assert_eq!(events[0].is_buy, None);
     }
 
+    /// Post-H5 contract: every `event_state` slot derives from a *real* dated
+    /// event or is honestly zero — no synthetic/cyclical proxy fills in. A real
+    /// analyst downgrade drives its recency slot, while an unlabeled insider
+    /// transaction (no buy/sell direction) and the absence of any SEC filing
+    /// leave their slots at exactly 0 rather than fabricating signal.
     #[test]
-    fn event_state_fills_proxy_slots_without_sec_or_buy_labels() {
+    fn event_state_uses_real_events_only_no_proxy_fill() {
         let bar_ts = 1_800_000_000i64;
         let insider_events = vec![super::InsiderEvent {
             ts: bar_ts - 2 * 86_400,
             shares: 2_000.0,
             value: 0.0,
-            is_buy: None,
+            is_buy: None, // unlabeled → must NOT count as a buy
         }];
         let grade_events = vec![super::GradeEvent {
             ts: bar_ts - 10 * 86_400,
-            direction: -1.0,
+            direction: -1.0, // real downgrade 10d ago
         }];
         let out = super::compute_event_state_at(
             bar_ts,
             0.0,
-            0.0,
             &insider_events,
             &grade_events,
-            &[],
+            &[], // no SEC filings
             &[],
             None,
             &[],
         );
-        assert!(out[3] > 0.0);
-        assert!(out[5] > 0.0);
+        // [3] analyst-downgrade recency: real event, exp(-10/30) ≈ 0.72.
+        assert!(out[3] > 0.0, "real downgrade must drive its recency slot");
+        // [0]/[1] insider-buy: unlabeled transaction → genuine zero (no proxy).
+        assert_eq!(out[0], 0.0, "unlabeled insider txn must not fabricate a buy");
+        assert_eq!(out[1], 0.0);
+        // [4]/[5] SEC filing recency: no filings → genuine zero (no proxy).
+        assert_eq!(out[4], 0.0, "absent SEC filings must yield zero, not a proxy");
+        assert_eq!(out[5], 0.0);
     }
 }
