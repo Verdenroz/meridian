@@ -2,7 +2,9 @@ use crate::args::{HistoricalArgs, HistoricalInterval};
 use crate::features::{FeatureRow, classify_asset, sector_map::sector_etf_for};
 use crate::historical::edgar_text::EdgarFilingDoc;
 use crate::historical::embedder::{EMBED_DIM, Embedder, EmbedderConfig};
+use crate::historical::pca::PcaModel;
 use crate::historical::risk::RISK_WINDOW;
+use crate::historical::text_pca;
 use crate::output::emit_row;
 use crate::store::{Bar, FundamentalData, PriceBuffer, RollingStatsStore};
 use chrono::{Datelike, Timelike};
@@ -319,7 +321,7 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
     let (filing_docs, filing_texts) = fetch_filing_texts(&edgar_submissions).await;
     // Merge the dated FNSPID news corpus (historical analogue of the live `feeds`
     // RSS stream) onto the EDGAR filing-text floor. Both sources flow through the
-    // SAME FinBERT scorer + nomic embedder below, so only the text *source*
+    // SAME FinBERT scorer + harrier-oss embedder below, so only the text *source*
     // differs across train/inference — the representation pipeline is identical
     // (DATA_PIPELINE_ISSUES.md C1/H1). A missing news cache ⇒ filings-only, never
     // a fabricated fill.
@@ -423,6 +425,20 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
     for (text, emb) in unique_vec.iter().zip(embeddings.into_iter()) {
         embed_map.insert(text.clone(), emb);
     }
+
+    // Block 8 reduction basis: harrier-oss is not Matryoshka, so we project the
+    // pooled 1024-d embedding down to the 64-d block via a fixed PCA basis. The
+    // basis is fit ONCE over the whole universe by the `fit-text-pca` pre-pass
+    // (`make collect` runs it before per-symbol collection); here we only LOAD
+    // it, so every asset shares comparable axes. If it is missing we fall back to
+    // zeros rather than fitting a per-symbol (incompatible) basis.
+    let text_pca = text_pca::load_cached().unwrap_or_else(|| {
+        tracing::warn!(
+            "block8_text_pca basis not found — run the fit-text-pca pre-pass \
+             (`make collect` runs it after `make fnspid`); Block 8 will be zeros this run"
+        );
+        PcaModel::zeros(EMBED_DIM, text_pca::TEXT_PCA_DIM)
+    });
 
     // Pre-sort event timestamps for binary search
     let div_timestamps: Vec<i64> = dividends.iter().map(|d| d.timestamp).collect();
@@ -545,7 +561,7 @@ pub async fn run(args: HistoricalArgs) -> anyhow::Result<()> {
         // ── Block 8: Text embedding timeline (EDGAR filings ∪ FNSPID) ──────────
         // Sentiment (event_state[7]) is the FinBERT score carried on each text
         // event, pooled inside compute_event_state_at — not re-derived here.
-        let text_block = compute_text_embedding_at(bar_ts, &text_events, &embed_map);
+        let text_block = compute_text_embedding_at(bar_ts, &text_events, &embed_map, &text_pca);
 
         let mut price_volume_block = crate::features::price_volume::assemble(
             Some(&buf),
@@ -2454,16 +2470,19 @@ fn compute_event_state_at(
 
 /// Block 8 text vector.
 ///
-/// Pools pre-computed 768-dim embeddings of every TextEvent in the trailing
-/// 90-day window with `weight = exp(-Δdays / 30)`. The pooled vector is
-/// L2-normalized, Matryoshka-truncated to the first 64 dims, then re-normalized.
+/// Pools pre-computed 1024-dim harrier-oss embeddings of every TextEvent in the
+/// trailing 90-day window with `weight = exp(-Δdays / 30)`, L2-normalizes the
+/// pooled vector, then reduces it to the 64-dim Block-8 width via the fixed
+/// `text_pca` basis (harrier-oss is not a Matryoshka model, so the 1024-d vector
+/// cannot simply be truncated) and re-normalizes onto the unit sphere.
 /// (Block 6 news sentiment is the FinBERT score on each event, pooled separately
 /// in `compute_event_state_at` — not derived from this embedding.)
 fn compute_text_embedding_at(
     bar_ts: i64,
     events: &[TextEvent],
     embed_map: &HashMap<String, Vec<f32>>,
-) -> [f32; 64] {
+    pca: &PcaModel,
+) -> [f32; text_pca::TEXT_PCA_DIM] {
     let mut acc = vec![0.0f32; EMBED_DIM];
     let mut wsum = 0.0f32;
     let cutoff = bar_ts - TEXT_WINDOW_SECS;
@@ -2487,16 +2506,17 @@ fn compute_text_embedding_at(
         }
         wsum += w;
     }
+    let mut out = [0.0f32; text_pca::TEXT_PCA_DIM];
     if wsum <= 0.0 {
-        return [0.0; 64];
+        return out;
     }
     for a in &mut acc {
         *a /= wsum;
     }
-
     l2_normalize_inplace(&mut acc);
-    let mut out = [0.0f32; 64];
-    out.copy_from_slice(&acc[..64]);
+
+    // Reduce 1024 → 64 through the learned PCA basis, then re-normalize.
+    pca.project_into(&acc, &mut out);
     let n: f32 = out.iter().map(|x| x * x).sum::<f32>().sqrt();
     if n > 1e-12 {
         for x in &mut out {

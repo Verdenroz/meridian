@@ -4,7 +4,7 @@
 //! `feeds` RSS stream. Yahoo/`feeds` expose no dated historical archive, so for
 //! the train/val window we substitute the FNSPID corpus (`Zihan1004/FNSPID`,
 //! ticker-tagged, dated) as the historical analogue of the live RSS headlines.
-//! Both sources flow through the **same** FinBERT scorer + nomic embedder
+//! Both sources flow through the **same** FinBERT scorer + harrier-oss embedder
 //! downstream (see `batch.rs`), so only the text *source* differs across
 //! train/inference — the representation pipeline is identical, which is the
 //! train/inference-alignment requirement in DATA_PIPELINE_ISSUES.md (C1/H1).

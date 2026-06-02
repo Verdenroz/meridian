@@ -6,4 +6,6 @@ pub mod fnspid;
 pub mod macro_lookup;
 pub mod market_news_flow;
 pub mod market_news_pca;
+pub mod pca;
 pub mod risk;
+pub mod text_pca;

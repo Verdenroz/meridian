@@ -1,21 +1,22 @@
 //! Local embedder client for Block 8 text features.
 //!
 //! Hits an OpenAI-compatible `/v1/embeddings` endpoint (defaulting to the
-//! llama-swap server at `127.0.0.1:12434`) using `nomic-embed-text` (Nomic
-//! v1.5, 768-dim, Matryoshka). Snippet outputs are cached on disk by
-//! `sha256(text)` so re-collection is free after the first pass.
+//! llama-swap server at `127.0.0.1:12434`) using `harrier-oss:0.6b` (Microsoft
+//! multilingual embedding, 1024-dim, 32K context, last-token pooling). Snippet
+//! outputs are cached on disk by `sha256(text)` so re-collection is free after
+//! the first pass.
 //!
 //! Pooling for Block 8: time-decay weighted mean over snippets in the
-//! trailing 90-day window, L2-normalize, Matryoshka-truncate to 64,
-//! re-normalize.
+//! trailing 90-day window, L2-normalize. Reduction to the 64-d Block-8 width is
+//! done downstream by `text_pca` (a learned PCA basis) — harrier-oss is NOT a
+//! Matryoshka model, so the pooled vector cannot simply be truncated.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-pub const EMBED_DIM: usize = 768;
-pub const TEXT_DIM: usize = 64;
+pub const EMBED_DIM: usize = 1024;
 const BATCH_SIZE: usize = 32;
 const DECAY_DAYS: f32 = 30.0;
 
@@ -30,7 +31,7 @@ impl Default for EmbedderConfig {
     fn default() -> Self {
         Self {
             endpoint: "http://127.0.0.1:12434/v1/embeddings".to_string(),
-            model: "nomic-embed-text".to_string(),
+            model: "harrier-oss:0.6b".to_string(),
             cache_dir: PathBuf::from("data/embed_cache"),
         }
     }
@@ -160,15 +161,17 @@ impl Embedder {
         Ok(v.into_iter().next().unwrap())
     }
 
-    /// Time-decay weighted mean pool of snippet embeddings → 64-dim
+    /// Time-decay weighted mean pool of snippet embeddings → full 1024-dim
     /// L2-normalized vector. `snippets` is `(text, days_since_event)`.
     /// Empty input → zero vector (caller decides default-embedding policy).
+    /// Reduction to the 64-d Block-8 width is the caller's job via `text_pca`
+    /// (harrier-oss is not a Matryoshka model, so this vector is not truncated).
     pub async fn embed_pool_decayed(
         &self,
         snippets: &[(String, i64)],
-    ) -> Result<[f32; TEXT_DIM]> {
+    ) -> Result<[f32; EMBED_DIM]> {
         if snippets.is_empty() {
-            return Ok([0.0; TEXT_DIM]);
+            return Ok([0.0; EMBED_DIM]);
         }
         let texts: Vec<String> = snippets.iter().map(|(t, _)| t.clone()).collect();
         let embs = self.embed_many(&texts).await?;
@@ -176,7 +179,7 @@ impl Embedder {
         let mut acc = vec![0.0f32; EMBED_DIM];
         let mut wsum = 0.0f32;
         for ((_, days), emb) in snippets.iter().zip(embs.iter()) {
-            let w = (-(days.max(&0).clone() as f32) / DECAY_DAYS).exp();
+            let w = (-((*days).max(0) as f32) / DECAY_DAYS).exp();
             for (a, &e) in acc.iter_mut().zip(emb.iter()) {
                 *a += w * e;
             }
@@ -189,9 +192,8 @@ impl Embedder {
         }
         l2_normalize(&mut acc);
 
-        let mut out = [0.0f32; TEXT_DIM];
-        out.copy_from_slice(&acc[..TEXT_DIM]);
-        l2_normalize_arr(&mut out);
+        let mut out = [0.0f32; EMBED_DIM];
+        out.copy_from_slice(&acc);
         Ok(out)
     }
 }
@@ -208,15 +210,6 @@ fn hex_sha256(s: &str) -> String {
 }
 
 fn l2_normalize(v: &mut [f32]) {
-    let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm > 1e-12 {
-        for x in v {
-            *x /= norm;
-        }
-    }
-}
-
-fn l2_normalize_arr<const N: usize>(v: &mut [f32; N]) {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm > 1e-12 {
         for x in v {
