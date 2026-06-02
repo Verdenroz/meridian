@@ -594,6 +594,20 @@ Each feature represents a decayed signal from the most recent event of that type
 
 From MarketReader (Section 7.10).
 
+**Embedding backend (collection / historical path).** The historical feature
+builder embeds each text snippet (EDGAR primary-document text ∪ FNSPID news)
+with `microsoft/harrier-oss-v1-0.6b` — a qwen3-based multilingual embedder,
+**1024-dim**, 32K-token context, last-token pooling — served locally over an
+OpenAI-compatible `/v1/embeddings` endpoint. Snippets in the trailing 90-day
+window are pooled with `weight = exp(-Δdays / 30)` and L2-normalized.
+
+harrier-oss is **not** a Matryoshka model, so the 1024-dim pooled vector cannot
+be truncated to the 64-dim block width. Instead it is reduced by a learned
+**PCA(64)** basis (NIPALS, fit once over the text corpus and persisted to disk;
+see `src/historical/text_pca.rs`), then re-normalized onto the unit sphere. This
+keeps Block 8 at its 64-dim budget while preserving variance-carrying
+directions, so the per-asset vector stays **184 effective dims**.
+
 **Total per-asset features: 10 + 42 + 12 + 30 + 8 + 10 + 8 = 120 continuous + 64 text = 184 effective dims.**
 
 ---
@@ -985,6 +999,14 @@ Tier-specific output heads:
 
 Total parameters: ~3.5M (INT8 quantized: ~3.5 MB)
 ```
+
+**Implementation note — Block 8 deep embedding.** The 64-dim "Deep" full
+embedding is currently produced by an off-the-shelf backend rather than the
+custom head above: snippets are embedded with `microsoft/harrier-oss-v1-0.6b`
+(1024-dim, non-Matryoshka) and reduced to 64 dims by a learned PCA basis
+(§6.2 Block 8). Because harrier-oss has no nested-prefix (Matryoshka) structure,
+the 1024-dim output is projected by PCA — never truncated. The 4-dim headline
+and 32-dim summary sentiment tiers remain as specified.
 
 ---
 
