@@ -15,6 +15,21 @@ pub enum Mode {
     Live(LiveArgs),
     /// Batch-collect historical data for a single symbol
     Historical(HistoricalArgs),
+    /// Fit the global Block-8 text-embedding PCA basis over the whole universe.
+    ///
+    /// Run once before per-symbol historical collection so every asset shares
+    /// comparable Block-8 axes (harrier-oss is not Matryoshka, so its 1024-d
+    /// output is PCA-reduced to 64 dims, never truncated). `make collect` runs
+    /// this automatically after the FNSPID news caches are built.
+    FitTextPca(FitTextPcaArgs),
+}
+
+#[derive(clap::Args)]
+pub struct FitTextPcaArgs {
+    /// Path to newline-separated list of symbols (max 100) — the universe whose
+    /// FNSPID news corpus the PCA basis is fit over.
+    #[arg(long, default_value = "symbols.txt")]
+    pub symbols_file: PathBuf,
 }
 
 #[derive(clap::Args)]

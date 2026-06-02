@@ -36,6 +36,24 @@ use clap::Parser;
 async fn main() -> anyhow::Result<()> {
     install_tracing();
 
+    // Initialize EDGAR client for SEC filings access (required for Ticker::edgar_submissions).
+    // Uses MERIDIAN_SEC_UA env var (or a hardcoded default contact email) to comply with
+    // SEC fair-access policy requiring a User-Agent with a valid contact address.
+    {
+        let email = std::env::var("MERIDIAN_SEC_UA").unwrap_or_else(|_| {
+            "Harvey Tseng harveytseng2@gmail.com".to_string()
+        });
+        // Extract just the email part if the env var contains a full User-Agent string.
+        let email = email
+            .rsplit_once(' ')
+            .map(|(_, addr)| addr)
+            .unwrap_or(&email);
+        match finance_query::edgar::init(email) {
+            Ok(()) => tracing::info!("EDGAR client initialized"),
+            Err(e) => tracing::warn!(err = %e, "EDGAR init failed (SEC filings will be unavailable)"),
+        }
+    }
+
     // Initialize FRED client if API key is available (required for macro series polls)
     match std::env::var("FRED_API_KEY") {
         Ok(key) if !key.is_empty() => {
@@ -57,7 +75,21 @@ async fn main() -> anyhow::Result<()> {
     match args.mode {
         Mode::Live(live) => live_mode(live).await,
         Mode::Historical(hist) => historical::batch::run(hist).await,
+        Mode::FitTextPca(a) => fit_text_pca_mode(a).await,
     }
+}
+
+/// Fit the global Block-8 text-embedding PCA(64) basis over the whole symbol
+/// universe and persist it, so per-symbol collection shares one comparable
+/// reduction (harrier-oss is not Matryoshka — see `historical::text_pca`).
+async fn fit_text_pca_mode(args: args::FitTextPcaArgs) -> anyhow::Result<()> {
+    use historical::embedder::{Embedder, EmbedderConfig};
+
+    let symbols = load_symbols(&args.symbols_file)?;
+    tracing::info!(count = symbols.len(), "fit-text-pca: universe loaded");
+    let embedder = Embedder::new(EmbedderConfig::default())?;
+    historical::text_pca::fit_universe(&symbols, &embedder).await?;
+    Ok(())
 }
 
 async fn live_mode(args: args::LiveArgs) -> anyhow::Result<()> {
@@ -109,10 +141,14 @@ fn load_symbols(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
     }
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("reading symbols file {}", path.display()))?;
+    // Strip inline comments (`AAPL  # Apple ...`) and full-line comments,
+    // mirroring the Python loader (`line.split("#")[0].strip()`) so the Rust
+    // live/fit-text-pca paths agree with the Python collection driver on the
+    // universe.
     let symbols: Vec<String> = content
         .lines()
-        .map(str::trim)
-        .filter(|s| !s.is_empty() && !s.starts_with('#'))
+        .map(|line| line.split('#').next().unwrap_or("").trim())
+        .filter(|s| !s.is_empty())
         .take(100) // cap at 100
         .map(String::from)
         .collect();

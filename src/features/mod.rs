@@ -36,7 +36,9 @@ pub struct FeatureRow {
     pub event_state: [f32; 10],
     /// Block 7: Cross-Asset Context (8 dims)
     pub cross_asset_context: [f32; 8],
-    /// Block 8: Text Embedding (64 dims) — zeros in Phase 0; wired in Phase 1
+    /// Block 8: Text Embedding (64 dims — PCA(64) of the harrier-oss 1024-d
+    /// output; harrier-oss is not a Matryoshka model, so it is reduced by a
+    /// learned PCA basis rather than truncated. See `historical::text_pca`.)
     pub text: [f32; 64],
     /// Market-Wide (96 dims)
     pub market: [f32; 96],
