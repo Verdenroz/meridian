@@ -122,11 +122,13 @@ Training targets default to `data/mmaps_aug`; override with `TRAIN_DATA=data/mma
 `make collect` performs a fresh rebuild of `data/mmaps/{train,validation,test}` shards before recollecting.
 Portfolio head training uses the 100 real per-asset shards, enforces an exact 100-asset universe for train/validation, and skips synthetic non-asset shards (e.g., `FDA_SYNTH_*`) in that stage.
 Both portfolio heads mix FDA synthetic window batches (`fda_loss_weight=0.6`, `fda_mix_prob=0.5` by default) with real joint-asset batches.
-Checkpoint selection uses validation DSR, with batch-level four-regime coverage enforced by default.
-PTA uses batch-level view expansion with sector-preserving permutations derived from `symbols.txt` (default: `pta_prob=0.5`, `pta_permutations=4`, `pta_sign_flip_prob=0.5`, `pta_vol_scale_prob=0.7`, scales `0.8/0.9/1.1/1.2`).
-Cross-asset warm-up is run before return-head training by default (`--cross-asset-warmup-steps 1000`, `--cross-asset-corr-window 20`, `--cross-asset-warmup-batch-size 8`) and saves a stage-boundary checkpoint (`*_cross_asset_warmup.pt`).
+Checkpoint selection uses validation DSR for return-head training and validation rolling-Sharpe loss for sharpe-head training, with batch-level four-regime coverage enforced by default.
+PTA uses batch-level view expansion with sector-preserving permutations derived from `symbols.txt` (default: `pta_prob=0.5`, `pta_permutations=4`, `pta_sign_flip_prob=0.5`, `pta_vol_scale_prob=0.7`, scales `0.8/0.9/1.1/1.2`; sign-flip views are gated behind `--allow-short-positions`).
+Cross-asset warm-up is run before return-head training by default (`--cross-asset-warmup-steps 180000`, `--cross-asset-corr-window 20`, `--cross-asset-warmup-batch-size 8`) and saves a stage-boundary checkpoint (`*_cross_asset_warmup.pt`).
 Both portfolio heads use staged backbone fine-tuning: freeze for the first 500 steps, then unfreeze at 0.1× head LR.
 Phase-2 early stopping uses step-based patience (`--patience-steps`, default `200`) on the real-data validation monitor.
+Phase-2 training now applies a cold-start trim (`--state-warmup-steps`, default `8`) so loss/validation ignore initial cache-warmup timesteps.
+Phase-2 completion is gated by validation Sharpe/drawdown by default (`--phase2-gate-min-sharpe 0.0`, `--phase2-gate-max-drawdown 0.25`; disable with `--disable-phase2-gate`).
 Spec-aligned pretrain defaults are `PRETRAIN_STEPS=20000`, `PRETRAIN_BATCH=128`, `temperature=0.1`, and loss weights `lambda_contrastive=0.7` / `lambda_prediction=0.3` with `fda_loss_weight=0.5`. Override `PRETRAIN_BATCH` for smaller GPUs.
 Portfolio defaults remain tuned for 24GB GPUs (RTX 3090): `BATCH_PORT=4`, dedicated `WARMUP_BATCH=8`, and gradient checkpointing enabled for portfolio training.
 Enable pretrain compilation with `PRETRAIN_COMPILE=1` (example: `make pretrain PRETRAIN_COMPILE=1`).
