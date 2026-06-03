@@ -64,7 +64,7 @@ pub async fn poll_news_sentiment(store: &Arc<DataStore>) -> Result<()> {
 }
 
 /// Whole-word, case-insensitive ticker match in the article title.
-fn title_mentions_symbol(title: &str, symbol: &str) -> bool {
+pub(crate) fn title_mentions_symbol(title: &str, symbol: &str) -> bool {
     let title_upper = title.to_uppercase();
     let sym_upper = symbol.to_uppercase();
     let sym_bytes = sym_upper.as_bytes();

@@ -8,3 +8,4 @@ pub mod options;
 pub mod risk;
 pub mod rss;
 pub mod screener;
+pub mod text_embed;

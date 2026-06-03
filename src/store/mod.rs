@@ -276,6 +276,11 @@ pub struct DataStore {
     pub screener_membership: Arc<DashMap<String, f32>>,
     /// Per-symbol 24h decay-weighted news sentiment [-1.0, +1.0]. Updated every 5 min.
     pub news_sentiment: Arc<DashMap<String, f32>>,
+    /// Per-symbol Block-8 text embedding (harrier-oss 1024-d, decay-pooled over the
+    /// trailing news window then reduced to 64-d via the shared PCA basis — the
+    /// SAME pipeline the historical collector uses). Updated every 5 min by the
+    /// `text_embed` poller. Absent ⇒ assembler reads honest zeros.
+    pub text_embedding: Arc<DashMap<String, [f32; 64]>>,
 }
 
 impl DataStore {
@@ -331,6 +336,7 @@ impl DataStore {
             trending_symbols: Arc::new(RwLock::new(HashSet::new())),
             screener_membership: Arc::new(DashMap::new()),
             news_sentiment: Arc::new(DashMap::new()),
+            text_embedding: Arc::new(DashMap::new()),
         })
     }
 }

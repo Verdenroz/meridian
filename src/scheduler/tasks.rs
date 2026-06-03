@@ -1,6 +1,8 @@
 use crate::features::assembler::assemble_all;
 use crate::output::emit_row;
-use crate::poller::{analyst, insider, macro_fred, market, news_sentiment, options, risk, rss, screener};
+use crate::poller::{
+    analyst, insider, macro_fred, market, news_sentiment, options, risk, rss, screener, text_embed,
+};
 use crate::store::DataStore;
 use std::sync::Arc;
 use std::time::Duration;
@@ -32,6 +34,9 @@ pub async fn run_five_minute(store: Arc<DataStore>) {
         }
         if let Err(e) = news_sentiment::poll_news_sentiment(&store).await {
             tracing::warn!(err = %e, "news sentiment poll failed");
+        }
+        if let Err(e) = text_embed::poll_text_embeddings(&store).await {
+            tracing::warn!(err = %e, "block8 text embedding poll failed");
         }
     }
 }

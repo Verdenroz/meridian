@@ -55,7 +55,14 @@ fn assemble_one(
         risk_analytics: risk_block::assemble(&store.risk, symbol),
         event_state: event_block::assemble(&store.event_state, &store.fundamentals, &store.calendar, &store.news_sentiment, symbol, now),
         cross_asset_context: cross_asset::assemble(symbol, store, now),
-        text: [0.0f32; 64], // Phase 0 stub — wired to MarketReader in Phase 1
+        // Block 8: harrier-oss → PCA(64), produced by the `text_embed` poller
+        // (same embedder + basis as the historical collector). Absent ⇒ honest
+        // zeros (no in-window headlines yet, basis uncached, or embedder down).
+        text: store
+            .text_embedding
+            .get(symbol)
+            .map(|v| *v)
+            .unwrap_or([0.0f32; 64]),
         market: *market,
     }
 }
