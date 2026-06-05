@@ -14,6 +14,11 @@ class MeridianSpec:
 
     # ── Model dimensions ────────────────────────────────────────────────────
     d_model: int = 768
+    # Maximum universe size — the static, trained asset-axis dimension. The live
+    # active universe may be any subset of size 1..n_assets; padded slots are
+    # masked out of attention and the portfolio softmax (dynamic universe). To
+    # grow the cap you must retrain (it is a trained tensor dimension) and widen
+    # the Rust portfolio-vector assembly to 2*n_assets+1.
     n_assets: int = 100
     n_regimes: int = 4
     regime_emb_dim: int = 64
@@ -59,7 +64,6 @@ class MeridianSpec:
     per_asset_continuous_dim: int = 120
     per_asset_text_dim: int = 64
     market_feature_dim: int = 96
-    portfolio_state_dim: int = 201
     calendar_dim: int = 20
 
     # ── Regime detector ─────────────────────────────────────────────────────
@@ -99,6 +103,12 @@ class MeridianSpec:
     def per_asset_feature_dim(self) -> int:
         return self.per_asset_continuous_dim + self.per_asset_text_dim
 
+    @property
+    def portfolio_state_dim(self) -> int:
+        # 2 × max universe size (current weight + unrealized P&L per slot) + 1
+        # (log-scaled NAV). Derived from n_assets so the cap lives in one place.
+        return 2 * self.n_assets + 1
+
     def validate(self) -> None:
         assert self.architecture_version == "v4.0", "spec is pinned to v4.0"
         assert self.data_interval == "1d", "v4 requires daily-aligned training data"
@@ -125,7 +135,7 @@ class MeridianSpec:
         assert self.per_asset_text_dim == 64
         assert self.per_asset_feature_dim == 184
         assert self.market_feature_dim == 96
-        assert self.portfolio_state_dim == 201
+        assert self.portfolio_state_dim == 2 * self.n_assets + 1
         assert self.cascade_levels == 3
         assert len(self.cascade_dims) == self.cascade_levels
         assert len(self.cascade_strides) == self.cascade_levels

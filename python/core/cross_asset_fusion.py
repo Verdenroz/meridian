@@ -120,6 +120,7 @@ class CrossAssetFusion(nn.Module):
         episodic_tokens: torch.Tensor,   # (B, k, D)  — k episodic retrievals
         sector_ids: torch.Tensor,        # (N_assets,) int64  — GICS sector index per asset
         precomputed_bias: torch.Tensor | None = None,  # (N_total, N_total) — cached bias
+        active_mask: torch.Tensor | None = None,  # (N_assets,) bool — True=live, False=padded
     ) -> tuple[torch.Tensor, torch.Tensor]:
         # Concatenate all tokens: (B, N_assets + 1 + 1 + k, D)
         market_exp    = market_token.unsqueeze(1)      # (B, 1, D)
@@ -136,6 +137,17 @@ class CrossAssetFusion(nn.Module):
             extra_ids = torch.full((n_extras,), -1, dtype=torch.long, device=sector_ids.device)
             full_ids = torch.cat([sector_ids, extra_ids], dim=0)  # (N_total,)
             bias = self.sector_bias.bias_matrix(full_ids, N_total)  # (N_total, N_total)
+
+        # Dynamic universe: exclude padded asset slots as attention *keys* so no
+        # live token ever attends to a padded slot. The market/portfolio/episodic
+        # tokens stay valid keys, so every query row keeps a finite entry (no
+        # all-masked row → no softmax NaN). Padded query rows are still computed
+        # but their outputs are discarded by the masked portfolio softmax.
+        if active_mask is not None:
+            n_assets = asset_tokens.shape[1]
+            bias = bias.clone()
+            dead = ~active_mask  # (N_assets,)
+            bias[:, :n_assets].masked_fill_(dead.unsqueeze(0), float("-inf"))
 
         for layer in self.layers:
             tokens = layer(tokens, bias)

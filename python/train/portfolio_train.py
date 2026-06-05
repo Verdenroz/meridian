@@ -900,6 +900,16 @@ class PortfolioTrainConfig:
     patience_min_delta: float = 1e-3  # min val-loss improvement to reset patience counter
     patience_grace_steps: int = 0
     state_warmup_steps: int = 8  # exclude initial cold-state steps from loss
+
+    # ── Dynamic universe (fixed max-N + masking) ──────────────────────────────
+    # Randomly restrict each step to a live subset of the asset axis so the model
+    # generalizes to arbitrary user-chosen universes of size 1..N at inference.
+    # Masked slots get weight 0 and drop out of return/turnover/P&L automatically.
+    # Eval/backtest always run the full universe (mask=None) for honest metrics.
+    dynamic_universe: bool = True
+    dynamic_universe_prob: float = 0.5   # fraction of steps drawing a random subset
+    dynamic_universe_min: int = 10       # minimum live assets when subsetting
+
     enforce_phase2_gate: bool = True
     phase2_gate_min_sharpe: float = 0.0
     phase2_gate_max_drawdown: float = 0.25
@@ -1601,6 +1611,22 @@ class PortfolioTrainer:
 
         return total_fused_sum / float(T)  # (B, N, D)
 
+    def _sample_active_mask(
+        self, n: int, cfg: "PortfolioTrainConfig"
+    ) -> torch.Tensor | None:
+        """Draw a random live-asset mask for one training step, or None to use the
+        full universe. Returning None on a fraction of steps keeps the full-N
+        distribution (which eval/backtest use) well represented during training."""
+        if not cfg.dynamic_universe:
+            return None
+        if torch.rand(()).item() >= cfg.dynamic_universe_prob:
+            return None
+        lo = max(1, min(cfg.dynamic_universe_min, n))
+        live = int(torch.randint(lo, n + 1, ()).item())
+        mask = torch.zeros(n, dtype=torch.bool)
+        mask[torch.randperm(n)[:live]] = True
+        return mask
+
     def _forward(
         self,
         features: torch.Tensor,  # (B, N, T, F=280)
@@ -1608,6 +1634,7 @@ class PortfolioTrainer:
         cfg: "PortfolioTrainConfig | None" = None,
         collect_fused: bool = False,
         sector_ids: torch.Tensor | None = None,
+        active_mask: torch.Tensor | None = None,  # (N,) bool — True=live, False=padded
     ) -> tuple[torch.Tensor, torch.Tensor | None, torch.Tensor | None]:
         """
         Run the full model forward pass over a T-step sequence.
@@ -1673,9 +1700,28 @@ class PortfolioTrainer:
                 "portfolio_state_dim must equal 2*n_assets + 1, got "
                 f"{self.spec.portfolio_state_dim} for n_assets={n_full}"
             )
+        # Dynamic universe: an optional (N,) bool mask marks which asset slots are
+        # live this batch. Padded slots receive weight 0 from the heads, so they
+        # drop out of portfolio return / turnover / P&L automatically; we only
+        # need to (a) pass the mask through fusion+heads and (b) seed the initial
+        # equal-weight over the live set rather than all N.
+        if active_mask is not None:
+            if active_mask.shape != (N,):
+                raise ValueError(
+                    f"active_mask must be rank-1 length N={N}, got {tuple(active_mask.shape)}"
+                )
+            active_mask = active_mask.to(self.device, dtype=torch.bool)
+            n_live = int(active_mask.sum())
+            if n_live == 0:
+                raise ValueError("active_mask selects zero live assets")
+
         # Spec §6.6 unrealized P&L per asset = w_{t-1} · (exp(r_t)−1).
         prev_weight_padded = torch.zeros(B, n_full, device=self.device)
-        prev_weight_padded[:, :N] = 1.0 / float(N)
+        if active_mask is None:
+            prev_weight_padded[:, :N] = 1.0 / float(N)
+        else:
+            init_w = active_mask.to(prev_weight_padded.dtype) / float(active_mask.sum())
+            prev_weight_padded[:, :N] = init_w.unsqueeze(0)
 
         # Pre-compute sector bias (constant across all timesteps)
         with torch.no_grad():
@@ -1752,15 +1798,16 @@ class PortfolioTrainer:
                     episodic,
                     sector_ids,
                     precomputed_bias=precomputed_bias,
+                    active_mask=active_mask,
                 )
 
                 if collect_fused:
                     f_list.append(fused)
 
                 if head == "return":
-                    w_t = self.head_r(fused)
+                    w_t = self.head_r(fused, active_mask=active_mask)
                 else:
-                    w_t = self.head_s(fused)
+                    w_t = self.head_s(fused, active_mask=active_mask)
                 w_list.append(w_t)
 
                 if head == "return":
@@ -2367,6 +2414,10 @@ class PortfolioTrainer:
 
             log_parts: dict[str, float] = {}
 
+            # Dynamic universe: one random live-asset subset per step (uniform
+            # across the batch / PTA views / micro-groups), or full universe.
+            active_mask = self._sample_active_mask(features.shape[1], cfg)
+
             for g in range(num_groups):
                 s = g * mbs
                 e = min(s + mbs, B_eff)
@@ -2379,7 +2430,9 @@ class PortfolioTrainer:
                 with torch.autocast(
                     "cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"
                 ):
-                    weights, pred_vol, _ = self._forward(feats_g, cfg.head, cfg)
+                    weights, pred_vol, _ = self._forward(
+                        feats_g, cfg.head, cfg, active_mask=active_mask
+                    )
                     loss_weights, loss_returns, loss_pred_vol = self._trim_cold_start_steps(
                         weights,
                         rets_g,

@@ -26,6 +26,19 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
+def _mask_logits(
+    logits: torch.Tensor,                 # (B, N)
+    active_mask: torch.Tensor | None,     # (N,) or (B, N) bool — True=live
+) -> torch.Tensor:
+    """Set padded-slot logits to -inf so the softmax assigns them zero weight and
+    renormalizes over the live universe. No-op when ``active_mask`` is None."""
+    if active_mask is None:
+        return logits
+    if active_mask.dim() == 1:
+        active_mask = active_mask.unsqueeze(0)            # (1, N) → broadcasts
+    return logits.masked_fill(~active_mask, float("-inf"))
+
+
 class MeridianR(nn.Module):
     """Return-maximizing portfolio head.
 
@@ -46,15 +59,23 @@ class MeridianR(nn.Module):
             nn.Linear(hidden_dim, 1, bias=False),
         )
 
-    def forward(self, asset_tokens: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        asset_tokens: torch.Tensor,
+        active_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """
         Args:
             asset_tokens: (B, N_assets, D) — fused per-asset representations
+            active_mask:  (N_assets,) or (B, N_assets) bool — True=live slot.
+                          Padded slots get weight 0; weights renormalize over the
+                          live set.
 
         Returns:
             weights: (B, N_assets) — allocation weights, sum to 1, all ≥ 0
         """
         logits = self.score(asset_tokens).squeeze(-1)  # (B, N)
+        logits = _mask_logits(logits, active_mask)
         return F.softmax(logits, dim=-1)               # (B, N)
 
 
@@ -84,16 +105,22 @@ class MeridianS(nn.Module):
     def temperature(self) -> torch.Tensor:
         return self.log_temperature.exp().clamp(min=0.1, max=10.0)
 
-    def forward(self, asset_tokens: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        asset_tokens: torch.Tensor,
+        active_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
         """
         Args:
             asset_tokens: (B, N_assets, D)
+            active_mask:  (N_assets,) or (B, N_assets) bool — True=live slot.
 
         Returns:
             weights: (B, N_assets) — temperature-scaled softmax allocation
         """
         logits = self.score(asset_tokens).squeeze(-1)  # (B, N)
-        return F.softmax(logits / self.temperature, dim=-1)
+        logits = _mask_logits(logits / self.temperature, active_mask)
+        return F.softmax(logits, dim=-1)
 
 
 class PortfolioVolHead(nn.Module):

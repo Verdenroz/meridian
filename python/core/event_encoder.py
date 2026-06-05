@@ -38,7 +38,7 @@ class EventEncoder(nn.Module):
     Architecture:
       type_emb:      Embedding(18, 64)
       magnitude_proj: Linear(1, 64)
-      asset_emb:     Embedding(100, 64)
+      asset_emb:     Embedding(n_assets, 64)   # n_assets = max universe size; slot-indexed
       out_proj:      Linear(192, D)
       decay:         token *= exp(-λ × minutes_since_event)
 

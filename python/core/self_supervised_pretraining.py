@@ -1576,7 +1576,9 @@ class SelfSupervisedPretrainer:
         market_feats = features[..., 184:]              # (B, T, 96)
 
         n_assets = 1
-        portfolio_s = torch.zeros(B, 201, device=self.device)
+        # Portfolio state is zeros during pretraining; width must match the
+        # InputProjection's portfolio_proj (= 2 * max-universe + 1).
+        portfolio_s = torch.zeros(B, 2 * self.n_assets + 1, device=self.device)
         portfolio_summary = torch.zeros(B, 3, device=self.device)
         calendar = torch.zeros(B, 20, device=self.device)
         states = self.backbone.init_state(B, n_assets, self.device)
