@@ -1,8 +1,11 @@
 //! Local embedder client for Block 8 text features.
 //!
 //! Hits an OpenAI-compatible `/v1/embeddings` endpoint (defaulting to the
-//! llama-swap server at `127.0.0.1:12434`) using `harrier-oss:0.6b` (Microsoft
-//! multilingual embedding, 1024-dim, 32K context, last-token pooling). Snippet
+//! llama-swap server at `127.0.0.1:12434`, overridable via
+//! `MERIDIAN_EMBED_ENDPOINT` / `MERIDIAN_EMBED_MODEL`) using `harrier-oss:0.6b`
+//! (Microsoft multilingual embedding, 1024-dim, 32K context, last-token
+//! pooling). The override lets `make collect` point at a CPU-pinned llama-server
+//! so Block-8 embedding never touches the Thunderbolt eGPU. Snippet
 //! outputs are cached on disk by `sha256(text)` so re-collection is free after
 //! the first pass.
 //!
@@ -55,8 +58,11 @@ pub struct EmbedderConfig {
 impl Default for EmbedderConfig {
     fn default() -> Self {
         Self {
-            endpoint: "http://127.0.0.1:12434/v1/embeddings".to_string(),
-            model: "harrier-oss:0.6b".to_string(),
+            endpoint: env_string(
+                "MERIDIAN_EMBED_ENDPOINT",
+                "http://127.0.0.1:12434/v1/embeddings",
+            ),
+            model: env_string("MERIDIAN_EMBED_MODEL", "harrier-oss:0.6b"),
             cache_dir: PathBuf::from("data/embed_cache"),
         }
     }
@@ -452,6 +458,14 @@ fn env_u64(key: &str, default: u64) -> u64 {
 
 fn env_u32(key: &str, default: u32) -> u32 {
     std::env::var(key).ok().and_then(|v| v.trim().parse().ok()).unwrap_or(default)
+}
+
+fn env_string(key: &str, default: &str) -> String {
+    std::env::var(key)
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
+        .unwrap_or_else(|| default.to_string())
 }
 
 /// Truncate to at most `max` characters on a char boundary (no-op if shorter).
