@@ -13,8 +13,10 @@ pub fn assemble_all(store: &Arc<DataStore>) -> Vec<FeatureRow> {
     let now = Utc::now();
     let market = market_wide::assemble_market_vector(store, now);
 
+    // Emit only warmed-up symbols: the live active universe == ready set, so a
+    // freshly added symbol never contributes a cold-start (garbage z-score) row.
     store
-        .symbols
+        .ready_snapshot()
         .iter()
         .map(|sym| assemble_one(sym, store, now, &market))
         .collect()

@@ -126,7 +126,7 @@ async fn live_mode(args: args::LiveArgs) -> anyhow::Result<()> {
     );
 
     // Spawn all scheduler tasks (they run indefinitely)
-    scheduler::spawn_all(store, args.stats_path);
+    scheduler::spawn_all(store, args.stats_path, args.symbols_file);
 
     // Block forever — the process runs until SIGINT/SIGTERM
     std::future::pending::<()>().await;
@@ -141,17 +141,9 @@ fn load_symbols(path: &std::path::Path) -> anyhow::Result<Vec<String>> {
     }
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("reading symbols file {}", path.display()))?;
-    // Strip inline comments (`AAPL  # Apple ...`) and full-line comments,
-    // mirroring the Python loader (`line.split("#")[0].strip()`) so the Rust
-    // live/fit-text-pca paths agree with the Python collection driver on the
-    // universe.
-    let symbols: Vec<String> = content
-        .lines()
-        .map(|line| line.split('#').next().unwrap_or("").trim())
-        .filter(|s| !s.is_empty())
-        .take(100) // cap at 100
-        .map(String::from)
-        .collect();
+    // Shared parser (strips `#` comments, dedups, caps at MAX_ASSETS) so the
+    // binary loader and the live hot-reload watcher agree on the universe.
+    let symbols = store::parse_symbols(&content);
     if symbols.is_empty() {
         anyhow::bail!("symbols file {} is empty", path.display());
     }
