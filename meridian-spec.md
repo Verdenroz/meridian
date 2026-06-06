@@ -17,7 +17,7 @@
    - 6.3 [Market-Wide Feature Assembly (96 dims)](#63-market-wide-feature-assembly-96-dims)
    - 6.4 [Event Stream Architecture](#64-event-stream-architecture)
    - 6.5 [Text Corpus Pipeline](#65-text-corpus-pipeline)
-   - 6.6 [Portfolio State Vector (201 dims)](#66-portfolio-state-vector-201-dims)
+   - 6.6 [Portfolio State Vector (2·n_assets + 1 dims)](#66-portfolio-state-vector-2n_assets--1-dims)
    - 6.7 [Financial Calendar Embedding (20 dims)](#67-financial-calendar-embedding-20-dims)
 7. [Model Components](#7-model-components)
    - 7.1 [Input Projection Layer with Variable Selection](#71-input-projection-layer-with-variable-selection)
@@ -29,7 +29,7 @@
    - 7.7 [Financial Episodic Memory](#77-financial-episodic-memory)
    - 7.8 [Portfolio Output Heads](#78-portfolio-output-heads)
    - 7.9 [Auxiliary Prediction Head](#79-auxiliary-prediction-head)
-   - 7.10 [MarketReader Text Encoder](#710-marketreader-text-encoder)
+   - 7.10 [MarketReader Text Encoder (distilled, Pi-native)](#710-marketreader-text-encoder-distilled-pi-native)
 8. [Financial Diffusion Augmentation (FDA)](#8-financial-diffusion-augmentation-fda)
    - 8.1 [Motivation & Scope](#81-motivation--scope)
    - 8.2 [FDA Architecture](#82-fda-architecture)
@@ -77,7 +77,7 @@
 
 ## 1. Executive Summary
 
-Meridian is a CPU-native neural network architecture designed to manage a portfolio of up to 100 US-listed assets (equities, ETFs, crypto) 24/7 on a Raspberry Pi 5. It ingests every available data stream from finance-query — price, volume, 42 technical indicators, 30+ RSS/news feeds, full options chains, EDGAR filings, XBRL fundamentals, earnings transcripts, analyst ratings, insider transactions, institutional ownership, macro series, yield curves, sector/industry data, Fear & Greed, world indices, trending tickers, and crypto market data — producing allocation weights every minute through a shared backbone with two output heads.
+Meridian is a CPU-native neural network architecture designed to manage a portfolio of US-listed assets (equities, ETFs, crypto) 24/7 on a Raspberry Pi 5. The tradable universe is **user-controlled and dynamic**: a fixed maximum of `n_assets` slots (default 100) is the static, trained asset-axis dimension, and the live universe may be any subset of size 1..`n_assets`. Users add/remove symbols by editing `symbols.txt` (hot-reloaded live); padded slots are masked out of cross-asset attention and the portfolio softmax, and the model is trained on random universe subsets so it generalizes to arbitrary membership. It ingests every available data stream from finance-query — price, volume, 42 technical indicators, 30+ RSS/news feeds, full options chains, EDGAR filings, XBRL fundamentals, earnings transcripts, analyst ratings, insider transactions, institutional ownership, macro series, yield curves, sector/industry data, Fear & Greed, world indices, trending tickers, and crypto market data — producing allocation weights every minute through a shared backbone with two output heads.
 
 **v4.0 addresses a fundamental constraint identified during v3.0 implementation:** training and inference must use the same data source (finance-query) to avoid distribution mismatch. This eliminates paid minute-bar providers (Polygon.io, FirstRate Data) as training data sources. With finance-query's free tier, the available training corpus is approximately **1,695 daily bars per equity asset** — roughly 290× less than the spec's original ~490K minute-bar assumption. At a ~95M-parameter target, this corresponds to ~56,000:1 in the 100-asset sequence view (1,695 joint samples) and ~560:1 in the asset-day view (169,500 observations), which drives early saturation and limits OOS Sharpe to approximately 0.57 in the current baseline.
 
@@ -177,7 +177,7 @@ Contributions 1–9 are carried forward from v3.0. v4.0 adds four new contributi
 6. **Financial Calendar Embedding** — market-specific temporal encoding
 7. **Ternary-Native Architecture with Precision Highway** — FP16 state, ternary weights
 8. **Multi-Modal Event Fusion** — discrete financial events encoded as typed event tokens
-9. **Hierarchical Text Aggregation** — MarketReader three-tier processing pipeline
+9. **Distilled Pi-Native MarketReader** — a 3.5M-param on-device text encoder (deep Block-8 embeddings + sentiment) distilled from harrier-oss→PCA(64) and FinBERT teachers, so the whole stack fits on a Pi 5 with no external model servers
 
 **New in v4.0:**
 
@@ -592,21 +592,24 @@ Each feature represents a decayed signal from the most recent event of that type
 
 #### Block 8: Text Embedding (64 features)
 
-From MarketReader (Section 7.10).
+The 64-dim Block-8 vector is produced by the **MarketReader deep head**
+(Section 7.10), the Pi-native on-device encoder.
 
-**Embedding backend (collection / historical path).** The historical feature
-builder embeds each text snippet (EDGAR primary-document text ∪ FNSPID news)
-with `microsoft/harrier-oss-v1-0.6b` — a qwen3-based multilingual embedder,
-**1024-dim**, 32K-token context, last-token pooling — served locally over an
-OpenAI-compatible `/v1/embeddings` endpoint. Snippets in the trailing 90-day
-window are pooled with `weight = exp(-Δdays / 30)` and L2-normalized.
-
-harrier-oss is **not** a Matryoshka model, so the 1024-dim pooled vector cannot
-be truncated to the 64-dim block width. Instead it is reduced by a learned
-**PCA(64)** basis (NIPALS, fit once over the text corpus and persisted to disk;
-see `src/historical/text_pca.rs`), then re-normalized onto the unit sphere. This
-keeps Block 8 at its 64-dim budget while preserving variance-carrying
-directions, so the per-asset vector stays **184 effective dims**.
+**Distillation teacher (training-time only).** The deep head is distilled against
+`microsoft/harrier-oss-v1-0.6b` — a qwen3-based embedder, **1024-dim**, 32K-token
+context, last-token pooling, served locally over an OpenAI-compatible
+`/v1/embeddings` endpoint. Each text snippet (EDGAR primary-document text ∪ FNSPID
+news) in the trailing 90-day window is embedded, pooled with
+`weight = exp(-Δdays / 30)`, and L2-normalized. Each input is capped to ~80K chars
+(under harrier's 32K-token context) and the embedder character-budgets each
+request (`src/historical/embedder.rs`) so large filings never OOM the CUDA decode
+— the cause of the intermittent HTTP 500s in early collection runs. harrier-oss is **not** Matryoshka,
+so the 1024-dim pooled vector is reduced by a learned **PCA(64)** basis (NIPALS,
+fit once over the corpus and persisted; `src/historical/text_pca.rs`) and
+re-normalized — these PCA(64) vectors are the deep-head regression targets. This
+keeps Block 8 at its 64-dim budget, so the per-asset vector stays **184 effective
+dims**. (Until the student is trained, the collector uses these teacher PCA(64)
+vectors directly — see the §7.10 implementation-status note.)
 
 **Total per-asset features: 10 + 42 + 12 + 30 + 8 + 10 + 8 = 120 continuous + 64 text = 184 effective dims.**
 
@@ -724,7 +727,7 @@ Sector order: Tech(0), Financials(1), ConsumerDisc(2), CommServices(3), Healthca
 
 | Feature | Computation | Dims |
 |---|---|---|
-| Aggregate news sentiment (1h) | Mean MarketReader sentiment across all articles in last hour | 1 |
+| Aggregate news sentiment (1h) | Mean FinBERT sentiment across all articles in last hour | 1 |
 | Aggregate news sentiment (24h) | Same, 24h window | 1 |
 | News volume (1h) | Count of articles in last hour, log-scaled | 1 |
 | News volume (24h) | Same, 24h | 1 |
@@ -766,19 +769,27 @@ Unchanged from v3.0. 18 event categories, typed event tokens with learned embedd
 
 ### 6.5 Text Corpus Pipeline
 
-Unchanged from v3.0. MarketReader processes 31 RSS feeds at three tiers (headline/summary/deep). See Section 7.10 for the encoder architecture.
+The collector polls 31 RSS feeds. Each in-window headline (∪ EDGAR primary-document text in the historical path) feeds the MarketReader encoder (Section 7.10): the deep head decay-pools them into the 64-dim Block 8 vector and the headline head produces the sentiment slots. MarketReader's deep/sentiment heads are distilled from the harrier-oss→PCA(64) and FinBERT teachers respectively.
 
 ---
 
-### 6.6 Portfolio State Vector (201 dims)
+### 6.6 Portfolio State Vector (2·n_assets + 1 dims)
 
-Unchanged:
+The portfolio vector is sized to the **maximum** universe (`n_assets` slots), with
+inactive slots zero-filled — so its width is `2·n_assets + 1` (default
+2·100 + 1 = **201**). Padded slots carry zero weight and zero P&L, so they
+contribute nothing to portfolio return, turnover, or P&L.
 
 | Feature | Dims |
 |---|---|
-| Current weight per asset | 100 |
-| Unrealized P&L per asset (%) | 100 |
+| Current weight per asset (zero for inactive slots) | n_assets (100) |
+| Unrealized P&L per asset (%) (zero for inactive slots) | n_assets (100) |
 | Total portfolio value (log-scaled) | 1 |
+
+> The width is derived from one place (`MeridianSpec.n_assets`, see Appendix C):
+> `portfolio_state_dim = 2·n_assets + 1`. Growing the cap is a retrain (it is a
+> trained `portfolio_proj` input dimension) and requires widening the Rust
+> portfolio-vector assembly to match.
 
 ---
 
@@ -949,6 +960,14 @@ Unchanged from v3.0. 110+ token multi-head attention over all assets + market + 
 
 **v4.0 note:** Because SWA at block 7 feeds precise short-range state into this module, cross-asset fusion now operates on representations that include exact recent event context, not just recurrently compressed approximations. This is expected to improve the cross-asset correlation objective.
 
+**Dynamic-universe masking.** Fusion accepts an `active_mask` `(n_assets,)`. Padded
+asset slots are excluded as attention *keys* (their columns in the additive bias
+are set to −∞), so no live token ever attends to a padded slot; the always-present
+market/portfolio/episodic tokens keep every query row finite (no softmax NaN). The
+sector-bias prior is sector-indexed (11×11), already universe-size-agnostic.
+Verified: perturbing padded-slot contents leaves live outputs bit-identical
+(`python/tests/test_dynamic_universe.py`).
+
 **Parameters:** ~11.8M.
 
 ---
@@ -969,6 +988,14 @@ Unchanged from v3.0. Two heads (return-maximizing Meridian-R, Sharpe-maximizing 
 
 **v4.0 note:** Portfolio-Theoretic Augmentation (Section 11.4) is applied during Phase 2 head training. The heads themselves are architecturally identical; PTA operates at the data level.
 
+**Dynamic-universe masking.** Both heads accept an `active_mask`: inactive slots
+get logit −∞ before the (temperature-scaled) softmax, so they receive exactly zero
+weight and the allocation renormalizes over the live universe (Σ wᵢ = 1 over active
+slots). With `mask=None` the heads behave exactly as v3.0. During Phase 2, each
+training step draws a random live subset (`dynamic_universe_*` in
+`PortfolioTrainConfig`) so the heads learn to allocate over arbitrary user-chosen
+universes; eval/backtest always run the full universe for honest metrics.
+
 **Parameters:** ~394K (197K per active head).
 
 ---
@@ -981,32 +1008,62 @@ Unchanged from v3.0. Predicts next-step return and volatility for computing surp
 
 ---
 
-### 7.10 MarketReader Text Encoder
+### 7.10 MarketReader Text Encoder (distilled, Pi-native)
 
-Unchanged from v3.0.
+The on-device text encoder is the custom **3.5M-parameter MarketReader** (BPE-4096
+tokenizer + 4 GDN blocks, D=256). It is the *only* text model deployed to the Pi 5
+and runs in-process within the inference footprint — no llama-swap, no Docker, no
+external embedding/sentiment servers. This is a hard requirement: the entire stack
+must fit on a Pi 5 (CPU-only, 8 GB).
 
 ```
-Shared components:
-  BPE Tokenizer: 4,096 vocab
-  Token Embedding: 4,096 × 256
-  Position Embedding: 512 × 256
+Shared backbone:
+  BPE Tokenizer: 4,096 vocab (financial-domain pre-tokenization)
+  Token Embedding: 4,096 × 256   Position Embedding: 512 × 256
   4 GDN Blocks: D=256, n_heads=4, d_head=32, d_v=64
 
 Tier-specific output heads:
   Headline:  attention_pool → Linear(256 → 4)   → 4-dim sentiment
   Summary:   attention_pool → Linear(256 → 32)  → 32-dim topic+sentiment
-  Deep:      attention_pool → Linear(256 → 64)  → 64-dim full embedding
+  Deep:      attention_pool → Linear(256 → 64)  → 64-dim Block-8 embedding
 
-Total parameters: ~3.5M (INT8 quantized: ~3.5 MB)
+Total parameters: ~3.5M (INT8 quantized via Phase-4 QAT: ~3.5 MB)
+Scaffold: python/market_data/marketreader.py ; tokenizer: python/train/train_tokenizer.py
 ```
 
-**Implementation note — Block 8 deep embedding.** The 64-dim "Deep" full
-embedding is currently produced by an off-the-shelf backend rather than the
-custom head above: snippets are embedded with `microsoft/harrier-oss-v1-0.6b`
-(1024-dim, non-Matryoshka) and reduced to 64 dims by a learned PCA basis
-(§6.2 Block 8). Because harrier-oss has no nested-prefix (Matryoshka) structure,
-the 1024-dim output is projected by PCA — never truncated. The 4-dim headline
-and 32-dim summary sentiment tiers remain as specified.
+**How it is trained — distillation from two teachers (training-time only).** The
+student is distilled offline (GPU box), never re-deriving the teachers at
+inference:
+
+- **Deep head (Block 8, 64-dim)** is distilled against the
+  `microsoft/harrier-oss-v1-0.6b` teacher (qwen3-based, 596M, 1024-dim,
+  non-Matryoshka): per-symbol in-window headlines (∪ EDGAR primary-doc text) are
+  embedded, decay-pooled with `weight = exp(-Δdays/30)`, L2-normalized, then
+  reduced by a learned **PCA(64)** basis (NIPALS; `src/historical/text_pca.rs`).
+  Those PCA(64) vectors are the deep-head regression targets (cosine + MSE).
+- **Headline head (sentiment)** is distilled against **FinBERT**
+  (`ProsusAI/finbert`, signed `P(pos)−P(neg)`; `src/sentiment/mod.rs`).
+
+Once trained, historical Block-8/sentiment features are **regenerated with the
+student** so training features equal what the Pi produces (train/inference
+parity). The teachers (harrier-oss via llama-swap; FinBERT via the
+`services/finbert` sidecar) are used only as label generators and are never
+deployed. If text is unavailable at inference, Block 8 falls back to honest
+zeros — never a fabricated or stale signal (live twins:
+`src/poller/text_embed.rs`, `src/poller/news_sentiment.rs`).
+
+> **Implementation status (2026-06):** the MarketReader scaffold, tokenizer
+> trainer, both teachers, and the **distillation trainer**
+> (`python/train/train_marketreader.py` — `dump-corpus` / `build-targets` /
+> `distill` / `smoke`, wired as `make marketreader`) now exist; the distill loop
+> is smoke-tested end-to-end. Remaining: run `build-targets`/`distill` on the real
+> corpus (needs the eGPU + teachers up), **feature re-anchoring** to the student,
+> and the **Rust on-device forward pass**. Until those land, the collector uses
+> the teachers directly (harrier-oss→PCA(64) + FinBERT). The measured scaffold is
+> ~2.0M params (the original "~3.5M" was an overestimate — even more comfortably
+> Pi-native). Distillation quality of the student vs a 596M teacher is unproven —
+> the teacher path stays available for A/B until the student passes a held-out
+> deep-head cosine threshold.
 
 ---
 
@@ -1817,16 +1874,20 @@ The SWA KV caches add ~37.7 MB to static allocation — a meaningful increase bu
 - [ ] Implement EventEncoder
 - [ ] Implement FMoE with external regime routing
 - [ ] Implement temporal cascade
-- [ ] Implement cross-asset attention with sector bias
+- [x] Implement cross-asset attention with sector bias **+ dynamic-universe key-padding mask** (`python/core/cross_asset_fusion.py`)
 - [ ] Implement VSN with regime-conditioned gating
-- [ ] Train MarketReader text encoder (3-tier)
+- [x] **[NEW] Distillation trainer `python/train/train_marketreader.py` (dump-corpus / build-targets / distill / smoke) wired as `make marketreader`; distill loop smoke-tested**
+- [ ] **[NEW] Run `make marketreader` on the real corpus (needs eGPU + teachers): harrier-oss→PCA(64) deep + FinBERT sentiment targets → distilled student checkpoint**
+- [ ] **[NEW] Re-anchor historical Block-8 + sentiment features to the student**
+- [ ] **[NEW] Port MarketReader forward to Rust (Candle/ONNX) — Pi-native, replaces the HTTP teachers**
 - [ ] **[MODIFIED] Implement TCP (temporal contrastive) loss**
 - [ ] **[MODIFIED] Run Phase 1 TCP pretraining on real + FDA data (mixed 1.0/0.5 weight)**
 - [ ] Validate: contrastive accuracy > 0.60, regime cluster separation visible
 
 ### Phase 2: Portfolio Training (Weeks 13–17)
 
-- [ ] Implement portfolio output heads with leverage normalization
+- [x] Implement portfolio output heads **+ dynamic-universe active-mask renormalization** (`python/optimization/portfolio_heads.py`)
+- [x] **[NEW] Dynamic-universe random-subset training (mask sampling in `portfolio_train.py`; `MeridianSpec.portfolio_state_dim` derived)**
 - [ ] **[MODIFIED] Implement DSR loss + PTA augmentation pipeline**
 - [ ] **[NEW] Implement sector-permutation, sign-flip, vol-scale transforms**
 - [ ] Run Phase 2a cross-asset correlation pretraining (backbone fine-tune)
@@ -1858,6 +1919,7 @@ The SWA KV caches add ~37.7 MB to static allocation — a meaningful increase bu
 - [ ] Port full inference pipeline to Pi 5
 - [ ] Run 10M+ step state drift test
 - [ ] **[NEW] Run SWA cache overflow test (ensure W=64 eviction works correctly)**
+- [x] **[NEW] Live universe control: hot-reload `symbols.txt` (mtime watcher in `src/scheduler/watch.rs`) → warm up added symbols (price-history backfill in `src/scheduler/warmup.rs`; rolling-stat z-scores warm live), evict removed + free state, re-subscribe PriceStream on change (watch channel), emit only warmed symbols (`src/store/mod.rs`). Remaining: deeper rolling-stat backfill + sector/mktcap prefetch on add.**
 - [ ] Implement paper trading engine
 - [ ] Deploy to Pi 5 with monitoring dashboard
 - [ ] 72-hour continuous operation stress test
@@ -2087,6 +2149,8 @@ State drift, catastrophic forgetting, regime miscalibration, overfitting, data p
 | Parameter | Value | Notes |
 |---|---|---|
 | D (model dim) | 768 | Main backbone hidden size |
+| Max universe size (`n_assets`) | 100 | Static trained asset-axis cap; live universe = any subset 1..n_assets |
+| Portfolio state dim | 2·n_assets + 1 (=201) | Derived from `n_assets` (`MeridianSpec.portfolio_state_dim`) |
 | Per-asset input dim | 184 | 120 continuous + 64 text |
 | Market-wide input dim | 96 | |
 | RA-GDN blocks | 8 | Core temporal layers |
@@ -2139,6 +2203,8 @@ State drift, catastrophic forgetting, regime miscalibration, overfitting, data p
 | PTA permutations per batch | 4 | Within-sector permutations |
 | PTA sign flip probability | 0.5 | |
 | PTA vol scale values | 0.8, 0.9, 1.1, 1.2 | |
+| Dynamic-universe subset prob | 0.5 | Fraction of Phase-2 steps drawing a random live subset |
+| Dynamic-universe min live | 10 | Floor on live-asset count when subsetting |
 | Phase 2 early stop patience | 200 steps | Real-data-only val DSR |
 
 ### Backtesting
