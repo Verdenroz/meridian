@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from typing import NamedTuple
 
+from train.spec import DEFAULT_SPEC
+
 
 # ── Per-asset feature blocks ─────────────────────────────────────────────────
 
@@ -81,7 +83,9 @@ PER_ASSET_TEXT_DIM: int       = 64    # block 8 (MarketReader embedding)
 PER_ASSET_FEATURE_DIM: int    = PER_ASSET_CONTINUOUS_DIM + PER_ASSET_TEXT_DIM  # 184
 
 MARKET_FEATURE_DIM: int    = 96
-PORTFOLIO_STATE_DIM: int   = 201
+# Single source of truth = MeridianSpec.n_assets (the max universe cap). Raising
+# the cap (and retraining) only requires changing n_assets; this follows.
+PORTFOLIO_STATE_DIM: int   = DEFAULT_SPEC.portfolio_state_dim  # 2*n_assets + 1 = 201
 CALENDAR_FEATURE_DIM: int  = 20
 
 # ── Canonical feature indices (shard row layout) ─────────────────────────────
