@@ -269,7 +269,18 @@ pub struct DataStore {
     pub market_summary: Arc<RwLock<CachedValue<MarketSummaryData>>>,
 
     pub rolling_stats: Arc<RollingStatsStore>,
-    pub symbols: Vec<String>,
+    /// The tradable universe — user-controlled and mutable at runtime via the
+    /// `symbols.txt` hot-reload watcher (`scheduler::watch`). Insertion order is
+    /// preserved; survivors keep their relative order across edits.
+    pub symbols: Arc<RwLock<Vec<String>>>,
+    /// Universe symbols that have warmed up enough to emit feature rows (a subset
+    /// of `symbols`). Newly added symbols stay out until `scheduler::warmup`
+    /// seeds their price history, so the assembler never emits cold-start garbage.
+    pub ready: Arc<DashMap<String, ()>>,
+    /// Monotonic generation counter bumped whenever the universe changes. The
+    /// price stream subscribes to this and re-connects on every change. A `watch`
+    /// channel (not `Notify`) so a change is never missed between stream events.
+    universe_gen: tokio::sync::watch::Sender<u64>,
 
     // Snapshot-polled sets used by cross_asset::assemble (live mode)
     pub trending_symbols: Arc<RwLock<HashSet<String>>>,
@@ -284,8 +295,17 @@ pub struct DataStore {
 }
 
 impl DataStore {
+    /// Maximum universe size — the static cap matching the model's trained
+    /// asset-axis dimension (`MeridianSpec.n_assets`). Adds beyond this are
+    /// rejected. Growing it requires retraining + widening the portfolio vector.
+    pub const MAX_ASSETS: usize = 100;
+
     pub fn new(symbols: Vec<String>, rolling_stats: Arc<RollingStatsStore>) -> Arc<Self> {
         let now = chrono::Utc::now();
+
+        // The initial universe is treated as ready immediately (its rolling stats
+        // are restored from disk / warm up live, same as before dynamic universe).
+        let ready: DashMap<String, ()> = symbols.iter().map(|s| (s.clone(), ())).collect();
 
         Arc::new(Self {
             prices: Arc::new(DashMap::new()),
@@ -332,11 +352,199 @@ impl DataStore {
                 last_updated: now,
             })),
             rolling_stats,
-            symbols,
+            symbols: Arc::new(RwLock::new(symbols)),
+            ready: Arc::new(ready),
+            universe_gen: tokio::sync::watch::channel(0u64).0,
             trending_symbols: Arc::new(RwLock::new(HashSet::new())),
             screener_membership: Arc::new(DashMap::new()),
             news_sentiment: Arc::new(DashMap::new()),
             text_embedding: Arc::new(DashMap::new()),
         })
+    }
+
+    // ── Universe accessors (centralize lock access) ────────────────────────────
+
+    /// Snapshot of the full universe (ready or not), in insertion order.
+    pub fn symbols_snapshot(&self) -> Vec<String> {
+        self.symbols.read().clone()
+    }
+
+    /// Number of symbols in the universe.
+    pub fn symbols_len(&self) -> usize {
+        self.symbols.read().len()
+    }
+
+    /// Whether `sym` is in the universe.
+    pub fn symbols_contains(&self, sym: &str) -> bool {
+        self.symbols.read().iter().any(|s| s == sym)
+    }
+
+    /// Subscribe to universe-change notifications (the price stream uses this to
+    /// re-connect). The returned receiver yields on every [`bump_universe`].
+    pub fn subscribe_universe(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.universe_gen.subscribe()
+    }
+
+    /// Signal that the universe changed (called by the watcher after applying a
+    /// batch of adds/removes).
+    pub fn bump_universe(&self) {
+        self.universe_gen.send_modify(|g| *g += 1);
+    }
+
+    /// Whether `sym` has warmed up and may be emitted.
+    pub fn is_ready(&self, sym: &str) -> bool {
+        self.ready.contains_key(sym)
+    }
+
+    /// Mark `sym` as warmed up (called by `scheduler::warmup`).
+    pub fn mark_ready(&self, sym: &str) {
+        self.ready.insert(sym.to_string(), ());
+    }
+
+    /// Universe symbols that are warmed up, in universe order. The assembler emits
+    /// exactly these — so the live active universe == this set.
+    pub fn ready_snapshot(&self) -> Vec<String> {
+        self.symbols
+            .read()
+            .iter()
+            .filter(|s| self.ready.contains_key(*s))
+            .cloned()
+            .collect()
+    }
+
+    /// Add `sym` to the universe (not ready until warmed). Returns false if it is
+    /// already present or the universe is at `MAX_ASSETS`.
+    pub fn add_symbol(&self, sym: String) -> bool {
+        let mut u = self.symbols.write();
+        if u.iter().any(|s| *s == sym) {
+            return false;
+        }
+        if u.len() >= Self::MAX_ASSETS {
+            tracing::warn!(symbol = %sym, cap = Self::MAX_ASSETS, "universe at cap; ignoring add");
+            return false;
+        }
+        u.push(sym);
+        true
+    }
+
+    /// Remove `sym` from the universe and free all of its per-asset state.
+    /// Returns false if it was not present.
+    pub fn remove_symbol(&self, sym: &str) -> bool {
+        let removed = {
+            let mut u = self.symbols.write();
+            match u.iter().position(|s| s == sym) {
+                Some(i) => {
+                    u.remove(i);
+                    true
+                }
+                None => false,
+            }
+        };
+        if removed {
+            self.ready.remove(sym);
+            self.prices.remove(sym);
+            self.forming.remove(sym);
+            self.options.remove(sym);
+            self.fundamentals.remove(sym);
+            self.risk.remove(sym);
+            self.insider_tx.remove(sym);
+            self.analyst.remove(sym);
+            self.sec_filings.remove(sym);
+            self.splits.remove(sym);
+            self.calendar.remove(sym);
+            self.event_state.remove(sym);
+            self.news_sentiment.remove(sym);
+            self.text_embedding.remove(sym);
+            self.screener_membership.remove(sym);
+        }
+        removed
+    }
+}
+
+/// Parse a `symbols.txt` body into a capped, de-commented universe list.
+///
+/// Mirrors the Python loader (`line.split("#")[0].strip()`): strips inline and
+/// full-line `#` comments, drops blanks, de-duplicates while preserving order,
+/// and caps at [`DataStore::MAX_ASSETS`]. Shared by the binary loader and the
+/// hot-reload watcher so they always agree on the universe.
+pub fn parse_symbols(content: &str) -> Vec<String> {
+    let mut seen = HashSet::new();
+    content
+        .lines()
+        .map(|line| line.split('#').next().unwrap_or("").trim())
+        .filter(|s| !s.is_empty())
+        .filter(|s| seen.insert(s.to_string()))
+        .take(DataStore::MAX_ASSETS)
+        .map(String::from)
+        .collect()
+}
+
+#[cfg(test)]
+mod universe_tests {
+    use super::*;
+
+    fn store(syms: &[&str]) -> Arc<DataStore> {
+        DataStore::new(
+            syms.iter().map(|s| s.to_string()).collect(),
+            RollingStatsStore::new(),
+        )
+    }
+
+    #[test]
+    fn parse_strips_comments_dedups_and_caps() {
+        let body = "AAPL  # apple\n# full-line comment\n\nMSFT\nAAPL\n  NVDA  \n";
+        assert_eq!(parse_symbols(body), vec!["AAPL", "MSFT", "NVDA"]);
+
+        let many = (0..150).map(|i| format!("S{i}")).collect::<Vec<_>>().join("\n");
+        assert_eq!(parse_symbols(&many).len(), DataStore::MAX_ASSETS);
+    }
+
+    #[test]
+    fn initial_universe_is_ready() {
+        let s = store(&["AAPL", "MSFT"]);
+        assert_eq!(s.symbols_len(), 2);
+        assert_eq!(s.ready_snapshot(), vec!["AAPL", "MSFT"]);
+        assert!(s.is_ready("AAPL"));
+    }
+
+    #[test]
+    fn add_is_unready_until_marked_then_remove_frees_state() {
+        let s = store(&["AAPL"]);
+        assert!(s.add_symbol("MSFT".into()));
+        assert!(!s.add_symbol("MSFT".into()), "duplicate add rejected");
+        // In the universe but not yet emitted (warming up).
+        assert!(s.symbols_contains("MSFT"));
+        assert!(!s.is_ready("MSFT"));
+        assert_eq!(s.ready_snapshot(), vec!["AAPL"]);
+
+        s.mark_ready("MSFT");
+        assert_eq!(s.ready_snapshot(), vec!["AAPL", "MSFT"]);
+
+        // Seed some per-asset state, then ensure removal frees it.
+        s.prices.insert("MSFT".into(), PriceBuffer::new(8));
+        assert!(s.remove_symbol("MSFT"));
+        assert!(!s.symbols_contains("MSFT"));
+        assert!(!s.is_ready("MSFT"));
+        assert!(!s.prices.contains_key("MSFT"));
+        assert!(!s.remove_symbol("MSFT"), "removing absent symbol is a no-op");
+    }
+
+    #[test]
+    fn add_rejected_at_cap() {
+        let syms: Vec<String> = (0..DataStore::MAX_ASSETS).map(|i| format!("S{i}")).collect();
+        let s = DataStore::new(syms, RollingStatsStore::new());
+        assert_eq!(s.symbols_len(), DataStore::MAX_ASSETS);
+        assert!(!s.add_symbol("OVERFLOW".into()));
+        assert_eq!(s.symbols_len(), DataStore::MAX_ASSETS);
+    }
+
+    #[test]
+    fn bump_universe_notifies_subscriber() {
+        let s = store(&["AAPL"]);
+        let mut rx = s.subscribe_universe();
+        assert_eq!(*rx.borrow_and_update(), 0);
+        s.bump_universe();
+        assert!(rx.has_changed().unwrap());
+        assert_eq!(*rx.borrow_and_update(), 1);
     }
 }
