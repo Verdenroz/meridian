@@ -83,8 +83,8 @@ pub async fn poll_rss_feeds(store: &Arc<DataStore>) -> anyhow::Result<()> {
     for event in fomc_events {
         tracing::info!(kind = ?event.kind, desc = %event.description, "FOMC event detected");
         // Market-wide events broadcast to all assets
-        for sym in &store.symbols {
-            let mut es = store.event_state.entry(sym.clone()).or_default();
+        for sym in store.symbols_snapshot() {
+            let mut es = store.event_state.entry(sym).or_default();
             *es = es.with_event(&event);
         }
     }

@@ -3,7 +3,7 @@ use finance_query::{Interval, Ticker, TimeRange};
 use std::sync::Arc;
 
 pub async fn poll_risk_analytics(store: &Arc<DataStore>) -> anyhow::Result<()> {
-    let symbols = store.symbols.clone();
+    let symbols = store.symbols_snapshot();
 
     for chunk in symbols.chunks(5) {
         let tasks: Vec<_> = chunk

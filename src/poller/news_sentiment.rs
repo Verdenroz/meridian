@@ -23,7 +23,8 @@ pub async fn poll_news_sentiment(store: &Arc<DataStore>) -> Result<()> {
     let cutoff = now - chrono::Duration::hours(WINDOW_HOURS);
     let articles = store.rss_feed.read().value.recent_articles.clone();
 
-    for symbol in &store.symbols {
+    let symbols = store.symbols_snapshot();
+    for symbol in &symbols {
         // Collect recent articles that mention the ticker in the headline
         let relevant: Vec<(i64, String)> = articles
             .iter()

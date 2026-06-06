@@ -73,8 +73,8 @@ pub async fn poll_fred_macro(store: &Arc<DataStore>) -> anyhow::Result<()> {
                         series_id, old_date, &new_date, new_value, old_value, hist_std,
                     ) {
                         tracing::info!(series = %series_id, "MacroRelease event");
-                        for sym in &store.symbols {
-                            let mut es = store.event_state.entry(sym.clone()).or_default();
+                        for sym in store.symbols_snapshot() {
+                            let mut es = store.event_state.entry(sym).or_default();
                             *es = es.with_event(&event);
                         }
                     }

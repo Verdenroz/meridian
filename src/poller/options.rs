@@ -4,7 +4,7 @@ use finance_query::Ticker;
 use std::sync::Arc;
 
 pub async fn poll_options_chains(store: &Arc<DataStore>) -> anyhow::Result<()> {
-    let symbols = store.symbols.clone();
+    let symbols = store.symbols_snapshot();
     let concurrency = 10usize;
 
     for chunk in symbols.chunks(concurrency) {
@@ -24,7 +24,7 @@ pub async fn poll_options_chains(store: &Arc<DataStore>) -> anyhow::Result<()> {
         }
     }
 
-    tracing::debug!("Options chains updated for {} symbols", store.symbols.len());
+    tracing::debug!("Options chains updated for {} symbols", store.symbols_len());
     Ok(())
 }
 

@@ -45,7 +45,8 @@ pub async fn poll_text_embeddings(store: &Arc<DataStore>) -> Result<()> {
     let cutoff = now_ts - WINDOW_SECS;
     let articles = store.rss_feed.read().value.recent_articles.clone();
 
-    for symbol in &store.symbols {
+    let symbols = store.symbols_snapshot();
+    for symbol in &symbols {
         // `(headline, days_since)` for articles in-window that mention the ticker.
         let snippets: Vec<(String, i64)> = articles
             .iter()

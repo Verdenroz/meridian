@@ -5,7 +5,7 @@ use std::sync::Arc;
 /// Poll fundamentals for all symbols (runs quarterly; triggered manually or at startup).
 #[allow(dead_code)]
 pub async fn poll_fundamentals(store: &Arc<DataStore>) -> anyhow::Result<()> {
-    let symbols = store.symbols.clone();
+    let symbols = store.symbols_snapshot();
 
     for chunk in symbols.chunks(3) {
         let tasks: Vec<_> = chunk
@@ -23,7 +23,7 @@ pub async fn poll_fundamentals(store: &Arc<DataStore>) -> anyhow::Result<()> {
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
-    tracing::info!("Fundamentals updated for {} symbols", store.symbols.len());
+    tracing::info!("Fundamentals updated for {} symbols", store.symbols_len());
     Ok(())
 }
 

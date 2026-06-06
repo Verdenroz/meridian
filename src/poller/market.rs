@@ -178,10 +178,9 @@ pub async fn poll_market_summary(store: &Arc<DataStore>) -> anyhow::Result<()> {
 
     let old_trending: HashSet<String> = {
         store
-            .symbols
-            .iter()
+            .symbols_snapshot()
+            .into_iter()
             .filter(|_s| store.market_summary.read().value.trending_count > 0.0)
-            .cloned()
             .collect()
     };
 
@@ -195,7 +194,7 @@ pub async fn poll_market_summary(store: &Arc<DataStore>) -> anyhow::Result<()> {
     let events: Vec<EventRecord> = detect_trending_events(&old_trending, &new_trending);
     for event in events {
         if let Some(sym) = &event.symbol {
-            if store.symbols.contains(sym) {
+            if store.symbols_contains(sym) {
                 let mut es = store.event_state.entry(sym.clone()).or_default();
                 *es = es.with_event(&event);
                 tracing::info!(symbol = %sym, "TrendingEntry event");
@@ -235,7 +234,7 @@ pub async fn poll_market_summary(store: &Arc<DataStore>) -> anyhow::Result<()> {
         cross_asset_corr: 0.0,
         trending_count: new_trending.len() as f64,
         trending_portfolio_overlap: new_trending
-            .intersection(&store.symbols.iter().cloned().collect())
+            .intersection(&store.symbols_snapshot().into_iter().collect())
             .count() as f64,
         gainers_momentum: 0.0,
         actives_vol_ratio: 0.0,
