@@ -26,8 +26,9 @@ pub enum Mode {
 
 #[derive(clap::Args)]
 pub struct FitTextPcaArgs {
-    /// Path to newline-separated list of symbols (max 100) — the universe whose
-    /// FNSPID news corpus the PCA basis is fit over.
+    /// (Deprecated — the PCA basis is now fit over all available FNSPID cache
+    /// files, symbol-agnostic. This flag is accepted for backward compat but
+    /// ignored.)
     #[arg(long, default_value = "symbols.txt")]
     pub symbols_file: PathBuf,
 }

@@ -125,7 +125,12 @@ def _pack_row(row: dict) -> tuple[str, datetime, bytes]:
 # ── Shard writing ─────────────────────────────────────────────────────────────
 
 class ShardWriter:
-    """Append-mode binary shard writer, one file per (symbol, split)."""
+    """Atomic binary shard writer, one file per (symbol, split).
+
+    Writes to {symbol}.f32bin.tmp and renames to {symbol}.f32bin on close.
+    An interrupted run leaves only .tmp files, so --skip-existing correctly
+    re-collects the symbol on resume.
+    """
 
     def __init__(self, data_dir: Path) -> None:
         self._data_dir = data_dir
@@ -136,8 +141,7 @@ class ShardWriter:
         if key not in self._handles:
             shard_dir = self._data_dir / split
             shard_dir.mkdir(parents=True, exist_ok=True)
-            path = shard_dir / f"{symbol}.f32bin"
-            # Overwrite per ingest run so repeated collections rebuild canonical shards.
+            path = shard_dir / f"{symbol}.f32bin.tmp"
             self._handles[key] = open(path, "wb")  # noqa: SIM115
         return self._handles[key]
 
@@ -149,8 +153,11 @@ class ShardWriter:
             fh.flush()
 
     def close(self) -> None:
-        for fh in self._handles.values():
+        for (symbol, split), fh in self._handles.items():
             fh.close()
+            tmp_path = self._data_dir / split / f"{symbol}.f32bin.tmp"
+            final_path = self._data_dir / split / f"{symbol}.f32bin"
+            tmp_path.rename(final_path)
         self._handles.clear()
 
     def __enter__(self) -> ShardWriter:

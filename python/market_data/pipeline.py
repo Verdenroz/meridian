@@ -59,6 +59,7 @@ class PipelineConfig:
     retry_max_seconds: float = 60.0
     retry_jitter_seconds: float = 1.0
     request_permits: int | None = None
+    skip_existing: bool = False  # skip symbols whose shards already exist
 
 
 def load_symbols(symbols_file: Path) -> list[str]:
@@ -214,6 +215,37 @@ def collect_universe(cfg: PipelineConfig) -> None:
         print("[pipeline] no symbols found in", cfg.symbols_file, file=sys.stderr)
         return
 
+    # Skip symbols whose shards already exist in all three splits.
+    if cfg.skip_existing:
+        from market_data.dataset_ingestion import enumerate_shards
+
+        # Clean up stale .tmp files from previous interrupted runs.
+        for split in ("train", "validation", "test"):
+            split_dir = cfg.data_dir / split
+            if split_dir.exists():
+                for tmp in split_dir.glob("*.f32bin.tmp"):
+                    tmp.unlink(missing_ok=True)
+
+        splits = ("train", "validation", "test")
+        existing = {
+            s for s in symbols
+            if all(
+                cfg.data_dir / split / f"{s}.f32bin" in
+                set(enumerate_shards(cfg.data_dir, split))
+                for split in splits
+            )
+        }
+        if existing:
+            print(
+                f"[pipeline] skipping {len(existing)} symbols with existing shards: "
+                f"{', '.join(sorted(existing))}",
+                file=sys.stderr,
+            )
+        symbols = [s for s in symbols if s not in existing]
+        if not symbols:
+            print("[pipeline] all symbols already collected", file=sys.stderr)
+            return
+
     print(
         f"[pipeline] collecting {len(symbols)} symbols  "
         f"interval={cfg.interval}  workers={cfg.workers}  "
@@ -345,6 +377,8 @@ def _cli() -> None:
     p_collect.add_argument("--retry-max-seconds", type=float, default=60.0)
     p_collect.add_argument("--retry-jitter-seconds", type=float, default=1.0)
     p_collect.add_argument("--request-permits", type=int, default=None)
+    p_collect.add_argument("--skip-existing", action="store_true",
+                           help="Skip symbols whose shards already exist in all splits")
 
     # ── stats ──
     p_stats = sub.add_parser("stats", help="Print shard counts per split")
@@ -371,6 +405,7 @@ def _cli() -> None:
             retry_max_seconds=args.retry_max_seconds,
             retry_jitter_seconds=args.retry_jitter_seconds,
             request_permits=args.request_permits,
+            skip_existing=args.skip_existing,
         )
         collect_universe(cfg)
 
