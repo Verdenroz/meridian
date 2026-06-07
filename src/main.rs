@@ -79,16 +79,14 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-/// Fit the global Block-8 text-embedding PCA(64) basis over the whole symbol
-/// universe and persist it, so per-symbol collection shares one comparable
-/// reduction (harrier-oss is not Matryoshka — see `historical::text_pca`).
-async fn fit_text_pca_mode(args: args::FitTextPcaArgs) -> anyhow::Result<()> {
+/// Fit the global Block-8 text-embedding PCA(64) basis over the full FNSPID
+/// news corpus on disk (symbol-agnostic — see `historical::text_pca`). Changing
+/// `symbols.txt` does NOT require re-fitting.
+async fn fit_text_pca_mode(_args: args::FitTextPcaArgs) -> anyhow::Result<()> {
     use historical::embedder::{Embedder, EmbedderConfig};
 
-    let symbols = load_symbols(&args.symbols_file)?;
-    tracing::info!(count = symbols.len(), "fit-text-pca: universe loaded");
     let embedder = Embedder::new(EmbedderConfig::default())?;
-    historical::text_pca::fit_universe(&symbols, &embedder).await?;
+    historical::text_pca::fit_universe(&embedder).await?;
     Ok(())
 }
 

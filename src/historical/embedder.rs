@@ -47,6 +47,10 @@ const DEFAULT_RETRY_BASE_MS: u64 = 1_000;
 const DEFAULT_RETRY_MAX_MS: u64 = 30_000;
 /// HTTP client timeout. Overridable via `MERIDIAN_EMBED_TIMEOUT_SECS`.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
+/// Pause between successive embedding requests (millis), giving the GSP RPC
+/// channel over Thunderbolt time to drain between batches. Overridable via
+/// `MERIDIAN_EMBED_BATCH_PAUSE_MS`; set to 0 to disable.
+const DEFAULT_BATCH_PAUSE_MS: u64 = 250;
 
 #[derive(Clone, Debug)]
 pub struct EmbedderConfig {
@@ -77,6 +81,8 @@ pub struct Embedder {
     max_retries: u32,
     retry_base_ms: u64,
     retry_max_ms: u64,
+    /// Pause between successive embedding requests (millis).
+    batch_pause_ms: u64,
 }
 
 #[derive(Serialize)]
@@ -115,6 +121,7 @@ impl Embedder {
             max_retries: env_u32("MERIDIAN_EMBED_MAX_RETRIES", DEFAULT_MAX_RETRIES),
             retry_base_ms: env_u64("MERIDIAN_EMBED_RETRY_BASE_MS", DEFAULT_RETRY_BASE_MS).max(1),
             retry_max_ms: env_u64("MERIDIAN_EMBED_RETRY_MAX_MS", DEFAULT_RETRY_MAX_MS).max(1),
+            batch_pause_ms: env_u64("MERIDIAN_EMBED_BATCH_PAUSE_MS", DEFAULT_BATCH_PAUSE_MS),
         })
     }
 
@@ -207,6 +214,12 @@ impl Embedder {
                 let path = self.cache_path(&hashes[*slot]);
                 self.write_cached(&path, &item.embedding)?;
                 out[*slot] = Some(item.embedding);
+            }
+
+            // Pause between batches — gives the GSP RPC channel over
+            // Thunderbolt time to drain before the next request.
+            if cursor < misses.len() && self.batch_pause_ms > 0 {
+                tokio::time::sleep(Duration::from_millis(self.batch_pause_ms)).await;
             }
         }
 

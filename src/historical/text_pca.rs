@@ -42,20 +42,43 @@ pub fn load_cached() -> Option<PcaModel> {
     PcaModel::try_load(&cache_path(), EMBED_DIM, TEXT_PCA_DIM)
 }
 
-/// Fit the global Block-8 PCA basis over the FNSPID news corpus for the whole
-/// `symbols` universe and persist it to [`cache_path`].
+/// Fit the global Block-8 PCA basis over the **entire** FNSPID news corpus on
+/// disk — every `.jsonl` file in the FNSPID cache directory regardless of which
+/// symbols are currently in the trading universe. This keeps the basis
+/// symbol-agnostic (§1 design principle): changing `symbols.txt` does NOT
+/// require re-fitting the PCA basis because the corpus is the full available
+/// financial-news distribution, not the trading-universe slice.
 ///
 /// EDGAR filing text (fetched per-symbol at collection time) is projected onto
 /// this news-fit basis — both are financial English, so the directions
 /// generalize. A degenerate corpus (< 2 snippets) or an unavailable embedder
 /// writes a zero basis so Block 8 collapses to honest zeros rather than a
 /// fabricated or single-symbol-biased signal.
-pub async fn fit_universe(symbols: &[String], embedder: &Embedder) -> Result<PcaModel> {
-    // Gather unique news snippets across the universe (insertion order keeps
-    // symbols grouped, so the stride-sample below spreads across the universe).
+pub async fn fit_universe(embedder: &Embedder) -> Result<PcaModel> {
+    // Discover all available FNSPID cache files (symbol-agnostic).
+    let cache_dir = fnspid::cache_dir();
+    let mut symbols: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&cache_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".jsonl") {
+                symbols.push(name.trim_end_matches(".jsonl").to_string());
+            }
+        }
+    }
+    tracing::info!(
+        files = symbols.len(),
+        dir = %cache_dir.display(),
+        "fit-text-pca: discovered FNSPID cache files"
+    );
+
+    // Gather unique news snippets across all available symbols (insertion order
+    // keeps symbols grouped, so the stride-sample below spreads across the
+    // full corpus).
     let mut seen: HashSet<String> = HashSet::new();
     let mut corpus: Vec<String> = Vec::new();
-    for sym in symbols {
+    for sym in &symbols {
         for (_ts, text) in fnspid::load_news(sym) {
             if seen.insert(text.clone()) {
                 corpus.push(text);
