@@ -27,13 +27,12 @@ const DECAY_DAYS: f32 = 30.0;
 /// documents can be far longer and are truncated to their lead (business /
 /// risk-factor) sections. Overridable via `MERIDIAN_EMBED_MAX_CHARS`.
 const DEFAULT_MAX_CHARS: usize = 80_000;
-/// Pack inputs into one request up to this many characters total, so a batch of
-/// large documents never decodes all at once. Peak GPU decode for a request is
-/// roughly `request_char_budget` worth of tokens — keeping this well under the
-/// 32K-token context window is what stops the GSP/CUDA hang seen on the bursty
-/// `make collect` workload (steady pretraining tolerates much larger batches).
+/// Pack inputs into one request up to this many characters total. The GSP/CUDA
+/// hang that motivated the conservative 24K budget is now prevented server-side
+/// by llama-server --ubatch-size 1024, so we can pack more text per request and
+/// dramatically reduce the number of HTTP round-trips during collection.
 /// Overridable via `MERIDIAN_EMBED_CHAR_BUDGET`.
-const DEFAULT_REQUEST_CHAR_BUDGET: usize = 24_000;
+const DEFAULT_REQUEST_CHAR_BUDGET: usize = 80_000;
 /// Hard cap on items per request, bounding the all-headlines (many tiny inputs)
 /// case. Overridable via `MERIDIAN_EMBED_MAX_ITEMS`.
 const DEFAULT_MAX_BATCH_ITEMS: usize = 16;
@@ -47,10 +46,10 @@ const DEFAULT_RETRY_BASE_MS: u64 = 1_000;
 const DEFAULT_RETRY_MAX_MS: u64 = 30_000;
 /// HTTP client timeout. Overridable via `MERIDIAN_EMBED_TIMEOUT_SECS`.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
-/// Pause between successive embedding requests (millis), giving the GSP RPC
-/// channel over Thunderbolt time to drain between batches. Overridable via
-/// `MERIDIAN_EMBED_BATCH_PAUSE_MS`; set to 0 to disable.
-const DEFAULT_BATCH_PAUSE_MS: u64 = 250;
+/// Pause between successive embedding requests (millis). Set to 0 — the GSP/CUDA
+/// hang this was mitigating is now prevented server-side by --ubatch-size 1024.
+/// Overridable via `MERIDIAN_EMBED_BATCH_PAUSE_MS`.
+const DEFAULT_BATCH_PAUSE_MS: u64 = 0;
 
 #[derive(Clone, Debug)]
 pub struct EmbedderConfig {

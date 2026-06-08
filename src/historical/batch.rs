@@ -1417,12 +1417,33 @@ fn build_fundamental_static(
     calendar_events: &Option<serde_json::Value>,
     major_holders: &Option<serde_json::Value>,
 ) -> FundamentalStatic {
+    // trailing_pe: Yahoo's summaryDetail/defaultKeyStatistics inconsistently
+    // include this field (often absent for post-split, high-growth, and recent
+    // IPO names). Compute from trailingEps / currentPrice as a final fallback
+    // so the per-bar fundamentals block never has a structural None.
     let trailing_pe = summary
         .as_ref()
-        .and_then(|v| json_f64_path(v, &["trailingPe", "raw"]).or_else(|| json_f64_path(v, &["trailingPe"])));
-    let forward_pe = summary
+        .and_then(|v| json_f64_path(v, &["trailingPe", "raw"]).or_else(|| json_f64_path(v, &["trailingPe"])))
+        .or_else(|| key_stats.as_ref().and_then(|v| json_f64_path(v, &["trailingPe", "raw"]).or_else(|| json_f64_path(v, &["trailingPe"]))))
+        .or_else(|| {
+            let eps = key_stats.as_ref()
+                .and_then(|v| json_f64_path(v, &["trailingEps", "raw"]).or_else(|| json_f64_path(v, &["trailingEps"])));
+            let price = financial.as_ref()
+                .and_then(|v| json_f64_path(v, &["currentPrice", "raw"]).or_else(|| json_f64_path(v, &["currentPrice"])));
+            match (eps, price) {
+                (Some(e), Some(p)) if e > 0.0 => Some(p / e),
+                _ => None,
+            }
+        });
+    // forward_pe lives in defaultKeyStatistics, serialized "forwardPE" (uppercase —
+    // explicit serde rename), NOT in summaryDetail. The old code read "forwardPe"
+    // from `summary`, which is wrong module AND wrong casing, so forward P/E was
+    // None for every symbol. Read key_stats first; fall back across spellings.
+    let forward_pe = key_stats
         .as_ref()
-        .and_then(|v| json_f64_path(v, &["forwardPe", "raw"]).or_else(|| json_f64_path(v, &["forwardPe"])));
+        .and_then(|v| json_f64_path(v, &["forwardPE", "raw"]).or_else(|| json_f64_path(v, &["forwardPE"])))
+        .or_else(|| key_stats.as_ref().and_then(|v| json_f64_path(v, &["forwardPe", "raw"]).or_else(|| json_f64_path(v, &["forwardPe"]))))
+        .or_else(|| summary.as_ref().and_then(|v| json_f64_path(v, &["forwardPe", "raw"]).or_else(|| json_f64_path(v, &["forwardPe"]))));
     let market_cap = summary
         .as_ref()
         .and_then(|v| json_f64_path(v, &["marketCap", "raw"]).or_else(|| json_f64_path(v, &["marketCap"])));
@@ -2694,6 +2715,66 @@ mod tests {
         ];
         let far_past = earnings_proximity(727 * DAY, &ev, None); // ~3 quarters before, on grid
         assert!(far_past > 0.9, "projected on-grid bar should be high, got {far_past}");
+    }
+
+    // Real-symbol verification: fetches a live symbol from finance-query, runs it
+    // through the production `build_fundamental_static` path, and asserts the
+    // fundamental fields populate as expected — guarding the forward_pe wrong-module
+    // regression and any future field/casing drift. Network-gated:
+    //   cargo test --lib historical::batch::tests::fundamentals_collected_for_real_symbol -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore = "hits finance-query network"]
+    async fn fundamentals_collected_for_real_symbol() {
+        use finance_query::Ticker;
+        let sym = "NVDA"; // mega-cap with a full fundamentals surface
+        let ticker = Ticker::new(sym).await.expect("Ticker::new");
+
+        macro_rules! j {
+            ($e:expr) => {
+                $e.await.ok().flatten().as_ref().and_then(|x| serde_json::to_value(x).ok())
+            };
+        }
+        let summary_json = j!(ticker.summary_detail());
+        let financial_json = j!(ticker.financial_data());
+        let key_stats_json = j!(ticker.key_stats());
+        let profile_json = j!(ticker.asset_profile());
+        let rec_json = j!(ticker.recommendation_trend());
+        let et_json = j!(ticker.earnings_trend());
+        let cal_json = j!(ticker.calendar_events());
+        let mh_json = j!(ticker.major_holders());
+
+        let f = super::build_fundamental_static(
+            sym,
+            &summary_json,
+            &financial_json,
+            &key_stats_json,
+            &profile_json,
+            &rec_json,
+            &et_json,
+            &cal_json,
+            &mh_json,
+        );
+
+        eprintln!("FundamentalStatic[{sym}]:");
+        eprintln!("  trailing_pe={:?} forward_pe={:?} peg_ratio={:?} ev_to_ebitda={:?}",
+            f.trailing_pe, f.forward_pe, f.peg_ratio, f.ev_to_ebitda);
+        eprintln!("  dividend_yield={:?} profit_margins={:?} revenue_growth={:?} earnings_growth={:?}",
+            f.dividend_yield, f.profit_margins, f.revenue_growth, f.earnings_growth);
+        eprintln!("  debt_to_equity={:?} free_cashflow={:?} market_cap={:?} return_on_equity={:?} current_ratio={:?}",
+            f.debt_to_equity, f.free_cashflow, f.market_cap, f.return_on_equity, f.current_ratio);
+        eprintln!("  analyst_consensus={:?} strong_buy_fraction={:?} sector_idx={} mktcap_log_rank={} next_earnings_ts={:?}",
+            f.analyst_consensus, f.strong_buy_fraction, f.sector_idx, f.mktcap_log_rank, f.next_earnings_ts);
+
+        // The regression that motivated this test: forward_pe was always None.
+        let fpe = f.forward_pe.expect("forward_pe must be populated (regression: was read from wrong module)");
+        assert!(fpe > 0.0 && fpe < 1000.0, "forward_pe out of sane range: {fpe}");
+        // Other core fundamentals that must come through for a mega-cap.
+        assert!(f.market_cap.is_some_and(|m| m > 1e11), "market_cap missing/implausible: {:?}", f.market_cap);
+        assert!(f.profit_margins.is_some(), "profit_margins missing");
+        assert!(f.debt_to_equity.is_some(), "debt_to_equity missing");
+        assert!(f.earnings_growth.is_some(), "earnings_growth missing");
+        assert!(f.ev_to_ebitda.is_some(), "ev_to_ebitda missing");
+        assert!(f.dividend_yield.is_some(), "dividend_yield missing");
     }
 
     #[test]
