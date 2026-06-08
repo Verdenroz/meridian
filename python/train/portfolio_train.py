@@ -112,7 +112,7 @@ _DEFAULT_RETURN_CROSS_ASSET_WARMUP_STEPS = 180_000  # ~10 H100h (spec §11.4a)
 
 
 def load_symbol_sector_map(symbols_file: Path) -> dict[str, int]:
-    """Parse symbols.txt-style section headers into symbol→sector-id mapping.
+    """Parse portfolio_symbols.txt-style section headers into symbol→sector-id mapping.
 
     Only known 11 GICS-equity sections are mapped. Non-equity sections (e.g. ETFs)
     are intentionally left unmapped.
@@ -138,6 +138,27 @@ def load_symbol_sector_map(symbols_file: Path) -> dict[str, int]:
             symbol_to_sector[symbol] = current_sector
 
     return symbol_to_sector
+
+
+def load_portfolio_symbols(symbols_file: Path) -> list[str]:
+    """Parse every trading-universe symbol from a portfolio_symbols.txt-style file.
+
+    Unlike :func:`load_symbol_sector_map`, this returns ALL symbols regardless of
+    section — including non-GICS members (ETFs, bonds, commodities) that live under
+    unmapped headers. Those are first-class portfolio assets, so the universe
+    selector must see them. Order is file order; duplicates are dropped.
+    """
+    symbols: list[str] = []
+    seen: set[str] = set()
+    for raw_line in symbols_file.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        symbol = line.split("#", 1)[0].strip()
+        if symbol and symbol not in seen:
+            seen.add(symbol)
+            symbols.append(symbol)
+    return symbols
 
 
 def build_asset_sector_ids(
@@ -464,13 +485,32 @@ def select_portfolio_shards(
     shard_paths: list[Path],
     max_assets: int = 100,
     required_assets: int | None = None,
+    allowed_symbols: "set[str] | None" = None,
 ) -> list[Path]:
     """Select real per-asset shards for portfolio training.
 
     FDA synthetic shards are sequence samples, not asset identity shards, so they
     must not be interpreted as additional assets in multi-asset head training.
+
+    When ``allowed_symbols`` is given (the portfolio universe from portfolio_symbols.txt),
+    the data dir may legitimately hold a SUPERSET of shards — e.g. the ~500-symbol
+    pretraining corpus collected for Phase 1 — and we keep only the trading
+    universe. This is what lets `make collect` gather the broad pretraining set
+    while Phase 2 trains the head on the 100-asset book, and lets portfolio_symbols.txt swap
+    membership without re-collecting (the backbone/head are identity-agnostic).
     """
     real_paths = sorted(p for p in shard_paths if not p.name.startswith(_SYNTH_PREFIX))
+    if allowed_symbols is not None:
+        found = {p.stem for p in real_paths}
+        missing = sorted(allowed_symbols - found)
+        if missing:
+            raise ValueError(
+                f"portfolio universe incomplete: {len(missing)} of "
+                f"{len(allowed_symbols)} symbols have no shard in the data dir — "
+                f"collect them first (add to the collect symbol list). "
+                f"Missing: {', '.join(missing)}"
+            )
+        real_paths = [p for p in real_paths if p.stem in allowed_symbols]
     if len(real_paths) > max_assets:
         raise ValueError(
             f"found {len(real_paths)} real asset shards, exceeds spec max_assets={max_assets}"
@@ -2714,7 +2754,7 @@ def main() -> None:
     parser.add_argument(
         "--symbols-file",
         type=Path,
-        default=Path("symbols.txt"),
+        default=Path("portfolio_symbols.txt"),
         help="Universe symbols file used to derive sector IDs for PTA permutations",
     )
     parser.add_argument("--steps", type=int, default=50_000)
@@ -3035,10 +3075,25 @@ def main() -> None:
 
         all_train_paths = enumerate_shards(args.data_dir, "train")
         all_val_paths = enumerate_shards(args.data_dir, "validation")
+        # The data dir holds the broad pretraining corpus (~500 symbols). The
+        # portfolio head trains on the trading universe in --symbols-file; select
+        # exactly those shards out of the superset. Membership can change freely
+        # without re-collecting, but the COUNT is fixed at spec.n_assets because
+        # the head's portfolio_state_dim (2N+1) and allocation simplex are sized
+        # to N at training time.
+        portfolio_symbols = load_portfolio_symbols(args.symbols_file)
+        if len(portfolio_symbols) != spec.n_assets:
+            raise RuntimeError(
+                f"{args.symbols_file} lists {len(portfolio_symbols)} symbols but the "
+                f"portfolio head is built for spec.n_assets={spec.n_assets}. Membership "
+                f"can change freely; the universe SIZE cannot without rebuilding the head."
+            )
+        allowed = set(portfolio_symbols)
         train_paths = select_portfolio_shards(
             all_train_paths,
             max_assets=spec.n_assets,
             required_assets=spec.n_assets,
+            allowed_symbols=allowed,
         )
         synth_train_paths = sorted(
             p for p in all_train_paths if p.name.startswith(_SYNTH_PREFIX)
@@ -3047,6 +3102,7 @@ def main() -> None:
             all_val_paths,
             max_assets=spec.n_assets,
             required_assets=spec.n_assets,
+            allowed_symbols=allowed,
         )
         excluded_train = len(all_train_paths) - len(train_paths)
         excluded_val = len(all_val_paths) - len(val_paths)
