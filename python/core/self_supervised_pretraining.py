@@ -888,7 +888,7 @@ def build_split_loaders(
     if train_regime_labels is None:
         print(
             "SPY shard not found — regime labels will use heuristic fallback. "
-            "Run 'make collect' and ensure SPY is in symbols.txt."
+            "Run 'make collect' and ensure SPY is in portfolio_symbols.txt."
         )
 
     if regime_balanced and train_regime_labels is not None:

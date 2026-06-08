@@ -1,4 +1,4 @@
-//! Live universe control — hot-reload `symbols.txt`.
+//! Live universe control — hot-reload `portfolio_symbols.txt`.
 //!
 //! Polls the symbols file for modifications (mtime). On change it diffs the
 //! parsed list against the live universe, removes dropped symbols (freeing their
@@ -29,14 +29,14 @@ pub async fn watch_symbols_file(store: Arc<DataStore>, path: PathBuf) {
         let content = match tokio::fs::read_to_string(&path).await {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!(path = %path.display(), err = %e, "symbols.txt reread failed");
+                tracing::warn!(path = %path.display(), err = %e, "portfolio_symbols.txt reread failed");
                 continue;
             }
         };
 
         let desired = parse_symbols(&content);
         if desired.is_empty() {
-            tracing::warn!("symbols.txt parsed empty — ignoring (keeping current universe)");
+            tracing::warn!("portfolio_symbols.txt parsed empty — ignoring (keeping current universe)");
             continue;
         }
 

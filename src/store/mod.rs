@@ -270,7 +270,7 @@ pub struct DataStore {
 
     pub rolling_stats: Arc<RollingStatsStore>,
     /// The tradable universe — user-controlled and mutable at runtime via the
-    /// `symbols.txt` hot-reload watcher (`scheduler::watch`). Insertion order is
+    /// `portfolio_symbols.txt` hot-reload watcher (`scheduler::watch`). Insertion order is
     /// preserved; survivors keep their relative order across edits.
     pub symbols: Arc<RwLock<Vec<String>>>,
     /// Universe symbols that have warmed up enough to emit feature rows (a subset
@@ -461,7 +461,7 @@ impl DataStore {
     }
 }
 
-/// Parse a `symbols.txt` body into a capped, de-commented universe list.
+/// Parse a `portfolio_symbols.txt` body into a capped, de-commented universe list.
 ///
 /// Mirrors the Python loader (`line.split("#")[0].strip()`): strips inline and
 /// full-line `#` comments, drops blanks, de-duplicates while preserving order,

@@ -29,14 +29,14 @@ pub struct FitTextPcaArgs {
     /// (Deprecated — the PCA basis is now fit over all available FNSPID cache
     /// files, symbol-agnostic. This flag is accepted for backward compat but
     /// ignored.)
-    #[arg(long, default_value = "symbols.txt")]
+    #[arg(long, default_value = "portfolio_symbols.txt")]
     pub symbols_file: PathBuf,
 }
 
 #[derive(clap::Args)]
 pub struct LiveArgs {
     /// Path to newline-separated list of symbols to track (max 100)
-    #[arg(long, default_value = "symbols.txt")]
+    #[arg(long, default_value = "portfolio_symbols.txt")]
     pub symbols_file: PathBuf,
 
     /// Path to persist/restore rolling normalization statistics

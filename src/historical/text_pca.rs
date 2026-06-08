@@ -45,7 +45,7 @@ pub fn load_cached() -> Option<PcaModel> {
 /// Fit the global Block-8 PCA basis over the **entire** FNSPID news corpus on
 /// disk — every `.jsonl` file in the FNSPID cache directory regardless of which
 /// symbols are currently in the trading universe. This keeps the basis
-/// symbol-agnostic (§1 design principle): changing `symbols.txt` does NOT
+/// symbol-agnostic (§1 design principle): changing `portfolio_symbols.txt` does NOT
 /// require re-fitting the PCA basis because the corpus is the full available
 /// financial-news distribution, not the trading-universe slice.
 ///

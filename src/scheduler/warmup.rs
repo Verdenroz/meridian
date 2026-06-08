@@ -16,7 +16,7 @@ const WARMUP_DAYS: i64 = 29;
 const PRICE_BUFFER_CAP: usize = 98_280;
 
 /// Backfill price history for `symbol`, then mark it ready. On failure the symbol
-/// stays in the universe but un-ready (not emitted); the next `symbols.txt` edit
+/// stays in the universe but un-ready (not emitted); the next `portfolio_symbols.txt` edit
 /// re-triggers warm-up.
 pub async fn warm_up_symbol(store: &Arc<DataStore>, symbol: &str) {
     match seed_price_history(store, symbol).await {

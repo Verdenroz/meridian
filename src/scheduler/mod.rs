@@ -12,7 +12,7 @@ pub fn spawn_all(store: Arc<DataStore>, stats_path: PathBuf, symbols_file: PathB
     // Real-time price stream (every 1s via WebSocket; re-subscribes on universe change)
     tokio::spawn(stream::run_price_stream(store.clone()));
 
-    // Live universe control — hot-reload symbols.txt
+    // Live universe control — hot-reload portfolio_symbols.txt
     tokio::spawn(watch::watch_symbols_file(store.clone(), symbols_file));
 
     // Feature assembly + JSONL emission (every 1m)

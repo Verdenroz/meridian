@@ -25,7 +25,7 @@ Live inference NEVER reads this cache; it uses the realtime `feeds` stream.
 
 Usage:
     python -m market_data.fnspid_ingest \
-        --symbols-file symbols.txt --data-dir data --end 2023-12-31
+        --symbols-file portfolio_symbols.txt --data-dir data --end 2023-12-31
 """
 
 from __future__ import annotations
@@ -267,7 +267,7 @@ def _cli() -> None:
     parser = argparse.ArgumentParser(
         description="Ingest FNSPID news into the per-symbol Block-8 cache."
     )
-    parser.add_argument("--symbols-file", type=Path, default=Path("symbols.txt"))
+    parser.add_argument("--symbols-file", type=Path, default=Path("portfolio_symbols.txt"))
     parser.add_argument("--data-dir", type=Path, default=Path("data"))
     parser.add_argument("--repo", default=DEFAULT_REPO)
     parser.add_argument(

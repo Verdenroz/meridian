@@ -128,7 +128,7 @@ def count_parameters(modules: list[torch.nn.Module]) -> int:
 
 
 def load_symbol_sector_map(symbols_file: Path) -> dict[str, int]:
-    """Parse symbols.txt section headers into symbol→sector-id mapping."""
+    """Parse portfolio_symbols.txt section headers into symbol→sector-id mapping."""
     if not symbols_file.exists():
         raise FileNotFoundError(f"symbols file not found: {symbols_file}")
 
@@ -183,7 +183,7 @@ def main() -> None:
         description="Self-supervised backbone pre-training"
     )
     parser.add_argument("--data-dir", type=Path, default=Path("data/mmaps_aug"))
-    parser.add_argument("--symbols-file", type=Path, default=Path("symbols.txt"))
+    parser.add_argument("--symbols-file", type=Path, default=Path("portfolio_symbols.txt"))
     parser.add_argument("--steps", type=int, default=DEFAULT_SPEC.pretrain_steps)
     parser.add_argument("--batch-size", type=int, default=DEFAULT_SPEC.train_batch_size)
     parser.add_argument("--seq-len", type=int, default=DEFAULT_SPEC.train_seq_len)

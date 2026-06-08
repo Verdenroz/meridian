@@ -4,14 +4,14 @@ Usage:
 
   # Collect daily history for all 100 symbols (parallel, 8 workers)
   python -m market_data.pipeline collect \\
-      --symbols-file symbols.txt \\
+      --symbols-file portfolio_symbols.txt \\
       --interval 1d \\
       --start 2010-01-01 \\
       --data-dir data/mmaps \\
       --workers 8
 
   # Print a plan manifest (dims, sources, row estimates) without collecting
-  python -m market_data.pipeline plan --symbols-file symbols.txt
+  python -m market_data.pipeline plan --symbols-file portfolio_symbols.txt
 
   # Print shard counts per split
   python -m market_data.pipeline stats --data-dir data/mmaps
@@ -46,7 +46,7 @@ from train.feature_schema import (
 
 @dataclass
 class PipelineConfig:
-    symbols_file: Path = Path("symbols.txt")
+    symbols_file: Path = Path("portfolio_symbols.txt")
     data_dir: Path = Path("data/mmaps")
     reports_dir: Path = Path("reports/ingestion")
     interval: str = "1d"
@@ -360,11 +360,11 @@ def _cli() -> None:
 
     # ── plan ──
     p_plan = sub.add_parser("plan", help="Print pipeline plan manifest (no collection)")
-    p_plan.add_argument("--symbols-file", type=Path, default=Path("symbols.txt"))
+    p_plan.add_argument("--symbols-file", type=Path, default=Path("portfolio_symbols.txt"))
 
     # ── collect ──
     p_collect = sub.add_parser("collect", help="Collect historical data for all symbols")
-    p_collect.add_argument("--symbols-file", type=Path, default=Path("symbols.txt"))
+    p_collect.add_argument("--symbols-file", type=Path, default=Path("portfolio_symbols.txt"))
     p_collect.add_argument("--data-dir",     type=Path, default=Path("data/mmaps"))
     p_collect.add_argument("--reports-dir",  type=Path, default=Path("reports/ingestion"))
     p_collect.add_argument("--interval",     default="1d", choices=["1m", "5m", "1h", "1d"])
