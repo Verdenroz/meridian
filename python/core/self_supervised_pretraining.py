@@ -1331,6 +1331,7 @@ class SelfSupervisedPretrainer:
         input_projection: nn.Module,
         d_model: int = 768,
         n_assets: int = 100,
+        adversarial_n_assets: int | None = None,
         device: torch.device | None = None,
         gradient_checkpointing: bool = False,
         bptt_horizon: int = 0,
@@ -1351,8 +1352,17 @@ class SelfSupervisedPretrainer:
         self.input_projection = input_projection.to(self.device)
         self.projection_head = ProjectionHead(d_model=d_model).to(self.device)
         self.prediction_head = ReturnPredictionHead(d_model=d_model).to(self.device)
+        # n_assets controls the portfolio state tensor width and must match the
+        # trading universe (spec.n_assets).  adversarial_n_assets sizes the
+        # gradient-reversal head and must match the number of unique symbols in
+        # the pretraining data — these diverge when pretraining on 500 symbols
+        # but the portfolio only trades 100.  When None, defaults to n_assets
+        # (backward compatible for same-size pretrain/portfolio universes).
+        self.adversarial_n_assets = (
+            adversarial_n_assets if adversarial_n_assets is not None else n_assets
+        )
         self.adversarial_head = AssetAdversarialHead(
-            d_model=d_model, n_assets=n_assets
+            d_model=d_model, n_assets=self.adversarial_n_assets
         ).to(self.device)
         self.n_assets = n_assets
 
@@ -1783,7 +1793,7 @@ class SelfSupervisedPretrainer:
 
         if adversarial_lambda > 0.0 and asset_ids is not None:
             asset_logits = self.adversarial_head(view_a, lambda_=adversarial_lambda)
-            adv_targets = asset_ids.clamp(0, self.n_assets - 1)
+            adv_targets = asset_ids.clamp(0, self.adversarial_n_assets - 1)
             adv_per_sample = F.cross_entropy(
                 asset_logits.float(), adv_targets, reduction="none"
             )

@@ -127,6 +127,21 @@ def count_parameters(modules: list[torch.nn.Module]) -> int:
     return sum(p.numel() for m in modules for p in m.parameters())
 
 
+def _count_symbols(symbols_file: Path) -> int:
+    """Count non-comment, non-header symbol lines in a symbols file."""
+    if not symbols_file.exists():
+        raise FileNotFoundError(f"symbols file not found: {symbols_file}")
+    count = 0
+    for raw_line in symbols_file.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        symbol = line.split("#", 1)[0].strip()
+        if symbol:
+            count += 1
+    return count
+
+
 def load_symbol_sector_map(symbols_file: Path) -> dict[str, int]:
     """Parse portfolio_symbols.txt section headers into symbol→sector-id mapping."""
     if not symbols_file.exists():
@@ -324,6 +339,25 @@ def main() -> None:
     if args.bptt_horizon > 0:
         print(f"BPTT horizon:          {args.bptt_horizon} steps")
 
+    # ── Count unique symbols for adversarial head sizing ──
+    # The adversarial head must match the actual number of pretraining symbols,
+    # which may far exceed the portfolio universe (e.g. 500 vs 100).
+    # We count from the symbols file directly — this is the authoritative source,
+    # immune to synthetic shard inflation (50K FDA_SYNTH_* files on disk).
+    if args.smoke:
+        adversarial_n_assets: int | None = None  # defaults to n_assets
+    else:
+        adversarial_n_assets = _count_symbols(args.symbols_file)
+        if adversarial_n_assets == 0:
+            raise RuntimeError(
+                f"No symbols found in {args.symbols_file}. "
+                "Check that the file contains at least one symbol."
+            )
+        print(
+            f"Adversarial head: {adversarial_n_assets} symbols "
+            f"(from {args.symbols_file.name}, portfolio spec: {spec.n_assets})"
+        )
+
     pretrainer = SelfSupervisedPretrainer(
         backbone=backbone,
         fusion=fusion,
@@ -331,6 +365,7 @@ def main() -> None:
         input_projection=input_projection,
         d_model=spec.d_model,
         n_assets=spec.n_assets,
+        adversarial_n_assets=adversarial_n_assets,
         device=device,
         gradient_checkpointing=args.gradient_checkpointing,
         bptt_horizon=args.bptt_horizon,
