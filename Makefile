@@ -117,12 +117,13 @@ FDA_X0_CLIP      ?= 5.0
 FDA_MAX_GEN_ROUNDS ?= 3000
 
 # HuggingFace upload settings. No-ops when HF_TOKEN is empty.
-FDA_TAR_DIR      ?= data/fda_tars
-FDA_TAR_REPO     ?= Verdenroz/meridian-fda-synth
-FDA_TAR_MIB      ?= 100
-FDA_TAR_PRIVATE  ?= 1
 HF_DATA_REPO     ?= Verdenroz/meridian-data
 HF_DATA_PRIVATE  ?= 1
+FDA_TAR_DIR      ?= data/fda_tars
+FDA_TAR_REPO     ?= $(HF_DATA_REPO)
+FDA_TAR_PATH     ?= fda_tars
+FDA_TAR_MIB      ?= 100
+FDA_TAR_PRIVATE  ?= $(HF_DATA_PRIVATE)
 
 PORT_EXTRA ?= --gradient-checkpointing --workers 2 --pta-deterministic --compile
 PRETRAIN_STEPS ?= 20000
@@ -389,13 +390,13 @@ upload-fda:
 		echo "no tars in $(FDA_TAR_DIR); run 'make pack-fda' first"; \
 		exit 1; \
 	fi; \
-	echo "uploading $${#tar_files[@]} tar(s) from $(FDA_TAR_DIR) → $(FDA_TAR_REPO)"; \
+	echo "uploading $${#tar_files[@]} tar(s) from $(FDA_TAR_DIR) → $(FDA_TAR_REPO)/$(FDA_TAR_PATH)"; \
 	private_flag=""; \
 	if [ "$(FDA_TAR_PRIVATE)" = "1" ]; then private_flag="True"; else private_flag="False"; fi; \
 	$(PYTHON) -c "\
 from tools.hf_common import upload_folder_to_dataset; \
 from pathlib import Path; \
-url = upload_folder_to_dataset(Path('$(FDA_TAR_DIR)'), '$(FDA_TAR_REPO)', private=$$private_flag, allow_patterns=['*.tar', '*.json']); \
+url = upload_folder_to_dataset(Path('$(FDA_TAR_DIR)'), '$(FDA_TAR_REPO)', private=$$private_flag, allow_patterns=['*.tar', '*.json'], path_in_repo='$(FDA_TAR_PATH)'); \
 print('uploaded →', url)"
 
 pack-fda:
@@ -412,11 +413,11 @@ pack-fda:
 	fi; \
 	upload_args=""; \
 	if [ -n "$${HF_TOKEN:-}" ]; then \
-		upload_args="--upload-repo $(FDA_TAR_REPO)"; \
+		upload_args="--upload-repo $(FDA_TAR_REPO) --upload-path-in-repo $(FDA_TAR_PATH)"; \
 		if [ "$(FDA_TAR_PRIVATE)" = "1" ]; then \
 			upload_args="$$upload_args --upload-private"; \
 		fi; \
-		echo "uploading to HuggingFace: $(FDA_TAR_REPO) (private=$(FDA_TAR_PRIVATE))"; \
+		echo "uploading to HuggingFace: $(FDA_TAR_REPO)/$(FDA_TAR_PATH) (private=$(FDA_TAR_PRIVATE))"; \
 	else \
 		echo "HF_TOKEN not set — packing locally only, skipping upload"; \
 		echo "  (export HF_TOKEN=hf_... to push to $(FDA_TAR_REPO))"; \

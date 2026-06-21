@@ -17,7 +17,7 @@ CLI:
     python -m python.tools.pack_fda_shards \\
         --src data/mmaps_synth/train \\
         --out /tmp/fda_tars \\
-        --upload-repo user/meridian-fda-synth
+        --upload-repo user/meridian-data --upload-path-in-repo fda_tars
 """
 
 from __future__ import annotations
@@ -154,6 +154,7 @@ def main() -> None:
     ap.add_argument("--prefix", type=str, default="FDA_SYNTH_", help="source filename prefix to pack")
     ap.add_argument("--source-manifest", type=Path, default=None, help="path to fda_manifest.json to copy config into new manifest")
     ap.add_argument("--upload-repo", type=str, default=None, help="HF dataset repo id to upload tars to (optional)")
+    ap.add_argument("--upload-path-in-repo", type=str, default="", help="subdirectory within the repo to upload into (e.g. fda_tars)")
     ap.add_argument("--upload-private", action="store_true", help="create the HF dataset as private")
     ap.add_argument("--dry-run", action="store_true", help="plan only, skip packing and upload")
     args = ap.parse_args()
@@ -183,7 +184,12 @@ def main() -> None:
     print(f"[pack] manifest: {manifest_path}")
 
     if args.upload_repo:
-        url = upload_to_hf(args.out, args.upload_repo, private=args.upload_private)
+        url = upload_to_hf(
+            args.out,
+            args.upload_repo,
+            path_in_repo=args.upload_path_in_repo,
+            private=args.upload_private,
+        )
         print(f"[upload] {url}")
 
 
