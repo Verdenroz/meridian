@@ -125,6 +125,37 @@ def infer_regime_label(feature_seq: np.ndarray) -> int:
     return 2  # mean-reverting
 
 
+# Yahoo non-equity tickers: crypto trades 7 days/week, FX/futures and indices use
+# their own calendars — none align positionally to the SPY trading calendar.
+_NON_EQUITY_SUFFIXES = ("-USD", "=X", "=F")
+
+
+def _is_spy_calendar_symbol(stem: str) -> bool:
+    """True when a shard follows the SPY/NYSE trading calendar (i.e. an equity).
+
+    Crypto/FX/futures rows don't correspond date-for-date to the SPY-derived
+    regime labels, so positional alignment is invalid for them.
+    """
+    if stem.startswith("^"):
+        return False
+    return not any(stem.endswith(suf) for suf in _NON_EQUITY_SUFFIXES)
+
+
+def _global_label_offset(n_rows: int, n_label_rows: int) -> int | None:
+    """Right-alignment offset mapping a shard row to a global SPY-calendar label.
+
+    All real shards end on the shared train cutoff, so the last shard row aligns
+    to the last label row: shard row i ↔ label row (i + n_label_rows - n_rows).
+    The offset is negative when a shard has more history than SPY's own shard —
+    its earliest rows predate the label calendar and map to negative indices,
+    which callers mask out. Returns None only when no labels exist. Callers must
+    gate on `_is_spy_calendar_symbol` first to exclude non-equity calendars.
+    """
+    if n_label_rows <= 0:
+        return None
+    return n_label_rows - n_rows
+
+
 # ── HMM regime labeling ──────────────────────────────────────────────────────
 
 
@@ -334,6 +365,19 @@ class ShardDataset(IterableDataset):
             if self.global_regime_labels is not None
             else 0
         )
+        # Shards are right-aligned to the train cutoff, so row i maps to global
+        # label row (i + offset). Without this offset, short-history shards
+        # (recent IPOs) read the wrong regime. Synthetic and non-SPY-calendar
+        # shards (offset None) fall back to the heuristic label.
+        label_offset = (
+            _global_label_offset(n_rows, n_label_rows)
+            if (
+                not is_synthetic
+                and self.global_regime_labels is not None
+                and _is_spy_calendar_symbol(path.stem)
+            )
+            else None
+        )
 
         for start in indices:
             start_idx = int(start)
@@ -343,14 +387,13 @@ class ShardDataset(IterableDataset):
             next_return = float(data[start_idx + self.seq_len, RETURN_FEATURE_INDEX])
             # Use HMM label at the last step of the anchor window so the
             # regime reflects the current market state at inference time.
-            # Synthetic shards have no date-aligned HMM labels → heuristic.
-            label_idx = start_idx + self.seq_len - 1
-            if (
-                not is_synthetic
-                and self.global_regime_labels is not None
-                and label_idx < n_label_rows
-            ):
-                regime_id = int(self.global_regime_labels[label_idx])
+            if label_offset is not None:
+                label_idx = start_idx + self.seq_len - 1 + label_offset
+                regime_id = (
+                    int(self.global_regime_labels[label_idx])
+                    if 0 <= label_idx < n_label_rows
+                    else infer_regime_label(seq_a)
+                )
             else:
                 regime_id = infer_regime_label(seq_a)
             yield (
@@ -452,9 +495,11 @@ def _shard_n_rows(path: Path) -> int:
 class RegimeBalancedShardDataset(IterableDataset):
     """Streams TCP tuples sampled uniformly across the 4 HMM regimes.
 
-    Real shards share the SPY trading calendar so a single per-regime start-idx
-    index applies to all of them. Synthetic shards are interleaved at
-    `synthetic_fraction` to preserve their loss contribution.
+    Real shards end on the shared train cutoff, so each is right-aligned to the
+    SPY label calendar (shard row i ↔ label row i + n_labels - shard_len) and
+    bucketed per shard — short-history shards no longer truncate the reachable
+    calendar. Synthetic shards are interleaved at `synthetic_fraction` to
+    preserve their loss contribution.
     """
 
     PER_ASSET_DIM = PER_ASSET_FEATURE_DIM
@@ -500,27 +545,62 @@ class RegimeBalancedShardDataset(IterableDataset):
         if not self.real_paths:
             raise ValueError("RegimeBalancedShardDataset needs at least one real shard")
 
-        # Determine valid starts shared across real shards (calendar-aligned).
-        # Use the shortest real shard as the row count to stay within bounds.
-        n_rows_min = min(_shard_n_rows(p) for p in self.real_paths)
+        # Per-shard, right-aligned regime bucketing. Each real shard ends on the
+        # shared train cutoff, so shard row i maps to global label row
+        # (i + n_label_rows - shard_len). Bucketing per shard (rather than over
+        # the shortest shard's length, as a naive shared index would) ensures the
+        # full calendar — including the rare mean-rev/crisis regimes that occur
+        # outside any single short shard's window — is reachable. Each bucket
+        # stores (shard_idx, start_idx) pairs so the sampled regime always
+        # matches the window actually emitted.
+        n_label_rows = len(global_regime_labels)
         min_start = max(0, -positive_offset)
-        max_start = n_rows_min - seq_len - max(positive_offset, 0) + 1
-        if max_start <= min_start:
-            raise ValueError(
-                f"Real shards too short for seq_len={seq_len} "
-                f"offset={positive_offset} (n_rows={n_rows_min})"
-            )
+        self.regime_real_paths: list[Path] = []
+        bucket_shard: dict[int, list[np.ndarray]] = {r: [] for r in range(n_regimes)}
+        bucket_start: dict[int, list[np.ndarray]] = {r: [] for r in range(n_regimes)}
+        skipped_unaligned = 0
+        for p in self.real_paths:
+            if not _is_spy_calendar_symbol(p.stem):
+                skipped_unaligned += 1  # crypto/FX/futures — not SPY-calendar
+                continue
+            n_rows = _shard_n_rows(p)
+            offset = _global_label_offset(n_rows, n_label_rows)
+            if offset is None:
+                skipped_unaligned += 1
+                continue
+            max_start = n_rows - seq_len - max(positive_offset, 0) + 1
+            if max_start <= min_start:
+                continue
+            starts = np.arange(min_start, max_start, dtype=np.int64)
+            g_idx = starts + seq_len - 1 + offset
+            in_range = (g_idx >= 0) & (g_idx < n_label_rows)
+            starts = starts[in_range]
+            if len(starts) == 0:
+                continue
+            labels = global_regime_labels[g_idx[in_range]].astype(np.int64)
+            shard_idx = len(self.regime_real_paths)
+            self.regime_real_paths.append(p)
+            for r in range(n_regimes):
+                sel = starts[labels == r]
+                if len(sel):
+                    bucket_shard[r].append(np.full(len(sel), shard_idx, dtype=np.int64))
+                    bucket_start[r].append(sel)
 
-        starts = np.arange(min_start, max_start, dtype=np.int64)
-        label_idx = starts + seq_len - 1
-        valid = label_idx < len(global_regime_labels)
-        starts = starts[valid]
-        labels = global_regime_labels[label_idx[valid]].astype(np.int64)
-        self.starts_by_regime: dict[int, np.ndarray] = {
-            r: starts[labels == r] for r in range(n_regimes)
+        if not self.regime_real_paths:
+            raise ValueError(
+                "RegimeBalancedShardDataset: no SPY-calendar-aligned real shards "
+                f"(seq_len={seq_len} offset={positive_offset})"
+            )
+        self.bucket_shard: dict[int, np.ndarray] = {
+            r: (np.concatenate(bucket_shard[r]) if bucket_shard[r] else np.empty(0, dtype=np.int64))
+            for r in range(n_regimes)
+        }
+        self.bucket_start: dict[int, np.ndarray] = {
+            r: (np.concatenate(bucket_start[r]) if bucket_start[r] else np.empty(0, dtype=np.int64))
+            for r in range(n_regimes)
         }
         self.present_regimes: list[int] = [
-            r for r in range(n_regimes) if len(self.starts_by_regime[r]) > 0
+            r for r in range(n_regimes) if len(self.bucket_start[r]) > 0
         ]
         if not self.present_regimes:
             raise ValueError("no valid regime buckets — regime labels missing")
@@ -531,9 +611,15 @@ class RegimeBalancedShardDataset(IterableDataset):
                 f"windows in this split; sampling uniformly across "
                 f"{self.present_regimes} only."
             )
+        if skipped_unaligned:
+            print(
+                f"RegimeBalancedShardDataset: skipped {skipped_unaligned} non-equity "
+                f"shard(s) (crypto/FX/futures) not on the SPY trading calendar — "
+                f"excluded from regime sampling."
+            )
         regime_names = ["bull", "hi-vol", "mean-rev", "crisis"]
         bucket_summary = "  ".join(
-            f"{regime_names[r]}={len(self.starts_by_regime[r])}"
+            f"{regime_names[r]}={len(self.bucket_start[r])}"
             for r in range(n_regimes)
         )
         print(f"RegimeBalancedShardDataset bucket sizes:  {bucket_summary}")
@@ -553,9 +639,13 @@ class RegimeBalancedShardDataset(IterableDataset):
         rng: np.random.Generator,
     ) -> tuple[np.ndarray, np.ndarray, float, int, int, int, float, int]:
         regime_id = int(self.present_regimes[rng.integers(len(self.present_regimes))])
-        bucket = self.starts_by_regime[regime_id]
-        start_idx = int(bucket[rng.integers(len(bucket))])
-        path = self.real_paths[rng.integers(len(self.real_paths))]
+        shard_pool = self.bucket_shard[regime_id]
+        start_pool = self.bucket_start[regime_id]
+        j = int(rng.integers(len(start_pool)))
+        # (shard, start) are paired so the window's true regime matches regime_id;
+        # a random shard would break the right-aligned label correspondence.
+        path = self.regime_real_paths[int(shard_pool[j])]
+        start_idx = int(start_pool[j])
         data = self._load_rows(path)
 
         pos_start = start_idx + self.positive_offset
