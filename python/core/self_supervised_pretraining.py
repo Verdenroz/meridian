@@ -1998,12 +1998,8 @@ class SelfSupervisedPretrainer:
                 val_loss = val_metrics["total"]
                 val_contrastive_acc = val_metrics["contrastive_acc"]
                 val_pred_r2 = val_metrics["prediction_r2"]
-                best_val_loss = min(best_val_loss, val_loss)
-                if val_contrastive_acc > (
-                    best_val_contrastive_acc + cfg.early_stop_min_delta
-                ):
-                    best_val_contrastive_acc = val_contrastive_acc
-                    stale_eval_count = 0
+                if val_loss < best_val_loss - cfg.early_stop_min_delta:
+                    best_val_loss = val_loss
                     save_checkpoint(
                         Checkpoint(
                             step=step,
@@ -2015,6 +2011,12 @@ class SelfSupervisedPretrainer:
                         ),
                         cfg.checkpoint_path,
                     )
+
+                if val_contrastive_acc > (
+                    best_val_contrastive_acc + cfg.early_stop_min_delta
+                ):
+                    best_val_contrastive_acc = val_contrastive_acc
+                    stale_eval_count = 0
                 else:
                     stale_eval_count += 1
                     if (
