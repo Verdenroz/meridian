@@ -93,8 +93,9 @@ class MeridianSpec:
     learning_rate: float = 3e-4
     pretrain_min_lr: float = 1e-5
     tcp_temperature: float = 0.1
-    tcp_lambda_contrastive: float = 0.7
-    tcp_lambda_prediction: float = 0.3
+    tcp_lambda_contrastive: float = 0.6
+    tcp_lambda_supcon: float = 0.2
+    tcp_lambda_prediction: float = 0.2
     pretrain_fda_loss_weight: float = 0.5
     pretrain_positive_offset: int = 4
     dropout: float = 0.1
@@ -150,8 +151,9 @@ class MeridianSpec:
         assert self.learning_rate == 3e-4
         assert self.pretrain_min_lr == 1e-5
         assert self.tcp_temperature == 0.1
-        assert self.tcp_lambda_contrastive == 0.7
-        assert self.tcp_lambda_prediction == 0.3
+        assert self.tcp_lambda_contrastive == 0.6
+        assert self.tcp_lambda_supcon == 0.2
+        assert self.tcp_lambda_prediction == 0.2
         assert self.pretrain_fda_loss_weight == 0.5
         assert self.pretrain_positive_offset == 4
 

@@ -220,12 +220,19 @@ def main() -> None:
         "--lambda-prediction", type=float, default=DEFAULT_SPEC.tcp_lambda_prediction
     )
     parser.add_argument(
+        "--lambda-supcon",
+        type=float,
+        default=DEFAULT_SPEC.tcp_lambda_supcon,
+        help="Regime supervised-contrastive (SupCon) weight (§11.3). "
+        "0 disables it and reproduces the legacy instance-only objective.",
+    )
+    parser.add_argument(
         "--fda-loss-weight", type=float, default=DEFAULT_SPEC.pretrain_fda_loss_weight
     )
     parser.add_argument(
         "--positive-offset", type=int, default=DEFAULT_SPEC.pretrain_positive_offset
     )
-    parser.add_argument("--multi-asset-corr-threshold", type=float, default=0.6)
+    parser.add_argument("--multi-asset-corr-threshold", type=float, default=0.3)
     parser.add_argument("--negative-min-separation", type=int, default=50)
     parser.add_argument(
         "--cross-asset-no-sector",
@@ -407,6 +414,7 @@ def main() -> None:
             contrastive_temperature=args.temperature,
             contrastive_weight=args.lambda_contrastive,
             prediction_weight=args.lambda_prediction,
+            supcon_weight=args.lambda_supcon,
             positive_pair_offset=args.positive_offset,
             fda_loss_weight=args.fda_loss_weight,
             multi_asset_corr_threshold=args.multi_asset_corr_threshold,
@@ -482,6 +490,7 @@ def _run_with_smoke_data(
         contrastive_temperature=args.temperature,
         contrastive_weight=args.lambda_contrastive,
         prediction_weight=args.lambda_prediction,
+        supcon_weight=args.lambda_supcon,
         positive_pair_offset=args.positive_offset,
         fda_loss_weight=args.fda_loss_weight,
         multi_asset_corr_threshold=args.multi_asset_corr_threshold,

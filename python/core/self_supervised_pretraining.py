@@ -12,7 +12,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, IterableDataset
-
 from train.feature_schema import (
     MARKET_FEATURE_DIM,
     PER_ASSET_FEATURE_DIM,
@@ -592,11 +591,19 @@ class RegimeBalancedShardDataset(IterableDataset):
                 f"(seq_len={seq_len} offset={positive_offset})"
             )
         self.bucket_shard: dict[int, np.ndarray] = {
-            r: (np.concatenate(bucket_shard[r]) if bucket_shard[r] else np.empty(0, dtype=np.int64))
+            r: (
+                np.concatenate(bucket_shard[r])
+                if bucket_shard[r]
+                else np.empty(0, dtype=np.int64)
+            )
             for r in range(n_regimes)
         }
         self.bucket_start: dict[int, np.ndarray] = {
-            r: (np.concatenate(bucket_start[r]) if bucket_start[r] else np.empty(0, dtype=np.int64))
+            r: (
+                np.concatenate(bucket_start[r])
+                if bucket_start[r]
+                else np.empty(0, dtype=np.int64)
+            )
             for r in range(n_regimes)
         }
         self.present_regimes: list[int] = [
@@ -619,8 +626,7 @@ class RegimeBalancedShardDataset(IterableDataset):
             )
         regime_names = ["bull", "hi-vol", "mean-rev", "crisis"]
         bucket_summary = "  ".join(
-            f"{regime_names[r]}={len(self.bucket_start[r])}"
-            for r in range(n_regimes)
+            f"{regime_names[r]}={len(self.bucket_start[r])}" for r in range(n_regimes)
         )
         print(f"RegimeBalancedShardDataset bucket sizes:  {bucket_summary}")
 
@@ -699,8 +705,7 @@ class RegimeBalancedShardDataset(IterableDataset):
         rng = np.random.default_rng(worker_seed)
         while True:
             use_synth = (
-                len(self.synthetic_paths) > 0
-                and rng.random() < self.synthetic_fraction
+                len(self.synthetic_paths) > 0 and rng.random() < self.synthetic_fraction
             )
             if use_synth:
                 t = self._emit_synthetic(rng)
@@ -785,9 +790,9 @@ class TarShardDataset(ShardDataset):
             return tarfile.open(fileobj=urlopen(source), mode="r|")
         return tarfile.open(source, mode="r")
 
-    def _iter_tar(self, source: str) -> Iterator[
-        tuple[np.ndarray, np.ndarray, float, int, int, int, float, int]
-    ]:
+    def _iter_tar(
+        self, source: str
+    ) -> Iterator[tuple[np.ndarray, np.ndarray, float, int, int, int, float, int]]:
         tf = self._open_tar(source)
         try:
             for member in tf:
@@ -808,15 +813,11 @@ class TarShardDataset(ShardDataset):
                 data = arr.reshape(-1, self.FEATURE_DIM)
                 # Synth entries inherit FDA_SYNTH_ prefix by construction.
                 is_synthetic = Path(member.name).stem.startswith(self.synthetic_prefix)
-                sample_weight = (
-                    self.synthetic_loss_weight if is_synthetic else 1.0
-                )
+                sample_weight = self.synthetic_loss_weight if is_synthetic else 1.0
                 # +1 lets exact-length shards yield one pair (see _iter_shard).
                 n_rows = data.shape[0]
                 min_start = max(0, -self.positive_offset)
-                max_start = (
-                    n_rows - self.seq_len - max(self.positive_offset, 0) + 1
-                )
+                max_start = n_rows - self.seq_len - max(self.positive_offset, 0) + 1
                 if max_start <= min_start:
                     continue
                 indices = np.arange(min_start, max_start)
@@ -1183,11 +1184,7 @@ def _build_contrastive_logits_and_mask(
         hard_negatives = same_asset & diff_regime
         logits = logits + hard_negatives.to(logits.dtype) * hard_negative_boost
 
-    if (
-        asset_ids is not None
-        and regime_ids is not None
-        and return_windows is not None
-    ):
+    if asset_ids is not None and regime_ids is not None and return_windows is not None:
         if sector_ids is not None and (
             sector_ids.ndim != 1 or sector_ids.shape[0] != z_a.shape[0]
         ):
@@ -1195,9 +1192,7 @@ def _build_contrastive_logits_and_mask(
         corr = _pairwise_return_correlation(return_windows)
         same_regime = regime_ids[:, None] == regime_ids[None, :]
         diff_asset = asset_ids[:, None] != asset_ids[None, :]
-        additional_positives = (
-            same_regime & diff_asset & (corr > correlation_threshold)
-        )
+        additional_positives = same_regime & diff_asset & (corr > correlation_threshold)
         if require_same_sector and sector_ids is not None:
             known_sector = sector_ids >= 0
             same_sector = sector_ids[:, None] == sector_ids[None, :]
@@ -1278,6 +1273,45 @@ def regime_aware_contrastive_terms(
     return loss, contrastive_acc
 
 
+def regime_supervised_contrastive_loss(
+    z_a: torch.Tensor,
+    z_b: torch.Tensor,
+    regime_ids: torch.Tensor,
+    temperature: float = 0.1,
+    sample_weights: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Supervised-contrastive (SupCon) term grouping windows by HMM regime.
+
+    Instance-discrimination contrastive learning (one positive per anchor)
+    produces no regime geometry — empirically <0.01 cross-asset positives per
+    anchor reach the mask, so silhouette stays ~0 (§11.3 audit). SupCon
+    (Khosla et al. 2020) treats every same-regime window in the batch as a
+    positive, supplying a dense regime-grouping gradient. It groups by *regime*,
+    not *asset*, so it does not fight the adversarial head's asset-invariance.
+    """
+    if temperature <= 0.0:
+        raise ValueError(f"temperature must be > 0, got {temperature}")
+    z = torch.cat([z_a, z_b], dim=0).to(torch.float32)
+    z = F.normalize(z, dim=-1)
+    labels = torch.cat([regime_ids, regime_ids], dim=0)
+    n = z.shape[0]
+    logits = (z @ z.T) / temperature
+    self_mask = torch.eye(n, dtype=torch.bool, device=z.device)
+    # Exclude self from both numerator and denominator (exp(-inf)=0).
+    logits = logits.masked_fill(self_mask, float("-inf"))
+    pos_mask = (labels[:, None] == labels[None, :]) & ~self_mask
+    log_prob = logits - torch.logsumexp(logits, dim=1, keepdim=True)
+    pos_count = pos_mask.sum(dim=1)
+    # masked_fill (not multiply): log_prob is -inf at self, and -inf * 0 = NaN.
+    pos_log_prob = log_prob.masked_fill(~pos_mask, 0.0).sum(dim=1)
+    per_anchor = -pos_log_prob / pos_count.clamp_min(1)
+    valid = (pos_count > 0).to(torch.float32)
+    if sample_weights is not None:
+        w = torch.cat([sample_weights, sample_weights], dim=0).to(torch.float32) * valid
+        return (per_anchor * w).sum() / w.sum().clamp_min(1e-8)
+    return (per_anchor * valid).sum() / valid.sum().clamp_min(1.0)
+
+
 # ── Trainer ──────────────────────────────────────────────────────────────────
 
 
@@ -1295,12 +1329,13 @@ class TrainConfig:
     save_every: int = 5_000
     eval_max_batches: int = 50
     contrastive_temperature: float = 0.1
-    contrastive_weight: float = 0.7
-    prediction_weight: float = 0.3
+    contrastive_weight: float = 0.6
+    prediction_weight: float = 0.2
+    supcon_weight: float = 0.2
     positive_pair_offset: int = 4
     fda_loss_weight: float = 0.5
     hard_negative_boost: float = 0.25
-    multi_asset_corr_threshold: float = 0.6
+    multi_asset_corr_threshold: float = 0.3
     negative_min_separation: int = 50
     require_same_sector: bool = True
     # Asset-adversarial loss to break the asset-identity shortcut (§11.3 audit).
@@ -1453,6 +1488,7 @@ class SelfSupervisedPretrainer:
         max_eval_batches = cfg.eval_max_batches if max_batches is None else max_batches
         totals: dict[str, float] = {
             "contrastive": 0.0,
+            "supcon": 0.0,
             "prediction": 0.0,
             "adversarial": 0.0,
             "adversarial_acc": 0.0,
@@ -1493,6 +1529,7 @@ class SelfSupervisedPretrainer:
                         temperature=cfg.contrastive_temperature,
                         contrastive_weight=cfg.contrastive_weight,
                         prediction_weight=cfg.prediction_weight,
+                        supcon_weight=cfg.supcon_weight,
                         hard_negative_boost=cfg.hard_negative_boost,
                         correlation_threshold=cfg.multi_asset_corr_threshold,
                         min_negative_gap=cfg.negative_min_separation,
@@ -1502,6 +1539,7 @@ class SelfSupervisedPretrainer:
                     )
                 for k in (
                     "contrastive",
+                    "supcon",
                     "prediction",
                     "adversarial",
                     "adversarial_acc",
@@ -1596,7 +1634,11 @@ class SelfSupervisedPretrainer:
         labels = km.fit_predict(embs_np)
         if len(np.unique(labels)) < 2:
             return float("nan")
-        return float(silhouette_score(embs_np, labels, metric="cosine", sample_size=min(500, len(embs_np))))
+        return float(
+            silhouette_score(
+                embs_np, labels, metric="cosine", sample_size=min(500, len(embs_np))
+            )
+        )
 
     def eval_tsne_plot(
         self,
@@ -1608,6 +1650,7 @@ class SelfSupervisedPretrainer:
         """t-SNE scatter coloured by regime label. Saves a PNG to reports_dir."""
         try:
             import matplotlib
+
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
             from sklearn.manifold import TSNE
@@ -1637,7 +1680,9 @@ class SelfSupervisedPretrainer:
             return None
 
         perplexity = min(30, len(embs_np) - 1)
-        coords = TSNE(n_components=2, perplexity=perplexity, random_state=0).fit_transform(embs_np)
+        coords = TSNE(
+            n_components=2, perplexity=perplexity, random_state=0
+        ).fit_transform(embs_np)
 
         colors = ["#2ecc71", "#e67e22", "#3498db", "#e74c3c"]
         regime_labels = ["bull", "hi-vol", "mean-rev", "crisis"]
@@ -1645,9 +1690,13 @@ class SelfSupervisedPretrainer:
         for rid in range(4):
             mask = regimes_np == rid
             ax.scatter(
-                coords[mask, 0], coords[mask, 1],
-                c=colors[rid], label=regime_labels[rid],
-                alpha=0.6, s=12, linewidths=0,
+                coords[mask, 0],
+                coords[mask, 1],
+                c=colors[rid],
+                label=regime_labels[rid],
+                alpha=0.6,
+                s=12,
+                linewidths=0,
             )
         ax.legend(title="regime", fontsize=8)
         ax.set_title(f"Backbone t-SNE — step {step:,}  (§11.3 cluster gate)")
@@ -1673,7 +1722,7 @@ class SelfSupervisedPretrainer:
         """
         B, T, _ = features.shape
         asset_feats = features[..., :184].unsqueeze(2)  # (B, T, 1, 184)
-        market_feats = features[..., 184:]              # (B, T, 96)
+        market_feats = features[..., 184:]  # (B, T, 96)
 
         n_assets = 1
         # Portfolio state is zeros during pretraining; width must match the
@@ -1698,7 +1747,7 @@ class SelfSupervisedPretrainer:
             regime_ema = ema_alpha * regime_ema + (1.0 - ema_alpha) * re_t.detach()
             prev_emb = re_t
         regime_embs_t = torch.stack(regime_embs_list, dim=1)  # (B, T, 64)
-        posteriors_t = torch.stack(posteriors_list, dim=1)    # (B, T, 4)
+        posteriors_t = torch.stack(posteriors_list, dim=1)  # (B, T, 4)
 
         # InputProjection is stateless over T — flatten then restore.
         asset_in = asset_feats.reshape(B * T, n_assets, -1)
@@ -1715,11 +1764,11 @@ class SelfSupervisedPretrainer:
         for t in range(T):
             if self.bptt_horizon > 0 and t > 0 and t % self.bptt_horizon == 0:
                 states = [s.detach() for s in states]
-            asset_tok = asset_tok_all[:, t]       # (B, 1, D)
+            asset_tok = asset_tok_all[:, t]  # (B, 1, D)
             re_t = regime_embs_t[:, t]
             post_t = posteriors_t[:, t]
             out, states = self.backbone(asset_tok, re_t, post_t, states)
-            pooled_steps.append(out.squeeze(1))   # (B, D)
+            pooled_steps.append(out.squeeze(1))  # (B, D)
 
         pooled = torch.stack(pooled_steps, dim=1).mean(dim=1)  # (B, D)
         if return_states:
@@ -1739,6 +1788,7 @@ class SelfSupervisedPretrainer:
         temperature: float = 0.1,
         contrastive_weight: float = 0.7,
         prediction_weight: float = 0.3,
+        supcon_weight: float = 0.0,
         hard_negative_boost: float = 0.25,
         correlation_threshold: float = 0.6,
         min_negative_gap: int = 50,
@@ -1803,19 +1853,32 @@ class SelfSupervisedPretrainer:
                 denom = sample_weights.sum().clamp_min(1e-8)
                 loss_adversarial = (adv_per_sample * sample_weights).sum() / denom
             adv_acc = (
-                asset_logits.argmax(dim=-1) == adv_targets
-            ).float().mean().detach()
+                (asset_logits.argmax(dim=-1) == adv_targets).float().mean().detach()
+            )
         else:
             loss_adversarial = torch.zeros((), device=self.device, dtype=torch.float32)
             adv_acc = torch.zeros((), device=self.device, dtype=torch.float32)
 
+        if supcon_weight > 0.0 and regime_ids is not None:
+            loss_supcon = regime_supervised_contrastive_loss(
+                z_a,
+                z_b,
+                regime_ids,
+                temperature=temperature,
+                sample_weights=sample_weights,
+            )
+        else:
+            loss_supcon = torch.zeros((), device=self.device, dtype=torch.float32)
+
         loss_total = (
             contrastive_weight * loss_contrastive
+            + supcon_weight * loss_supcon
             + prediction_weight * loss_prediction
             + loss_adversarial
         )
         out: dict[str, torch.Tensor] = {
             "contrastive": loss_contrastive,
+            "supcon": loss_supcon,
             "prediction": loss_prediction,
             "adversarial": loss_adversarial,
             "adversarial_acc": adv_acc,
@@ -1847,7 +1910,8 @@ class SelfSupervisedPretrainer:
         adv_head_params = list(self.adversarial_head.parameters())
         adv_head_ids = {id(p) for p in adv_head_params}
         other_params = [
-            p for p in self._all_modules.parameters()
+            p
+            for p in self._all_modules.parameters()
             if id(p) not in pred_head_ids
             and id(p) not in fusion_param_ids
             and id(p) not in adv_head_ids
@@ -1961,6 +2025,7 @@ class SelfSupervisedPretrainer:
                     temperature=cfg.contrastive_temperature,
                     contrastive_weight=cfg.contrastive_weight,
                     prediction_weight=cfg.prediction_weight,
+                    supcon_weight=cfg.supcon_weight,
                     hard_negative_boost=cfg.hard_negative_boost,
                     correlation_threshold=cfg.multi_asset_corr_threshold,
                     min_negative_gap=cfg.negative_min_separation,
@@ -1979,6 +2044,7 @@ class SelfSupervisedPretrainer:
                     f"{k}={losses[k].item():.4f}"
                     for k in (
                         "contrastive",
+                        "supcon",
                         "prediction",
                         "adversarial",
                         "adversarial_acc",
@@ -2045,14 +2111,18 @@ class SelfSupervisedPretrainer:
                     f"stale={stale_eval_count}"
                 )
 
-            tsne_source = diagnostic_loader if diagnostic_loader is not None else val_loader
+            tsne_source = (
+                diagnostic_loader if diagnostic_loader is not None else val_loader
+            )
             if (
                 tsne_source is not None
                 and cfg.tsne_every > 0
                 and step % cfg.tsne_every == 0
             ):
                 self.eval_tsne_plot(
-                    tsne_source, step, cfg.tsne_reports_dir,
+                    tsne_source,
+                    step,
+                    cfg.tsne_reports_dir,
                     max_batches=cfg.eval_max_batches,
                 )
 

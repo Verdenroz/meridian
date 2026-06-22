@@ -1394,20 +1394,40 @@ For a batch of B sequence windows {W_1, ..., W_B}:
      L_contrastive = -log( exp(z_i^a · z_i^b / τ) / Σ_j exp(z_i^a · z_j^b / τ) )
      τ = 0.1 (temperature)
   
-  4. Auxiliary prediction head (kept from v3.0):
+  4. Regime supervised-contrastive term (v4.0, SupCon — Khosla et al. 2020):
+     Within each batch, ALL windows sharing an HMM regime label are positives.
+     L_supcon = mean over anchors i of
+        -1/|P(i)| Σ_{p∈P(i)} log( exp(z_i·z_p/τ) / Σ_{a≠i} exp(z_i·z_a/τ) )
+     P(i) = {windows with the same regime label as i}, taken over both views.
+
+     Rationale (audit, 2026-06-22): the instance-contrastive objective (step 3)
+     is solved trivially by instance discrimination — adjacent-window positives
+     beat in-batch negatives at ~100% accuracy without learning any regime
+     geometry. The multi-asset positive construction below was meant to supply
+     regime structure but is empirically inert: at B=128 only ~0.009 cross-asset
+     positives per anchor survive the corr>0.6 gate (zero in half of all
+     batches), so cluster silhouette stays ~0. SupCon supplies a dense
+     (~30–60 positives/anchor) regime-grouping gradient. It groups by *regime*,
+     not *asset*, so it does not conflict with the asset-adversarial head.
+
+  5. Auxiliary prediction head (kept from v3.0):
      L_pred = MSE(predict_return(backbone(W_i^a)), actual_return_{t+1})
   
   Total Phase 1 loss:
-     L = λ_c × L_contrastive + λ_p × L_pred
-     λ_c = 0.7, λ_p = 0.3  (contrastive dominates)
+     L = λ_c × L_contrastive + λ_r × L_supcon + λ_p × L_pred
+     λ_c = 0.6, λ_r = 0.2, λ_p = 0.2  (instance-contrastive still leads)
 
-Multi-asset positive pairs:
+Multi-asset positive pairs (secondary, v4.0 relaxed):
   Additional positive pairs: (window of asset i at time t, window of 
   asset j at time t) when both assets are in the same sector AND same
-  regime AND their price correlation over the window is > 0.6.
+  regime AND their price correlation over the window is > 0.3.
   
   This teaches the backbone that AAPL and MSFT in a bull tech regime
   should have similar representations — improving cross-asset fusion.
+  v4.0 note: the correlation threshold is lowered 0.6 → 0.3 because 64-day
+  daily-return correlation rarely clears 0.6 even within a sector, which left
+  this pool empty. Regime structure now comes primarily from SupCon (step 4);
+  these pairs are a secondary cross-asset signal.
 ```
 
 **Training setup:**
@@ -1433,8 +1453,12 @@ Gradient clip: 1.0
 ```
 Minimum to proceed to Phase 2:
   - Contrastive accuracy (positive pair > all negatives) > 0.60
+    NOTE: necessary but NOT sufficient — this saturates at ~1.0 via trivial
+    instance discrimination and says nothing about representation quality.
+    Cluster silhouette (below) is the binding regime-separation gate.
   - Auxiliary return prediction R² > 0.01 (non-trivial but low is expected)
-  - Regime separation: t-SNE of representations shows 4 visible clusters
+  - Regime separation: cluster silhouette > 0.10 on regime-stratified
+    embeddings (quantitative proxy for "t-SNE shows 4 visible clusters")
   - SWA attention entropy < 0.8 (attending to specific positions, not uniform)
 ```
 
