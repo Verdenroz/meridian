@@ -22,6 +22,14 @@ TOTAL_FEATURE_DIM = PER_ASSET_FEATURE_DIM + MARKET_FEATURE_DIM
 SYNTHETIC_SHARD_PREFIX = "FDA_SYNTH_"
 UNKNOWN_SECTOR_ID = -1
 
+# Auxiliary prediction target: forward realized volatility, not return level.
+# One-step return level is a martingale — unpredictable no matter how much data
+# we pour in — so its R² gate could never pass. Realized vol clusters strongly,
+# is the axis meridian's regime taxonomy turns on, and the abundant cross-asset /
+# cross-regime pretraining data makes it genuinely learnable.
+PREDICTION_HORIZON: int = 10
+_LOG_VOL_FLOOR: float = 1e-6
+
 __all__ = [
     "MARKET_FEATURE_DIM",
     "PER_ASSET_FEATURE_DIM",
@@ -53,19 +61,24 @@ class ProjectionHead(nn.Module):
 class ReturnPredictionHead(nn.Module):
     """Auxiliary next-step prediction head.
 
-    Outputs (return, log_vol) at t+1. Return is supervised via MSE during
-    pretraining; log_vol is unused until inference.
+    Outputs (return, log_vol) at t+1. During pretraining log_vol is supervised
+    via MSE against forward realized volatility (the predictable, regime-defining
+    signal); the return output is left unsupervised (one-step level is a martingale).
 
-    Zero-initialised so early predictions start near zero, avoiding the
-    ~3-order-of-magnitude MSE blow-up that occurs with default Linear init
-    against O(1e-3) log-return targets.
+    Weights are zero-initialised; the log_vol bias is primed to a ~1% daily-vol
+    prior so the head starts near the target mean instead of ~4.6 nats away.
     """
+
+    # log(0.01) ≈ -4.6 — a typical daily log-return volatility.
+    _LOG_VOL_BIAS_PRIOR: float = math.log(0.01)
 
     def __init__(self, d_model: int = 768) -> None:
         super().__init__()
         self.net = nn.Linear(d_model, 2)
         nn.init.zeros_(self.net.weight)
         nn.init.zeros_(self.net.bias)
+        with torch.no_grad():
+            self.net.bias[1] = self._LOG_VOL_BIAS_PRIOR
 
     def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         out = self.net(x)
@@ -122,6 +135,26 @@ def infer_regime_label(feature_seq: np.ndarray) -> int:
     if ret_proxy >= 0.0:
         return 0  # low-vol bull
     return 2  # mean-reverting
+
+
+def next_window_log_vol(
+    data: np.ndarray,
+    start_idx: int,
+    seq_len: int,
+    horizon: int = PREDICTION_HORIZON,
+) -> float:
+    """Log realized volatility of the ``horizon`` returns following the anchor window.
+
+    Log-space keeps the target ~O(1) (vs O(1e-2) return level), so the auxiliary
+    MSE carries real gradient weight instead of being numerically starved. The
+    slice auto-clamps near a shard's tail; the <2-obs fallback to the anchor
+    window is a guard that effectively never fires under the emit bounds.
+    """
+    end = start_idx + seq_len
+    fut = data[end : end + horizon, RETURN_FEATURE_INDEX].astype(np.float64)
+    if fut.shape[0] < 2:
+        fut = data[start_idx:end, RETURN_FEATURE_INDEX].astype(np.float64)
+    return math.log(float(np.std(fut)) + _LOG_VOL_FLOOR)
 
 
 # Yahoo non-equity tickers: crypto trades 7 days/week, FX/futures and indices use
@@ -283,7 +316,7 @@ class ShardDataset(IterableDataset):
 
     For each anchor window W_a, the dataset emits:
       - adjacent positive window W_b (offset by `positive_offset` rows),
-      - one-step-ahead return target for auxiliary prediction loss,
+      - forward log realized-vol target for the auxiliary prediction loss,
       - metadata (asset/regime/sector IDs, source weight).
     """
 
@@ -383,7 +416,7 @@ class ShardDataset(IterableDataset):
             pos_start = start_idx + self.positive_offset
             seq_a = data[start_idx : start_idx + self.seq_len]  # (T, F)
             seq_b = data[pos_start : pos_start + self.seq_len]  # (T, F)
-            next_return = float(data[start_idx + self.seq_len, RETURN_FEATURE_INDEX])
+            vol_target = next_window_log_vol(data, start_idx, self.seq_len)
             # Use HMM label at the last step of the anchor window so the
             # regime reflects the current market state at inference time.
             if label_offset is not None:
@@ -398,7 +431,7 @@ class ShardDataset(IterableDataset):
             yield (
                 seq_a,
                 seq_b,
-                next_return,
+                vol_target,
                 asset_id,
                 regime_id,
                 sector_id,
@@ -460,7 +493,7 @@ class ShardDataset(IterableDataset):
                     (
                         seq_a,
                         seq_b,
-                        next_return,
+                        vol_target,
                         asset_id,
                         regime_id,
                         sector_id,
@@ -472,7 +505,7 @@ class ShardDataset(IterableDataset):
                 yield (
                     torch.from_numpy(seq_a.copy()),
                     torch.from_numpy(seq_b.copy()),
-                    torch.tensor(next_return, dtype=torch.float32),
+                    torch.tensor(vol_target, dtype=torch.float32),
                     torch.tensor(asset_id, dtype=torch.long),
                     torch.tensor(regime_id, dtype=torch.long),
                     torch.tensor(sector_id, dtype=torch.long),
@@ -657,13 +690,13 @@ class RegimeBalancedShardDataset(IterableDataset):
         pos_start = start_idx + self.positive_offset
         seq_a = data[start_idx : start_idx + self.seq_len].copy()
         seq_b = data[pos_start : pos_start + self.seq_len].copy()
-        next_return = float(data[start_idx + self.seq_len, RETURN_FEATURE_INDEX])
+        vol_target = next_window_log_vol(data, start_idx, self.seq_len)
         asset_id = int(self.symbol_to_id.get(path.stem, 0))
         sector_id = int(self.symbol_to_sector.get(path.stem, UNKNOWN_SECTOR_ID))
         return (
             seq_a,
             seq_b,
-            next_return,
+            vol_target,
             asset_id,
             regime_id,
             sector_id,
@@ -686,12 +719,12 @@ class RegimeBalancedShardDataset(IterableDataset):
         pos_start = start_idx + self.positive_offset
         seq_a = data[start_idx : start_idx + self.seq_len].copy()
         seq_b = data[pos_start : pos_start + self.seq_len].copy()
-        next_return = float(data[start_idx + self.seq_len, RETURN_FEATURE_INDEX])
+        vol_target = next_window_log_vol(data, start_idx, self.seq_len)
         regime_id = infer_regime_label(seq_a)
         return (
             seq_a,
             seq_b,
-            next_return,
+            vol_target,
             0,
             regime_id,
             UNKNOWN_SECTOR_ID,
@@ -716,7 +749,7 @@ class RegimeBalancedShardDataset(IterableDataset):
             (
                 seq_a,
                 seq_b,
-                next_return,
+                vol_target,
                 asset_id,
                 regime_id,
                 sector_id,
@@ -726,7 +759,7 @@ class RegimeBalancedShardDataset(IterableDataset):
             yield (
                 torch.from_numpy(seq_a),
                 torch.from_numpy(seq_b),
-                torch.tensor(next_return, dtype=torch.float32),
+                torch.tensor(vol_target, dtype=torch.float32),
                 torch.tensor(asset_id, dtype=torch.long),
                 torch.tensor(regime_id, dtype=torch.long),
                 torch.tensor(sector_id, dtype=torch.long),
@@ -828,14 +861,12 @@ class TarShardDataset(ShardDataset):
                     pos_start = start_idx + self.positive_offset
                     seq_a = data[start_idx : start_idx + self.seq_len]
                     seq_b = data[pos_start : pos_start + self.seq_len]
-                    next_return = float(
-                        data[start_idx + self.seq_len, RETURN_FEATURE_INDEX]
-                    )
+                    vol_target = next_window_log_vol(data, start_idx, self.seq_len)
                     regime_id = infer_regime_label(seq_a)
                     yield (
                         seq_a,
                         seq_b,
-                        next_return,
+                        vol_target,
                         0,  # asset_id — synthetic windows are not asset-specific
                         regime_id,
                         UNKNOWN_SECTOR_ID,
@@ -858,7 +889,7 @@ class TarShardDataset(ShardDataset):
             for (
                 seq_a,
                 seq_b,
-                next_return,
+                vol_target,
                 asset_id,
                 regime_id,
                 sector_id,
@@ -868,7 +899,7 @@ class TarShardDataset(ShardDataset):
                 yield (
                     torch.from_numpy(seq_a.copy()),
                     torch.from_numpy(seq_b.copy()),
-                    torch.tensor(next_return, dtype=torch.float32),
+                    torch.tensor(vol_target, dtype=torch.float32),
                     torch.tensor(asset_id, dtype=torch.long),
                     torch.tensor(regime_id, dtype=torch.long),
                     torch.tensor(sector_id, dtype=torch.long),
@@ -1429,7 +1460,7 @@ class SelfSupervisedPretrainer:
         (
             features,
             positives,
-            next_returns,
+            vol_targets,
             asset_ids,
             regime_ids,
             sector_ids,
@@ -1439,7 +1470,7 @@ class SelfSupervisedPretrainer:
         return (
             features,
             positives,
-            next_returns,
+            vol_targets,
             asset_ids,
             regime_ids,
             sector_ids,
@@ -1504,7 +1535,7 @@ class SelfSupervisedPretrainer:
                 (
                     features,
                     positives,
-                    next_returns,
+                    vol_targets,
                     asset_ids,
                     regime_ids,
                     sector_ids,
@@ -1519,7 +1550,7 @@ class SelfSupervisedPretrainer:
                     losses = self._forward_losses(
                         features,
                         positives,
-                        next_returns=next_returns,
+                        vol_targets=vol_targets,
                         asset_ids=asset_ids,
                         regime_ids=regime_ids,
                         sector_ids=sector_ids,
@@ -1547,8 +1578,8 @@ class SelfSupervisedPretrainer:
                 ):
                     v = losses[k]
                     totals[k] += v.item()
-                pred_values.append(losses["pred_returns"].detach().cpu())
-                target_values.append(losses["target_returns"].detach().cpu())
+                pred_values.append(losses["pred_logvol"].detach().cpu())
+                target_values.append(losses["target_logvol"].detach().cpu())
                 n += 1
         self._all_modules.train()
         metrics = {k: v / max(n, 1) for k, v in totals.items()}
@@ -1561,7 +1592,7 @@ class SelfSupervisedPretrainer:
             # Diagnostic: surface scale mismatches so catastrophic R² can be
             # traced to pred/target distribution rather than modelling failure.
             print(
-                f"  val pred  mean={pred.mean().item():+.3e} std={pred.std().item():.3e}  "
+                f"  val logvol  mean={pred.mean().item():+.3e} std={pred.std().item():.3e}  "
                 f"target mean={target.mean().item():+.3e} std={target.std().item():.3e}  "
                 f"SSE={sse.item():.4f}  SST={sst.item():.4f}"
             )
@@ -1785,7 +1816,7 @@ class SelfSupervisedPretrainer:
         self,
         features: torch.Tensor,  # (B, T, 280) — per-asset (184) + market (96)
         positives: torch.Tensor,  # (B, T, 280) — temporally adjacent window
-        next_returns: torch.Tensor | None = None,  # (B,) one-step-ahead return target
+        vol_targets: torch.Tensor | None = None,  # (B,) forward log realized-vol target
         asset_ids: torch.Tensor | None = None,
         regime_ids: torch.Tensor | None = None,
         sector_ids: torch.Tensor | None = None,
@@ -1804,9 +1835,11 @@ class SelfSupervisedPretrainer:
     ) -> dict[str, torch.Tensor]:
         features = features.to(self.device)
         positives = positives.to(self.device)
-        if next_returns is None:
-            next_returns = positives[:, -1, RETURN_FEATURE_INDEX]
-        next_returns = next_returns.to(self.device).to(torch.float32)
+        if vol_targets is None:
+            # Fallback (no dataset target): log realized-vol of the positive window.
+            window_returns = positives[:, :, RETURN_FEATURE_INDEX].to(torch.float32)
+            vol_targets = torch.log(window_returns.std(dim=1) + _LOG_VOL_FLOOR)
+        vol_targets = vol_targets.to(self.device).to(torch.float32)
         if asset_ids is not None:
             asset_ids = asset_ids.to(self.device)
         if regime_ids is not None:
@@ -1837,9 +1870,11 @@ class SelfSupervisedPretrainer:
             sample_weights=sample_weights,
         )
 
-        pred_returns_raw, _ = self.prediction_head(view_a)
-        pred_returns = pred_returns_raw.to(torch.float32)
-        pred_errors = (pred_returns - next_returns) ** 2
+        # Supervise the log_vol head output (index 1); the return output (index 0)
+        # is a martingale and stays unsupervised during pretraining.
+        _, pred_logvol_raw = self.prediction_head(view_a)
+        pred_logvol = pred_logvol_raw.to(torch.float32)
+        pred_errors = (pred_logvol - vol_targets) ** 2
 
         if sample_weights is None:
             loss_prediction = pred_errors.mean()
@@ -1894,8 +1929,8 @@ class SelfSupervisedPretrainer:
             "contrastive_acc": contrastive_acc,
         }
         if return_aux:
-            out["pred_returns"] = pred_returns
-            out["target_returns"] = next_returns
+            out["pred_logvol"] = pred_logvol
+            out["target_logvol"] = vol_targets
         return out
 
     def train(
@@ -1906,10 +1941,9 @@ class SelfSupervisedPretrainer:
         resume_from: Path | None = None,
         diagnostic_loader: DataLoader | None = None,
     ) -> None:
-        # Prediction head sits on near-unpredictable log-return targets; at the
-        # backbone lr it chases batch-mean drift and oscillates. Give it a 10×
-        # lower lr so it settles on the optimal constant (predict ≈ 0) and only
-        # moves off it when backbone features carry real signal.
+        # Prediction head now learns forward realized-vol (a genuinely learnable,
+        # regime-defining target), so it runs at the backbone lr rather than the
+        # old 10× reduction that pinned it near a constant for the martingale return.
         pred_head_params = list(self.prediction_head.parameters())
         pred_head_ids = {id(p) for p in pred_head_params}
         # Fusion is only active during portfolio training; exclude from optimizer
@@ -1927,7 +1961,7 @@ class SelfSupervisedPretrainer:
         optimizer = torch.optim.AdamW(
             [
                 {"params": other_params, "lr": cfg.lr},
-                {"params": pred_head_params, "lr": cfg.lr * 0.1},
+                {"params": pred_head_params, "lr": cfg.lr},
                 {"params": adv_head_params, "lr": cfg.lr, "weight_decay": 0.0},
             ],
             lr=cfg.lr,
@@ -1998,7 +2032,7 @@ class SelfSupervisedPretrainer:
             (
                 features,
                 positives,
-                next_returns,
+                vol_targets,
                 asset_ids,
                 regime_ids,
                 sector_ids,
@@ -2024,7 +2058,7 @@ class SelfSupervisedPretrainer:
                 losses = self._forward_losses(
                     features,
                     positives,
-                    next_returns=next_returns,
+                    vol_targets=vol_targets,
                     asset_ids=asset_ids,
                     regime_ids=regime_ids,
                     sector_ids=sector_ids,
