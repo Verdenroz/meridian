@@ -956,7 +956,7 @@ def build_split_loaders(
 ) -> tuple[DataLoader, DataLoader, DataLoader | None]:
     """Build train/val DataLoaders from {data_dir}/train/ and {data_dir}/validation/.
 
-    Fits HMM regime labels on the train split (§11.2 / §11.3) and assigns
+    Fits HMM regime labels on the train split and assigns
     globally-consistent asset IDs for correct multi-worker batching.
     Raises RuntimeError if no train shards are found.
     """
@@ -1283,11 +1283,10 @@ def regime_supervised_contrastive_loss(
     """Supervised-contrastive (SupCon) term grouping windows by HMM regime.
 
     Instance-discrimination contrastive learning (one positive per anchor)
-    produces no regime geometry — empirically <0.01 cross-asset positives per
-    anchor reach the mask, so silhouette stays ~0 (§11.3 audit). SupCon
-    (Khosla et al. 2020) treats every same-regime window in the batch as a
-    positive, supplying a dense regime-grouping gradient. It groups by *regime*,
-    not *asset*, so it does not fight the adversarial head's asset-invariance.
+    produces no regime geometry. SupCon (Khosla et al. 2020) treats every
+    same-regime window in the batch as a positive, supplying a dense
+    regime-grouping gradient. It groups by regime, not asset, so it does not
+    fight the adversarial head's asset-invariance.
     """
     if temperature <= 0.0:
         raise ValueError(f"temperature must be > 0, got {temperature}")
@@ -1338,7 +1337,7 @@ class TrainConfig:
     multi_asset_corr_threshold: float = 0.3
     negative_min_separation: int = 50
     require_same_sector: bool = True
-    # Asset-adversarial loss to break the asset-identity shortcut (§11.3 audit).
+    # Asset-adversarial loss to break the asset-identity shortcut.
     # Schedule ramps λ from 0 → adversarial_lambda over `adversarial_warmup_steps`.
     adversarial_lambda: float = 0.0
     adversarial_warmup_steps: int = 2_000
@@ -1569,7 +1568,7 @@ class SelfSupervisedPretrainer:
         else:
             metrics["prediction_r2"] = 0.0
 
-        # §11.3 diagnostic gates — separate methods keep the hot eval loop lean.
+        # Diagnostic gates — separate methods keep the hot eval loop lean.
         metrics["swa_entropy"] = self.eval_swa_entropy(
             val_loader, max_batches=min(max_eval_batches, 10)
         )
@@ -1608,35 +1607,42 @@ class SelfSupervisedPretrainer:
         val_loader: DataLoader,
         max_batches: int = 20,
     ) -> float:
-        """k-means silhouette score on backbone embeddings (gate: > 0.10)."""
-        from sklearn.cluster import KMeans
+        """Silhouette of backbone embeddings against true regime labels (gate: > 0.10).
+
+        Scores separation of the actual regimes, not generic k-means clusterability.
+        """
         from sklearn.metrics import silhouette_score
 
         self._all_modules.eval()
         all_embs: list[torch.Tensor] = []
+        all_labels: list[torch.Tensor] = []
         with torch.no_grad():
             for batch_idx, batch in enumerate(val_loader):
                 if batch_idx >= max_batches:
                     break
-                features = self._unpack_batch(batch)[0].to(self.device)
+                unpacked = self._unpack_batch(batch)
+                features = unpacked[0].to(self.device)
+                regime_ids = unpacked[4]
                 emb = self._encode_sequence(features)  # (B, D)
                 all_embs.append(F.normalize(emb.float(), dim=-1).cpu())
+                all_labels.append(regime_ids.cpu())
         self._all_modules.train()
 
         if not all_embs:
             return float("nan")
 
         embs_np = torch.cat(all_embs, dim=0).numpy()  # (N, D)
-        if len(embs_np) < 8:
-            return float("nan")
-
-        km = KMeans(n_clusters=4, n_init=5, random_state=0)
-        labels = km.fit_predict(embs_np)
-        if len(np.unique(labels)) < 2:
+        labels_np = torch.cat(all_labels, dim=0).numpy()  # (N,)
+        # silhouette needs ≥2 regimes present and ≥1 extra sample beyond label count.
+        if len(embs_np) < 8 or len(np.unique(labels_np)) < 2:
             return float("nan")
         return float(
             silhouette_score(
-                embs_np, labels, metric="cosine", sample_size=min(500, len(embs_np))
+                embs_np,
+                labels_np,
+                metric="cosine",
+                sample_size=min(500, len(embs_np)),
+                random_state=0,
             )
         )
 
@@ -1699,7 +1705,7 @@ class SelfSupervisedPretrainer:
                 linewidths=0,
             )
         ax.legend(title="regime", fontsize=8)
-        ax.set_title(f"Backbone t-SNE — step {step:,}  (§11.3 cluster gate)")
+        ax.set_title(f"Backbone t-SNE — step {step:,}  (cluster gate)")
         ax.set_xticks([])
         ax.set_yticks([])
         fig.tight_layout()
@@ -1732,7 +1738,7 @@ class SelfSupervisedPretrainer:
         calendar = torch.zeros(B, 20, device=self.device)
         states = self.backbone.init_state(B, n_assets, self.device)
 
-        # Per-step regime detection (§7.2). ema_alpha=0.95 → ~14-step half-life.
+        # Per-step regime detection. ema_alpha=0.95 → ~14-step half-life.
         ema_alpha = 0.95
         regime_ema = torch.zeros(B, 64, device=self.device)
         prev_emb: torch.Tensor | None = None
@@ -1860,9 +1866,11 @@ class SelfSupervisedPretrainer:
             adv_acc = torch.zeros((), device=self.device, dtype=torch.float32)
 
         if supcon_weight > 0.0 and regime_ids is not None:
+            # SupCon shapes the backbone embeddings, not the projection head, so
+            # its regime-grouping gradient reaches the space the gate measures.
             loss_supcon = regime_supervised_contrastive_loss(
-                z_a,
-                z_b,
+                view_a,
+                view_b,
                 regime_ids,
                 temperature=temperature,
                 sample_weights=sample_weights,
