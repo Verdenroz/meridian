@@ -1958,11 +1958,12 @@ class SelfSupervisedPretrainer:
             and id(p) not in fusion_param_ids
             and id(p) not in adv_head_ids
         ]
+        # Gradient-reversal makes the adversarial head a feedback loop
         optimizer = torch.optim.AdamW(
             [
                 {"params": other_params, "lr": cfg.lr},
                 {"params": pred_head_params, "lr": cfg.lr},
-                {"params": adv_head_params, "lr": cfg.lr, "weight_decay": 0.0},
+                {"params": adv_head_params, "lr": cfg.lr * 0.2, "weight_decay": 0.0},
             ],
             lr=cfg.lr,
             weight_decay=0.01,
@@ -2106,8 +2107,15 @@ class SelfSupervisedPretrainer:
                 val_loss = val_metrics["total"]
                 val_contrastive_acc = val_metrics["contrastive_acc"]
                 val_pred_r2 = val_metrics["prediction_r2"]
+                # Track the best contrastive acc for reporting/checkpoint
+                if val_contrastive_acc > (
+                    best_val_contrastive_acc + cfg.early_stop_min_delta
+                ):
+                    best_val_contrastive_acc = val_contrastive_acc
+
                 if val_loss < best_val_loss - cfg.early_stop_min_delta:
                     best_val_loss = val_loss
+                    stale_eval_count = 0
                     save_checkpoint(
                         Checkpoint(
                             step=step,
@@ -2119,12 +2127,6 @@ class SelfSupervisedPretrainer:
                         ),
                         cfg.checkpoint_path,
                     )
-
-                if val_contrastive_acc > (
-                    best_val_contrastive_acc + cfg.early_stop_min_delta
-                ):
-                    best_val_contrastive_acc = val_contrastive_acc
-                    stale_eval_count = 0
                 else:
                     stale_eval_count += 1
                     if (
@@ -2132,7 +2134,7 @@ class SelfSupervisedPretrainer:
                         and stale_eval_count >= cfg.early_stop_patience_evals
                     ):
                         print(
-                            "Early stopping on validation contrastive accuracy "
+                            "Early stopping on validation loss "
                             f"patience ({cfg.early_stop_patience_evals} evals)."
                         )
                         break
