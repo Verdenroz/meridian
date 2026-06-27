@@ -1397,6 +1397,9 @@ class PortfolioTrainer:
         cfg: "PortfolioTrainConfig",
         backbone_params: list[torch.nn.Parameter],
         synthetic_loader: DataLoader | None = None,
+        resume_step: int = 0,
+        resume_optimizer_state: dict | None = None,
+        resume_scheduler_state: dict | None = None,
     ) -> None:
         if cfg.cross_asset_warmup_steps <= 0:
             return
@@ -1413,6 +1416,13 @@ class PortfolioTrainer:
             warmup_optimizer,
             lr_lambda=lambda s: self._cosine_lr(s, warmup_sched_cfg),
         )
+        # Resume a partially-completed warm-up: the backbone weights were already
+        # restored by the caller; here we restore the warm-up optimizer/scheduler
+        # so momentum and the cosine LR position continue seamlessly.
+        if resume_optimizer_state is not None:
+            warmup_optimizer.load_state_dict(resume_optimizer_state)
+        if resume_scheduler_state is not None:
+            warmup_scheduler.load_state_dict(resume_scheduler_state)
 
         data_iter = iter(train_loader)
         synth_iter = iter(synthetic_loader) if synthetic_loader is not None else None
@@ -1445,11 +1455,21 @@ class PortfolioTrainer:
                 data_iter = iter(train_loader)
                 return _extract_warmup_target(next(data_iter))
 
-        print(
-            "Starting cross-asset warm-up: "
-            f"{cfg.cross_asset_warmup_steps} steps, corr_window={cfg.cross_asset_corr_window}"
-        )
-        for warmup_step in range(cfg.cross_asset_warmup_steps):
+        # Save the warm-up checkpoint periodically so a session drop mid-warm-up
+        # resumes instead of restarting the ~180k-step (~10 H100h) phase. Cap the
+        # cadence so very long warm-ups don't thrash Drive: at most ~20 saves.
+        warmup_save_every = max(cfg.save_every, cfg.cross_asset_warmup_steps // 20)
+        if resume_step > 0:
+            print(
+                f"Resuming cross-asset warm-up at step {resume_step}/"
+                f"{cfg.cross_asset_warmup_steps}, corr_window={cfg.cross_asset_corr_window}"
+            )
+        else:
+            print(
+                "Starting cross-asset warm-up: "
+                f"{cfg.cross_asset_warmup_steps} steps, corr_window={cfg.cross_asset_corr_window}"
+            )
+        for warmup_step in range(resume_step, cfg.cross_asset_warmup_steps):
             use_synth = (
                 synth_iter is not None
                 and torch.rand(1).item() < cfg.fda_mix_prob
@@ -1491,6 +1511,21 @@ class PortfolioTrainer:
                     f"corr_frob={warmup_loss.item():.4f}  lr={lr_now:.2e}  "
                     f"source={source}"
                 )
+
+            # Intermediate save (step < total) keeps the warm-up resumable; the
+            # stored step is how the caller tells a partial warm-up from a
+            # complete one (step == cross_asset_warmup_steps).
+            if (warmup_step + 1) % warmup_save_every == 0 and (
+                warmup_step + 1
+            ) < cfg.cross_asset_warmup_steps:
+                self._save(
+                    cfg.warmup_path,
+                    warmup_step + 1,
+                    warmup_optimizer,
+                    warmup_scheduler,
+                    float("inf"),
+                )
+                print(f"  warm-up checkpoint saved at step {warmup_step + 1}")
 
         self._save(
             cfg.warmup_path,
@@ -2191,6 +2226,16 @@ class PortfolioTrainer:
         start_step = 0
         best_monitor = float("inf")
         last_improve_step = 0
+        # A checkpoint that already carries a portfolio head has been through the
+        # Phase-2a cross-asset warm-up (it is baked into the saved backbone), so
+        # the ~180k-step warm-up must not re-run on resume. The raw pretrain
+        # backbone has no head → warm-up still runs on cold start.
+        backbone_already_warmed = False
+        # State for resuming a partially-completed warm-up (set only when the
+        # resume source is the warm-up checkpoint and it stopped early).
+        warmup_resume_step = 0
+        warmup_resume_optimizer_state: dict | None = None
+        warmup_resume_scheduler_state: dict | None = None
 
         if resume_from is not None and resume_from.exists():
             ckpt = load_checkpoint(resume_from)
@@ -2206,10 +2251,28 @@ class PortfolioTrainer:
                     self.vol_head.load_state_dict(state["vol_head"])
                 except RuntimeError:
                     pass  # pretrain vol_head has different arch — fresh init is fine
-            if f"head_{cfg.head}" in state:
+            resumed_from_warmup = resume_from.resolve() == cfg.warmup_path.resolve()
+            # The warm-up checkpoint always serialises a *fresh* head and uses its
+            # step field to encode warm-up progress. step >= total → warm-up done
+            # (skip it, head trains from 0); step < total → resume the warm-up.
+            if resumed_from_warmup:
+                if f"head_{cfg.head}" in state:
+                    (self.head_r if cfg.head == "return" else self.head_s).load_state_dict(
+                        state[f"head_{cfg.head}"]
+                    )
+                if ckpt.step >= cfg.cross_asset_warmup_steps:
+                    backbone_already_warmed = True
+                else:
+                    warmup_resume_step = ckpt.step
+                    warmup_resume_optimizer_state = ckpt.optimizer_state
+                    warmup_resume_scheduler_state = ckpt.scheduler_state
+            elif f"head_{cfg.head}" in state:
+                # Genuine head checkpoint: warm-up is already baked into the
+                # backbone, and the step field is real head-training progress.
                 (self.head_r if cfg.head == "return" else self.head_s).load_state_dict(
                     state[f"head_{cfg.head}"]
                 )
+                backbone_already_warmed = True
                 start_step = ckpt.step
                 best_monitor = ckpt.best_val_loss
                 last_improve_step = start_step
@@ -2268,16 +2331,20 @@ class PortfolioTrainer:
             enforce_regime_balance=cfg.enforce_regime_balance,
         )
 
-        if cfg.cross_asset_warmup_steps > 0 and start_step == 0:
+        if cfg.cross_asset_warmup_steps > 0 and not backbone_already_warmed:
             self._run_cross_asset_warmup(
                 train_loader=warmup_train_loader,
                 cfg=cfg,
                 backbone_params=backbone_params,
                 synthetic_loader=warmup_synthetic_loader,
+                resume_step=warmup_resume_step,
+                resume_optimizer_state=warmup_resume_optimizer_state,
+                resume_scheduler_state=warmup_resume_scheduler_state,
             )
-        elif cfg.cross_asset_warmup_steps > 0 and start_step > 0:
+        elif cfg.cross_asset_warmup_steps > 0:
             print(
-                f"Skipping cross-asset warm-up because training resumes at step {start_step}"
+                "Skipping cross-asset warm-up: backbone already warmed "
+                f"(resuming head training from step {start_step})"
             )
 
         backbone_frozen = self._should_freeze_backbone(start_step, cfg)
