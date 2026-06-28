@@ -2836,6 +2836,14 @@ def main() -> None:
     parser.add_argument("--head", choices=["return", "sharpe"], default="return")
     parser.add_argument("--data-dir", type=Path, default=Path("data/mmaps"))
     parser.add_argument(
+        "--synth-dir",
+        type=Path,
+        default=Path("data/mmaps_synth_joint"),
+        help="Directory holding JOINT FDA synthetic shards (FDA_SYNTH_*.f32bin with "
+        "(n_assets, T, F) windows from `make fda-joint`). Kept separate from --data-dir "
+        "because per-asset and joint synth share the FDA_SYNTH_ prefix but differ in shape.",
+    )
+    parser.add_argument(
         "--symbols-file",
         type=Path,
         default=Path("portfolio_symbols.txt"),
@@ -3179,8 +3187,13 @@ def main() -> None:
             required_assets=spec.n_assets,
             allowed_symbols=allowed,
         )
+        # Joint FDA synth lives in its own dir (--synth-dir), NOT --data-dir: the
+        # portfolio loader needs joint (n_assets, T, F) windows, while --data-dir
+        # may hold per-asset synth (shared FDA_SYNTH_ prefix, wrong shape here).
         synth_train_paths = sorted(
-            p for p in all_train_paths if p.name.startswith(_SYNTH_PREFIX)
+            p
+            for p in enumerate_shards(args.synth_dir, "train")
+            if p.name.startswith(_SYNTH_PREFIX)
         )
         val_paths = select_portfolio_shards(
             all_val_paths,

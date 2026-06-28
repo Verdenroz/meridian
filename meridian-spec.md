@@ -1889,6 +1889,30 @@ The SWA KV caches add ~37.7 MB to static allocation — a meaningful increase bu
 
 ## 18. Development Roadmap
 
+### 18.0 Planned Quality Improvements
+
+Consistent with the **quality over efficiency** priority (§2), the following improvements are
+planned. They reuse the existing pretrained backbone — none require re-running Phase 1.
+
+**Inference / runtime:**
+- FP32 inference everywhere; no quantization.
+- Run the **full harrier-oss + FinBERT text teachers in-process** for Block-8 features instead of the distilled student.
+- **Exact k-NN** episodic memory (`IndexFlat`) with an enlarged buffer cap.
+- Inference-time ensembling: **blended Meridian-R + Meridian-S heads**, test-time augmentation, and an always-on temporal cascade. (Blending requires both heads trained.)
+
+**Phase 2 (portfolio) training:**
+- **Joint FDA synthetic augmentation.** The portfolio loader (`SyntheticWindowPortfolioDataset`)
+  requires joint `(n_assets, T, F)` windows; the per-asset FDA synth used in pretraining is the
+  wrong shape and is silently skipped. Phase 2 reads joint synth (`data/mmaps_synth_joint`,
+  produced by `make fda-joint`) via a dedicated `--synth-dir`, kept separate from `--data-dir`
+  so the two synth formats never collide on the shared `FDA_SYNTH_` prefix.
+- Loss/objective tuning (`losses.py`: DSR, turnover, volatility-aux), stronger PTA, and FDA
+  mix-ratio / per-batch validation-gate tuning.
+
+Model-capacity scaling (`d_model`/experts) is **not currently planned**: it would require a full
+Phase 1 retrain and, under the data-scarcity regime (~1,695 bars/asset), is more likely to overfit
+than to help. It is reconsidered only if a measured baseline shows the model underfitting.
+
 ### Phase 0: Data Infrastructure & FDA (Weeks 1–5)
 
 - [ ] Build DataBus in Rust using finance-query as library dependency

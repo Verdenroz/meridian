@@ -276,12 +276,15 @@ collect:
 	@$(MAKE) fda
 	@$(MAKE) pack-fda
 	@$(MAKE) upload
+	@$(MAKE) fda-joint
+	@$(MAKE) pack-fda-joint
 	@$(MAKE) augment-data
 	@$(MAKE) stats-aug
 	@echo ""
 	@echo "✓ make collect complete — training DATA is ready:"
 	@echo "  real shards  : $(DATA_DIR)/{train,validation,test}"
-	@echo "  synth shards : $(SYNTH_DIR)/train"
+	@echo "  synth shards : $(SYNTH_DIR)/train (per-asset, for pretrain)"
+	@echo "  joint synth  : $(FDA_JOINT_OUT)/train (joint, for portfolio --synth-dir)"
 	@echo "  merged       : $(AUG_DATA_DIR)/{train,validation,test} (used by TRAIN_DATA)"
 	@echo ""
 	@echo "  next — model training (GPU, run each in order, monitor via tmux):"
@@ -610,7 +613,7 @@ portfolio-return:
 		echo "ignoring incompatible backbone checkpoint at $(BACKBONE)"; \
 	fi; \
 	$(call TMUX_RUN,portfolio,source .venv/bin/activate && PYTHONPATH=python python -m train.portfolio_train \
-		--head return --data-dir $(TRAIN_DATA) --symbols-file $(PORTFOLIO_SYMBOLS) \
+		--head return --data-dir $(TRAIN_DATA) --synth-dir $(FDA_JOINT_OUT) --symbols-file $(PORTFOLIO_SYMBOLS) \
 		--steps 50000 --cross-asset-warmup-steps $(WARMUP_STEPS) --cross-asset-warmup-batch-size $(WARMUP_BATCH) --batch-size $(BATCH_PORT) --seq-len 64 \
 		--bptt-chunk $(BPTT_CHUNK_PORT) --pta-micro-batch-size $(PTA_MICRO_BS) --regime-pool-size $(REGIME_POOL) \
 		--lr 3e-5 --log-every 10 --eval-every 250 --save-every 250 --checkpoint-dir $(CKPT_PORT) $(PORT_EXTRA) \
@@ -630,7 +633,7 @@ portfolio-sharpe:
 		echo "ignoring incompatible sharpe bootstrap checkpoint at $(RETURN_CKPT)"; \
 	fi; \
 	$(call TMUX_RUN,portfolio,source .venv/bin/activate && PYTHONPATH=python python -m train.portfolio_train \
-		--head sharpe --data-dir $(TRAIN_DATA) --symbols-file $(PORTFOLIO_SYMBOLS) \
+		--head sharpe --data-dir $(TRAIN_DATA) --synth-dir $(FDA_JOINT_OUT) --symbols-file $(PORTFOLIO_SYMBOLS) \
 		--steps 30000 --cross-asset-warmup-steps 0 --cross-asset-warmup-batch-size $(WARMUP_BATCH) --batch-size $(BATCH_PORT) --seq-len 64 \
 		--bptt-chunk $(BPTT_CHUNK_PORT) --pta-micro-batch-size $(PTA_MICRO_BS) --regime-pool-size $(REGIME_POOL) \
 		--lr 3e-5 --log-every 10 --eval-every 250 --save-every 250 --checkpoint-dir $(CKPT_PORT) $(PORT_EXTRA) \
