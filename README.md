@@ -1,6 +1,6 @@
 # Meridian
 
-Meridian is a regime-adaptive portfolio model designed for CPU-native inference on a Raspberry Pi 5 with H100-based training. It ingests **every available data stream** from finance-query — price, volume, 42 technical indicators, RSS/news feeds, options chains, EDGAR/XBRL fundamentals, transcripts, analyst/insider/ownership data, macro series, yield curves, sector data, world indices, and crypto market context — producing allocation weights every minute for up to 100 US-listed assets (equities, ETFs, crypto).
+Meridian is a regime-adaptive portfolio model designed for **full-precision (FP32) inference** on a small x86-64 host (reference: Framework Desktop, Ryzen AI Max+ 395, 128 GB unified) with H100-based training. The project's governing priority is **quality over efficiency**: with the hardware budget non-binding, every prior quality-vs-cost tradeoff resolves toward quality — FP32 (no quantization), full teacher text models run in-process, and exact-search episodic memory. (Earlier drafts targeted a Raspberry Pi 5 with ternary quantization; that path is superseded — see `meridian-spec.md` §4 and Design Philosophy.) It ingests **every available data stream** from finance-query — price, volume, 42 technical indicators, RSS/news feeds, options chains, EDGAR/XBRL fundamentals, transcripts, analyst/insider/ownership data, macro series, yield curves, sector data, world indices, and crypto market context — producing allocation weights every minute for up to 100 US-listed assets (equities, ETFs, crypto).
 
 The canonical architecture is now **v4.0** and is constrained by train/inference source alignment: training data is sourced from finance-query (daily history), not paid external minute-bar vendors. To address reduced data volume, v4 introduces FDA (diffusion augmentation), TCP (contrastive pretraining), PTA (portfolio-theoretic augmentation), and a hybrid RA-GDN + SWA backbone.
 
@@ -31,9 +31,10 @@ For the full canonical specification, see [`meridian-spec.md`](meridian-spec.md)
 | Training source / granularity | finance-query only / daily history |
 | v3 validated OOS Sharpe baseline | 0.57 |
 | v4 projected OOS Sharpe range | 0.82-1.24 (projected) |
-| Quantized model size (target) | ~23 MB |
-| Runtime memory footprint (target) | ~185 MB |
-| Inference latency (100 assets, target) | ~6-11 ms |
+| Model size | ~240 MB (FP32, default) / ~120 MB (FP16 option); not quantized |
+| Runtime memory footprint | ~1.5 GB process (FP32, measured); trivial against 128 GB |
+| Inference latency (100 assets) | ~145 ms/step (FP32 CPU) / ~35 ms (FP16 iGPU), measured; ≪ 60,000 ms budget |
+| Inference precision | FP32 (quality-first default); no quantization |
 | Data pipeline latency | ~200–500 ms (network-bound) |
 | Adaptation tiers | 3 (sub-second / hourly / daily) |
 | Training compute budget (v4 target) | ~180-280 H100-hours |
@@ -258,13 +259,14 @@ Override with `--command-template` for a custom collector command.
 
 ### Deployment
 
-- [ ] NEON ternary inference kernel in C
-- [ ] FAISS-backed episodic memory on ARM
-- [ ] Full Pi 5 inference pipeline orchestration
+- [ ] FP32 inference path in PyTorch on x86-64 (CPU; optional ROCm iGPU; FP16 optional) — no hand-written ternary/NEON kernel required
+- [ ] FAISS-backed episodic memory (faiss-cpu on x86-64)
+- [ ] Full inference pipeline orchestration on the reference target
 - [ ] 10M+ step recurrent state drift test
 - [ ] Paper trading engine with SQLite logging
-- [ ] Deploy to Pi 5 with monitoring dashboard
-- [ ] 72-hour continuous thermal and power stress test
+- [ ] Deploy to the Framework Desktop with monitoring dashboard
+- [ ] 72-hour continuous soak test (stability)
+- [ ] ~~NEON ternary kernel / ARM port~~ (deprecated — constrained-deployment fallback only)
 - [ ] Begin 6-month paper trading period
 
 ### Paper trading and iteration

@@ -29,7 +29,7 @@
    - 7.7 [Financial Episodic Memory](#77-financial-episodic-memory)
    - 7.8 [Portfolio Output Heads](#78-portfolio-output-heads)
    - 7.9 [Auxiliary Prediction Head](#79-auxiliary-prediction-head)
-   - 7.10 [MarketReader Text Encoder (distilled, Pi-native)](#710-marketreader-text-encoder-distilled-pi-native)
+   - 7.10 [MarketReader Text Encoder (distilled, optional)](#710-marketreader-text-encoder-distilled-optional)
 8. [Financial Diffusion Augmentation (FDA)](#8-financial-diffusion-augmentation-fda)
    - 8.1 [Motivation & Scope](#81-motivation--scope)
    - 8.2 [FDA Architecture](#82-fda-architecture)
@@ -63,7 +63,7 @@
     - 15.2 [Performance Tracking](#152-performance-tracking)
     - 15.3 [Adaptation Monitoring](#153-adaptation-monitoring)
     - 15.4 [Graduation Criteria (Paper → Live)](#154-graduation-criteria-paper--live)
-16. [Inference Runtime on Pi 5](#16-inference-runtime-on-pi-5)
+16. [Inference Runtime](#16-inference-runtime)
 17. [Memory Budget](#17-memory-budget)
 18. [Development Roadmap](#18-development-roadmap)
 19. [Risk Analysis & Mitigations](#19-risk-analysis--mitigations)
@@ -77,7 +77,7 @@
 
 ## 1. Executive Summary
 
-Meridian is a CPU-native neural network architecture designed to manage a portfolio of US-listed assets (equities, ETFs, crypto) 24/7 on a Raspberry Pi 5. The tradable universe is **user-controlled and dynamic**: a fixed maximum of `n_assets` slots (default 100) is the static, trained asset-axis dimension, and the live universe may be any subset of size 1..`n_assets`. Users add/remove symbols by editing `portfolio_symbols.txt` (hot-reloaded live); padded slots are masked out of cross-asset attention and the portfolio softmax, and the model is trained on random universe subsets so it generalizes to arbitrary membership. It ingests every available data stream from finance-query — price, volume, 42 technical indicators, 30+ RSS/news feeds, full options chains, EDGAR filings, XBRL fundamentals, earnings transcripts, analyst ratings, insider transactions, institutional ownership, macro series, yield curves, sector/industry data, Fear & Greed, world indices, trending tickers, and crypto market data — producing allocation weights every minute through a shared backbone with two output heads.
+Meridian is a neural network architecture designed to manage a portfolio of US-listed assets (equities, ETFs, crypto) 24/7 on a single small x86-64 host. The reference deployment target is a **Framework Desktop (AMD Ryzen AI Max+ 395, 128 GB unified memory)**; consistent with the project's quality-over-efficiency priority, the model runs in full-precision **FP32** (FP16 optional) with no quantization. The tradable universe is **user-controlled and dynamic**: a fixed maximum of `n_assets` slots (default 100) is the static, trained asset-axis dimension, and the live universe may be any subset of size 1..`n_assets`. Users add/remove symbols by editing `portfolio_symbols.txt` (hot-reloaded live); padded slots are masked out of cross-asset attention and the portfolio softmax, and the model is trained on random universe subsets so it generalizes to arbitrary membership. It ingests every available data stream from finance-query — price, volume, 42 technical indicators, 30+ RSS/news feeds, full options chains, EDGAR filings, XBRL fundamentals, earnings transcripts, analyst ratings, insider transactions, institutional ownership, macro series, yield curves, sector/industry data, Fear & Greed, world indices, trending tickers, and crypto market data — producing allocation weights every minute through a shared backbone with two output heads.
 
 **v4.0 addresses a fundamental constraint identified during v3.0 implementation:** training and inference must use the same data source (finance-query) to avoid distribution mismatch. This eliminates paid minute-bar providers (Polygon.io, FirstRate Data) as training data sources. With finance-query's free tier, the available training corpus is approximately **1,695 daily bars per equity asset** — roughly 290× less than the spec's original ~490K minute-bar assumption. At a ~95M-parameter target, this corresponds to ~56,000:1 in the 100-asset sequence view (1,695 joint samples) and ~560:1 in the asset-day view (169,500 observations), which drives early saturation and limits OOS Sharpe to approximately 0.57 in the current baseline.
 
@@ -121,9 +121,10 @@ Key metrics:
 | Event types tracked | 18 discrete event categories |
 | Text sources ingested | 30+ RSS feeds + per-ticker news + transcripts |
 | FDA synthetic multiplier | Up to 30× generated windows before effective-sample discount (planned) |
-| Quantized model size | ~23 MB |
-| Runtime memory footprint | ~185 MB |
-| Inference latency (100 assets) | ~6–11 ms |
+| Model size | ~240 MB (FP32, default) / ~120 MB (FP16 option) — not quantized |
+| Runtime memory footprint | ~1.5 GB process (FP32, measured) — trivial against 128 GB unified |
+| Inference latency (100 assets) | ~145 ms/step (FP32 CPU) / ~35 ms (FP16 iGPU), measured — ≪ 60,000 ms per-minute budget |
+| Inference precision | FP32 (quality-first default); no quantization |
 | Data pipeline latency | ~200–500 ms (network-bound) |
 | Adaptation mechanisms | 3-tier (sub-second / hourly / daily) |
 | Training compute | ~180–280 H100-hours |
@@ -145,7 +146,7 @@ Key metrics:
 
 ## 2. Design Philosophy
 
-Seven interlocking principles govern every architectural decision in v4.0:
+Seven interlocking principles govern every architectural decision in v4.0. **Quality over efficiency (below) is the tie-breaker whenever two principles conflict.**
 
 **Information maximalism.** The model ingests every available signal from finance-query — not just price and volume, but the full constellation of fundamental, sentiment, ownership, regulatory, macro, and cross-asset data that professional portfolio managers use. The Variable Selection Network ensures irrelevant signals are gated to zero rather than adding noise.
 
@@ -157,7 +158,7 @@ Seven interlocking principles govern every architectural decision in v4.0:
 
 **Data source fidelity.** Training data must come from the same source as inference data. No paid third-party price provider is used for training. All price and indicator data is sourced from finance-query, ensuring z-score baselines, volume normalizations, and indicator values are computed consistently between training and live inference. This constraint is architecturally enforced: the FDA is trained on finance-query data and generates sequences in the finance-query feature space.
 
-**Extreme efficiency.** Every operation must justify its compute cost on a Cortex-A76. Ternary weights from inception, O(1) recurrence, sliding window attention with fixed window size W=64 (O(W×N) not O(N²)). The added SWA layers increase inference latency by approximately 1.5 ms for the full 100-asset backbone — within budget.
+**Quality over efficiency.** This is the project's governing priority: predictive and risk-adjusted quality is maximized first, and compute/memory cost is spent freely in its service. The reference hardware (Framework Desktop, 128 GB unified) makes the former Pi-era budget non-binding — the full 100-asset backbone runs in ~145 ms/step (FP32 CPU) / ~35 ms/step (FP16 iGPU), ≪ the 60,000 ms per-minute budget — so every prior quality-vs-budget tradeoff resolves toward quality. Concretely: **FP32 inference** (no quantization rounding), **full teacher text models** run in-process (no distillation loss), **exact k-NN episodic memory**, and **spending inference compute** on blended heads / always-on temporal cascade / test-time augmentation. The efficiency-motivated primitives that *also* aid quality are retained on their own merit — O(1) recurrence and sliding window attention (W=64) capture complementary time scales — but no accuracy is ever traded for size or speed. Quantization (ternary/INT8) and the distilled-student encoder are **not used**; they survive only as a documented fallback for hypothetical resource-constrained deployments.
 
 **Separation of understanding from strategy.** The backbone learns market state. The output heads learn allocation strategy. This enables modular head swapping and backtesting flexibility. The FDA augments both backbone pretraining and portfolio head training independently, with different augmentation strategies appropriate to each phase.
 
@@ -175,9 +176,9 @@ Contributions 1–9 are carried forward from v3.0. v4.0 adds four new contributi
 4. **Financial Episodic Memory** — FAISS k-NN buffer of surprising market states
 5. **External Regime-Routed Sparse MoE** — HMM/neural posterior drives expert selection
 6. **Financial Calendar Embedding** — market-specific temporal encoding
-7. **Ternary-Native Architecture with Precision Highway** — FP16 state, ternary weights
+7. **Full-precision inference (quality-first)** — the model runs in **FP32** by default; no quantization. The "precision highway" (FP16 state + ternary/INT8 weights) is retained only as a documented fallback for constrained deployments and is not part of the reference path.
 8. **Multi-Modal Event Fusion** — discrete financial events encoded as typed event tokens
-9. **Distilled Pi-Native MarketReader** — a 3.5M-param on-device text encoder (deep Block-8 embeddings + sentiment) distilled from harrier-oss→PCA(64) and FinBERT teachers, so the whole stack fits on a Pi 5 with no external model servers
+9. **Full teacher text models (quality-first)** — Block-8 text features come from the **full harrier-oss embedder + FinBERT sentiment teachers run in-process** at inference, for maximum fidelity. The distilled 3.5M-param MarketReader student exists only as a fallback for resource-constrained hosts where the teachers cannot run; it is not used on the reference target.
 
 **New in v4.0:**
 
@@ -193,11 +194,19 @@ Contributions 1–9 are carried forward from v3.0. v4.0 adds four new contributi
 
 ## 4. Hardware Target & Constraints
 
-Unchanged from v3.0 — Raspberry Pi 5 (8GB), BCM2712 quad-core Cortex-A76 @ 2.4 GHz, NEON SIMD. Training on H100 cloud (500-hour budget).
+**Reference inference target (v4.0, revised):** Framework Desktop — AMD Ryzen AI Max+ 395 (Strix Halo): 16-core Zen 5, x86-64 with AVX-512; Radeon 8060S iGPU (RDNA 3.5, 40 CUs); XDNA 2 NPU (~50 TOPS); up to **128 GB unified LPDDR5x** shared across CPU/GPU/NPU.
+
+**Development / validation target:** Framework Laptop 13 (AMD Ryzen AI 9 HX 370) — same Zen 5 / RDNA 3.5 / XDNA 2 architecture family with a smaller Radeon 890M iGPU and 128 GB RAM. Anything validated here transfers directly to the Desktop (same ISA, same NPU, same iGPU architecture); the Desktop only adds iGPU CUs.
+
+**Inference precision/backend (quality-first):** **FP32 is the default** — quality is prioritized over speed/size, and at these latencies there is no reason to accept half-precision rounding. FP16 (CPU or ROCm iGPU) remains available purely as a latency option, not a default. Measured on the Framework Laptop 13 (Radeon 890M, the smaller validation iGPU), full 100-asset backbone, batch=1: FP32 CPU ~144 ms/step, FP32 iGPU ~122 ms/step, FP16 iGPU ~35 ms/step — all far inside the 60,000 ms per-minute budget, against 128 GB of memory. The Desktop's 8060S (40 CUs vs 16) is faster still. ROCm requires `HSA_OVERRIDE_GFX_VERSION=11.0.0` for these RDNA 3.5 APUs (gfx1150/gfx1151). Quantization is **not used**: INT8/ternary and the XDNA 2 NPU path would trade predictive quality for size/power that this hardware does not need.
+
+Training on H100 cloud (500-hour budget) is unchanged.
+
+> **Superseded:** earlier v3.0/v4.0 drafts targeted a Raspberry Pi 5 (8 GB, BCM2712 Cortex-A76, NEON SIMD). The ARM/NEON kernels, ternary quantization, hard memory budget (§17), and the distilled-only MarketReader requirement all stemmed from that 8 GB ARM constraint and no longer bind. Those sections are retained below as a constrained-deployment fallback, not the primary path.
 
 **v4.0 additions:**
-- FDA model is trained offline and runs only during training data generation, not at inference. No Pi 5 memory budget impact.
-- SWA layers add ~1.5 ms to inference latency. Still comfortably within budget.
+- FDA model is trained offline and runs only during training data generation, not at inference. No inference-time memory impact.
+- SWA layers add ~1.5 ms to inference latency. Negligible against the per-minute budget.
 - FDA training: ~40–60 H100-hours (separate from main model training budget).
 
 ---
@@ -593,7 +602,7 @@ Each feature represents a decayed signal from the most recent event of that type
 #### Block 8: Text Embedding (64 features)
 
 The 64-dim Block-8 vector is produced by the **MarketReader deep head**
-(Section 7.10), the Pi-native on-device encoder.
+(Section 7.10), the on-device encoder (or the full teachers run in-process on the reference target).
 
 **Distillation teacher (training-time only).** The deep head is distilled against
 `microsoft/harrier-oss-v1-0.6b` — a qwen3-based embedder, **1024-dim**, 32K-token
@@ -974,7 +983,9 @@ Verified: perturbing padded-slot contents leaves live outputs bit-identical
 
 ### 7.7 Financial Episodic Memory
 
-Unchanged from v3.0. FAISS k-NN buffer of 50,000 surprising market states. Entries populated during training on both real and FDA-generated sequences.
+Unchanged from v3.0. FAISS k-NN buffer of surprising market states, populated during training on both real and FDA-generated sequences.
+
+**Quality-first (revised):** on the reference target, retrieval uses **exact k-NN (`IndexFlatL2`/`IndexFlatIP`)** rather than an approximate index — at this buffer size and per-minute cadence, exact search is sub-millisecond and removes ANN recall error entirely. The buffer cap (formerly 50,000, sized to the Pi memory budget) can be raised substantially; with 128 GB available the binding limit is coverage usefulness, not memory.
 
 **v4.0 note:** FDA-generated crisis sequences increase the representation of rare regimes in the episodic memory buffer. Without FDA, crisis-regime episodes are underrepresented (real data: ~2008, ~2020 = ~2 crisis years in 10yr history). With FDA: 30× multiplier with regime conditioning generates proportionally more crisis sequences, giving the buffer better coverage of tail scenarios.
 
@@ -1008,13 +1019,16 @@ Unchanged from v3.0. Predicts next-step return and volatility for computing surp
 
 ---
 
-### 7.10 MarketReader Text Encoder (distilled, Pi-native)
+### 7.10 MarketReader Text Encoder (distilled, optional)
 
-The on-device text encoder is the custom **3.5M-parameter MarketReader** (BPE-4096
-tokenizer + 4 GDN blocks, D=256). It is the *only* text model deployed to the Pi 5
-and runs in-process within the inference footprint — no llama-swap, no Docker, no
-external embedding/sentiment servers. This is a hard requirement: the entire stack
-must fit on a Pi 5 (CPU-only, 8 GB).
+The distilled on-device text encoder is the custom **3.5M-parameter MarketReader** (BPE-4096
+tokenizer + 4 GDN blocks, D=256), runnable in-process with no external servers.
+
+On the reference target (§4, 128 GB unified memory) the distilled student is **not used (quality-first)**: the
+full teacher models (harrier-oss embedder + FinBERT sentiment) are run in-process at
+inference for maximum-fidelity text features. The distilled student is retained only for resource-constrained
+hosts where running the teachers is not feasible — it was originally a hard requirement under the
+8 GB Pi 5 budget, which no longer binds.
 
 ```
 Shared backbone:
@@ -1061,7 +1075,7 @@ zeros — never a fabricated or stale signal (live twins:
 > and the **Rust on-device forward pass**. Until those land, the collector uses
 > the teachers directly (harrier-oss→PCA(64) + FinBERT). The measured scaffold is
 > ~2.0M params (the original "~3.5M" was an overestimate — even more comfortably
-> Pi-native). Distillation quality of the student vs a 596M teacher is unproven —
+> compact). Distillation quality of the student vs a 596M teacher is unproven —
 > the teacher path stays available for A/B until the student passes a held-out
 > deep-head cosine threshold.
 
@@ -1069,7 +1083,7 @@ zeros — never a fabricated or stale signal (live twins:
 
 ## 8. Financial Diffusion Augmentation (FDA)
 
-This is the central new system in v4.0. The FDA is a standalone model — trained separately, run offline, and never deployed to the Pi 5. Its sole purpose is to produce additional training sequences for the main Meridian model.
+This is the central new system in v4.0. The FDA is a standalone model — trained separately, run offline, and never deployed to the inference host. Its sole purpose is to produce additional training sequences for the main Meridian model.
 
 ### 8.1 Motivation & Scope
 
@@ -1081,7 +1095,7 @@ FDA addresses this by generating synthetic sequences that:
 3. Are conditioned on regime labels, enabling controlled generation of underrepresented regimes (crisis, high-volatility)
 4. Preserve cross-asset correlation structure, which is critical for portfolio head training
 
-**FDA is used only for training data generation. At inference, the Pi 5 runs only the main Meridian model.**
+**FDA is used only for training data generation. At inference, the host runs only the main Meridian model.**
 
 ### 8.2 FDA Architecture
 
@@ -1273,12 +1287,13 @@ Monthly FDA quality check:
 
 ## 10. Quantization Strategy
 
-Unchanged from v3.0, with one addition:
+> **Status: not used (quality-first).** The reference deployment (§4) runs **FP32** and is never quantized — quantization trades predictive quality for size/power this hardware does not need. This section is retained only as a documented fallback for a hypothetical resource-constrained deployment (e.g. an 8 GB ARM SBC) or NPU (INT8) execution. None of Phase 4 QAT (§11.6), ternary packing, or the precision-highway weight formats are part of the primary path.
 
-**v4.0 addition — SWA layers:**
-SWA projection weights (W_q, W_k, W_v, W_o) are INT8 quantized. Attention logits and softmax are computed in FP16. KV cache stored in FP16. This is consistent with the broader precision highway strategy.
+When quantization *is* applied (constrained fallback only), the v3.0 scheme holds, with one addition:
 
-The FDA model is never deployed to the Pi 5 and is therefore trained and run in FP32 on the H100 without quantization constraints.
+**SWA layers:** SWA projection weights (W_q, W_k, W_v, W_o) are INT8 quantized. Attention logits and softmax are computed in FP16. KV cache stored in FP16. Consistent with the broader precision highway strategy.
+
+The FDA model is never deployed to the inference host and is trained and run in FP32 on the H100 without quantization constraints.
 
 ---
 
@@ -1576,13 +1591,15 @@ Identical to v3.0. Regime transition episodes now use FDA-generated regime trans
 
 ---
 
-### 11.6 Phase 4 — Quantization-Aware Training
+### 11.6 Phase 4 — Quantization-Aware Training (not run — quality-first)
 
-Unchanged from v3.0. QAT for ternary backbone weights, INT8 activations, FP16 states. SWA projection weights are INT8-quantized in this phase.
+> **Skipped (quality-first).** The deployment model is FP32 (§4, §10), so QAT is not run — it would only degrade quality. Retained as documentation for a constrained-deployment or NPU (INT8) fallback. The deployed weights are simply the Phase 2/3 FP32 checkpoint.
+
+When run (fallback only): QAT for ternary backbone weights, INT8 activations, FP16 states. SWA projection weights are INT8-quantized in this phase.
 
 **Estimated duration:** ~20 H100-hours.
 
-**Total Phase 0–4: ~210–280 H100-hours** (within 500-hour budget, including FDA training).
+**Total Phase 0–4: ~210–280 H100-hours with QAT, ~190–260 without** (within 500-hour budget, including FDA training).
 
 ---
 
@@ -1739,7 +1756,7 @@ All v3.0 criteria are retained:
 | Adaptation improvement | Adaptive Sharpe > Frozen Sharpe | 3 months |
 | State stability | No monotonic state growth | 6 months |
 | Uptime | > 99.5% (< 1.8 days downtime) | 6 months |
-| Inference latency p99 | < 100 ms | Since inception |
+| Inference latency p99 | < 2,000 ms (≪ 60,000 ms per-minute budget; ~145 ms measured FP32 CPU) | Since inception |
 | Data pipeline reliability | < 1% missed minutes | 6 months |
 
 **v4.0 addition:**
@@ -1753,9 +1770,9 @@ All v3.0 criteria are retained:
 
 ---
 
-## 16. Inference Runtime on Pi 5
+## 16. Inference Runtime
 
-Updated from v3.0 to account for SWA layers:
+Per-minute inference loop on the reference x86-64 target (§4). The per-block millisecond figures below were the original Pi 5 / ternary-NEON projections and are kept for structural illustration only — on the reference Zen 5 target, FP32 eager PyTorch executes the full backbone in ~145 ms/step (measured), with the whole loop still using well under 1% of the per-minute budget. The data pipeline (200–500 ms, network-bound) dominates, exactly as before.
 
 ```
 Time 0ms: New minute tick (PriceStream)
@@ -1771,7 +1788,7 @@ Time 0ms: New minute tick (PriceStream)
   │   ├── Assemble 201 portfolio state features
   │   └── Duration: 200–500ms (indicator computation + normalization)
   │
-  ├─ [Cores 0-2] Model inference:
+  ├─ [CPU/iGPU] Model inference (per-block ms = legacy Pi/ternary projection; FP32 Zen 5 CPU measures ~145ms total):
   │   ├── Input projection + VSN gating: 0.5ms
   │   ├── Regime detection: 0.1ms
   │   ├── RA-GDN blocks 1-2 (100 assets): 1.0ms
@@ -1794,7 +1811,7 @@ Time 0ms: New minute tick (PriceStream)
   │   ├── Log to SQLite: 0.5ms
   │   └── Paper broker simulation: 0.1ms
   │
-  └─ Budget: 60,000ms available. Total used: ~512ms. CPU util: ~0.85%
+  └─ Budget: 60,000ms available. Total used: ~350–650ms (pipeline-dominated; ~145ms model on FP32 CPU). CPU util: ~1%
 ```
 
 SWA adds ~1.65 ms of inference latency (well within the 60,000 ms per-minute budget). The KV cache update is the most expensive part of SWA at inference — appending new (k, v) pairs and evicting the oldest — but this is a simple O(W) memory operation.
@@ -1803,7 +1820,9 @@ SWA adds ~1.65 ms of inference latency (well within the 60,000 ms per-minute bud
 
 ## 17. Memory Budget
 
-### Static Allocation
+> **Non-binding on the reference target.** With 128 GB unified memory (§4), the inference footprint is no longer a constraint. Measured FP32 process RSS is ~1.5 GB (dominated by the PyTorch runtime); FP16 weights are ~120 MB. The breakdown below reflects the original *quantized Pi 5* deployment and is kept for the constrained-deployment fallback. On the reference target, the "Ternary/INT8 weights" rows collapse into a single ~120 MB FP16 weight blob and the totals are immaterial.
+
+### Static Allocation (legacy quantized Pi 5 fallback)
 
 | Component | Size | Notes |
 |---|---|---|
@@ -1903,7 +1922,7 @@ The SWA KV caches add ~37.7 MB to static allocation — a meaningful increase bu
 - [x] **[NEW] Distillation trainer `python/train/train_marketreader.py` (dump-corpus / build-targets / distill / smoke) wired as `make marketreader`; distill loop smoke-tested**
 - [ ] **[NEW] Run `make marketreader` on the real corpus (needs eGPU + teachers): harrier-oss→PCA(64) deep + FinBERT sentiment targets → distilled student checkpoint**
 - [ ] **[NEW] Re-anchor historical Block-8 + sentiment features to the student**
-- [ ] **[NEW] Port MarketReader forward to Rust (Candle/ONNX) — Pi-native, replaces the HTTP teachers**
+- [ ] **[NEW] (optional) Port MarketReader forward to Rust (Candle/ONNX) for a server-free path — not required on the reference target, where the full teachers run in-process**
 - [ ] **[MODIFIED] Implement TCP (temporal contrastive) loss**
 - [ ] **[MODIFIED] Run Phase 1 TCP pretraining on real + FDA data (mixed 1.0/0.5 weight)**
 - [ ] Validate: contrastive accuracy > 0.60, regime cluster separation visible
@@ -1937,16 +1956,17 @@ The SWA KV caches add ~37.7 MB to static allocation — a meaningful increase bu
 
 ### Phase 4: Deployment (Weeks 24–30)
 
-- [ ] Implement NEON ternary inference kernel (bitnet.cpp adapted)
-- [ ] **[NEW] Implement SWA inference with rolling KV cache on ARM**
-- [ ] Implement FAISS episodic memory on ARM
-- [ ] Port full inference pipeline to Pi 5
+- [ ] FP32 inference path in PyTorch on the reference x86-64 target (CPU; optional ROCm iGPU; FP16 optional). No hand-written ternary/NEON kernel required.
+- [ ] **[NEW] Implement SWA inference with rolling KV cache (FP16, host)**
+- [ ] FAISS episodic memory (faiss-cpu on x86-64)
+- [ ] Port full inference pipeline to the Framework Desktop (validate first on Framework Laptop 13)
 - [ ] Run 10M+ step state drift test
 - [ ] **[NEW] Run SWA cache overflow test (ensure W=64 eviction works correctly)**
+- [ ] ~~NEON ternary kernel / ARM port~~ (dropped — superseded by FP16 x86-64; keep only for a future constrained-deployment fallback)
 - [x] **[NEW] Live universe control: hot-reload `portfolio_symbols.txt` (mtime watcher in `src/scheduler/watch.rs`) → warm up added symbols (price-history backfill in `src/scheduler/warmup.rs`; rolling-stat z-scores warm live), evict removed + free state, re-subscribe PriceStream on change (watch channel), emit only warmed symbols (`src/store/mod.rs`). Remaining: deeper rolling-stat backfill + sector/mktcap prefetch on add.**
 - [ ] Implement paper trading engine
-- [ ] Deploy to Pi 5 with monitoring dashboard
-- [ ] 72-hour continuous operation stress test
+- [ ] Deploy to the Framework Desktop with monitoring dashboard
+- [ ] 72-hour continuous operation soak test (functional/stability; Pi-era thermal/power stress no longer the binding concern on a desktop)
 - [ ] Begin 6-month paper trading period
 
 ### Phase 5: Paper Trading & Iteration (Weeks 31–57)
@@ -2011,7 +2031,7 @@ State drift, catastrophic forgetting, regime miscalibration, overfitting, data p
 **Options if this occurs:**
 1. Accept a lower graduation Sharpe threshold (e.g., 0.80) with tighter max drawdown constraints (< 15%)
 2. Acquire daily data for a longer historical window (some free sources offer 20+ years of daily data vs. Yahoo's 10 years) — this is still finance-query compatible if finance-query can source it
-3. Re-evaluate whether Sharpe > 1.0 is the right metric for a daily-bar system operating on a Pi 5, or whether risk-adjusted alpha over passive is a more appropriate target
+3. Re-evaluate whether Sharpe > 1.0 is the right metric for a daily-bar system, or whether risk-adjusted alpha over passive is a more appropriate target
 
 ---
 
