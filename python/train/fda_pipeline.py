@@ -711,6 +711,134 @@ class FDADiffusionModel(nn.Module):
         return h.transpose(1, 2)        # (B, T, F)
 
 
+class _AdaLNResBlock2D(nn.Module):
+    """Residual Conv2D block over (N, T) with FiLM-style AdaLN conditioning.
+
+    A (3, 3) kernel mixes both the asset axis (N) and the time axis (T). The
+    N-axis mixing is the cross-asset coupling a per-asset 1D model cannot
+    represent — it lets the joint model learn cross-asset correlation, sector
+    co-movement, and a shared market factor.
+    """
+
+    def __init__(self, channels: int, cond_dim: int, groups: int = 8):
+        super().__init__()
+        self.norm1 = nn.GroupNorm(groups, channels)
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.norm2 = nn.GroupNorm(groups, channels)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.cond_proj = nn.Linear(cond_dim, 2 * channels)
+
+    def forward(self, h: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
+        # h: (B, C, N, T), cond: (B, cond_dim)
+        residual = h
+        h = self.conv1(F.silu(self.norm1(h)))
+        h = self.norm2(h)
+        scale, shift = self.cond_proj(cond).chunk(2, dim=-1)
+        h = h * (1.0 + scale[:, :, None, None]) + shift[:, :, None, None]
+        h = self.conv2(F.silu(h))
+        return residual + h
+
+
+class FDADiffusionModel2D(nn.Module):
+    """Joint score network: a 2D denoiser over (N, T) windows.
+
+    Generates all `n_assets` simultaneously so cross-asset structure is part of
+    the modelled distribution (vs. `FDADiffusionModel`, which is per-asset and
+    used only for TCP pretraining). The diffusion scaffolding —
+    v-parameterization, linear-β schedule, per-channel z-scoring, dead-channel
+    masking — is identical to the 1D model; only the spatial mixing differs:
+    Conv2d over (N-axis, T-axis) replaces Conv1d over T.
+
+    forward I/O: x (B, N, T, F), t (B,) long, regime (B,) long → v̂ (B, N, T, F).
+    """
+
+    def __init__(
+        self,
+        feature_dim: int = 280,
+        hidden_dim: int = 256,
+        diffusion_steps: int = 1000,
+        n_regimes: int = 4,
+        n_blocks: int = 4,
+    ) -> None:
+        super().__init__()
+        self.feature_dim = feature_dim
+        self.hidden_dim = hidden_dim
+        self.diffusion_steps = diffusion_steps
+
+        self.time_mlp = nn.Sequential(
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.SiLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        self.regime_emb = nn.Embedding(n_regimes, hidden_dim)
+
+        self.in_conv = nn.Conv2d(feature_dim, hidden_dim, kernel_size=1)
+        self.blocks = nn.ModuleList(
+            [_AdaLNResBlock2D(hidden_dim, hidden_dim) for _ in range(n_blocks)]
+        )
+        self.out_norm = nn.GroupNorm(8, hidden_dim)
+        self.out_conv = nn.Conv2d(hidden_dim, feature_dim, kernel_size=1)
+        nn.init.zeros_(self.out_conv.weight)
+        nn.init.zeros_(self.out_conv.bias)
+
+        # Linear β schedule + v-parameterization — see FDADiffusionModel for the
+        # rationale (cosine ᾱ→0 at t=T is numerically degenerate over 1000 steps).
+        betas = torch.linspace(1e-4, 0.02, diffusion_steps + 1)
+        betas[0] = 0.0
+        alphas = 1.0 - betas
+        alpha_bar = torch.cumprod(alphas, dim=0)
+        self.register_buffer("alpha_bar", alpha_bar)
+        self.register_buffer("alphas", alphas)
+        self.register_buffer("betas", betas)
+
+        # Per-channel normalization + live-channel mask (see fit_feature_stats).
+        self.register_buffer("feature_mean", torch.zeros(feature_dim))
+        self.register_buffer("feature_std", torch.ones(feature_dim))
+        self.register_buffer("live_mask", torch.ones(feature_dim))
+
+    def fit_feature_stats(self, windows: torch.Tensor) -> None:
+        """Per-channel mean/std + live mask from real joint windows.
+
+        `windows`: (B, N, T, F) — flattened over (B, N, T) so stats are over all
+        asset-time observations, matching the 1D model's per-channel treatment.
+        Dead channels (std < 1e-5) get std=1/mean=0 and live_mask=0 so synthetic
+        output is bit-identical to real on constant-zero dimensions.
+        """
+        if windows.shape[-1] != self.feature_dim:
+            raise ValueError(
+                f"expected (..., {self.feature_dim}) windows; got {tuple(windows.shape)}"
+            )
+        flat = windows.reshape(-1, self.feature_dim)
+        mean = flat.mean(dim=0)
+        std = flat.std(dim=0)
+        is_dead = std <= 1e-5
+        std = torch.where(is_dead, torch.ones_like(std), std)
+        mean = torch.where(is_dead, torch.zeros_like(mean), mean)
+        self.feature_mean.copy_(mean.to(self.feature_mean))
+        self.feature_std.copy_(std.to(self.feature_std))
+        self.live_mask.copy_((~is_dead).to(self.live_mask.dtype))
+
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
+        return (x - self.feature_mean) / self.feature_std
+
+    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
+        return (x * self.feature_std + self.feature_mean) * self.live_mask
+
+    def forward(
+        self, x: torch.Tensor, t: torch.Tensor, regime: torch.Tensor
+    ) -> torch.Tensor:
+        # x: (B, N, T, F), t: (B,) long, regime: (B,) long
+        t_emb = _sinusoidal_time_embedding(t, self.hidden_dim)
+        cond = self.time_mlp(t_emb) + self.regime_emb(regime)  # (B, hidden)
+
+        h = x.permute(0, 3, 1, 2)        # (B, F, N, T)
+        h = self.in_conv(h)              # (B, C, N, T)
+        for block in self.blocks:
+            h = block(h, cond)
+        h = self.out_conv(F.silu(self.out_norm(h)))  # (B, F, N, T)
+        return h.permute(0, 2, 3, 1)     # (B, N, T, F)
+
+
 def load_windows_from_shards(
     shard_paths: list[Path],
     window_len: int = 64,
@@ -855,6 +983,239 @@ def train_diffusion_model(
             print(f"[fda] epoch {epoch + 1}/{cfg.epochs} mse={mean_loss:.4f}",
                   flush=True)
     return model
+
+
+# ── Joint (multi-asset) FDA for portfolio training ───────────────────────────
+
+
+def load_real_panel(shard_paths: list[Path]) -> np.ndarray:
+    """Tail-align every per-asset shard into one (M, rows, F) real panel.
+
+    Mirrors MultiAssetShardDataset._load_shards: each shard is a flat
+    `rows × 280` float32 stream; we truncate all shards to the shortest length
+    (shared calendar end) and stack. Row t is the same trading day across all
+    symbols, so a contiguous slice across the asset axis is a genuine joint
+    window with real cross-asset correlation — the property the cross-asset
+    gate checks and the joint diffusion model must learn.
+    """
+    arrays: list[np.ndarray] = []
+    malformed = 0
+    for path in shard_paths:
+        # Skip synthetic shards: they have a different row count and would
+        # collapse the tail-alignment min_rows if mixed into the real corpus.
+        if path.name.startswith("FDA_SYNTH"):
+            continue
+        raw = np.memmap(path, dtype="float32", mode="r")
+        if len(raw) % 280 != 0:
+            malformed += 1
+            continue
+        arrays.append(np.asarray(raw.reshape(-1, 280)))
+    if not arrays:
+        raise RuntimeError(
+            f"no usable shards under the panel paths (malformed={malformed}); "
+            "re-run collection to refresh shards"
+        )
+    min_rows = min(a.shape[0] for a in arrays)
+    panel = np.stack([a[-min_rows:] for a in arrays], axis=0).astype(np.float32)
+    print(f"[fda] real panel: symbols={panel.shape[0]} rows={panel.shape[1]} "
+          f"F={panel.shape[2]} malformed={malformed}", flush=True)
+    return panel
+
+
+def _market_regime_by_start(
+    panel: np.ndarray, window_len: int, starts: np.ndarray
+) -> np.ndarray:
+    """Regime label per window-start from the equal-weight market window.
+
+    Regime is a market-level property (driven by the shared market block), so
+    it is independent of which asset subset a joint window samples. We infer it
+    once from the cross-sectional mean window at each start, avoiding an
+    O(M × starts) per-asset labelling pass.
+    """
+    market = panel.mean(axis=0)  # (rows, F)
+    labels = np.empty(len(starts), dtype=np.int64)
+    for i, s in enumerate(starts):
+        labels[i] = infer_regime_label(market[s : s + window_len])
+    return labels
+
+
+def train_joint_diffusion_model(
+    panel: np.ndarray,
+    cfg: FDAConfig,
+    n_assets: int,
+    window_len: int,
+    grad_accum: int = 1,
+) -> FDADiffusionModel2D:
+    """Train the 2D joint denoiser on real joint windows.
+
+    Joint windows are sampled on the fly from the aligned panel — a random
+    `n_assets` subset at a random time-start each step — so a modest panel
+    yields effectively unlimited cross-asset diversity without materialising
+    (and z-scoring) a multi-terabyte window tensor. One "epoch" is one shuffled
+    pass over all valid time-starts. v-parameterization and the linear-β
+    schedule are identical to the 1D model.
+
+    `grad_accum` accumulates gradients over that many micro-batches before each
+    optimizer step, so a VRAM-limited GPU keeps the tuned effective batch
+    (batch_size × grad_accum) instead of detuning the LR with a smaller batch.
+    """
+    device = torch.device(cfg.device)
+    M, rows, feat_dim = panel.shape
+    if M < n_assets:
+        raise RuntimeError(
+            f"need at least n_assets={n_assets} symbols for joint windows; panel "
+            f"has {M}. Point the panel at the broad multi-symbol corpus."
+        )
+    if rows <= window_len:
+        raise RuntimeError(f"panel rows={rows} <= window_len={window_len}")
+
+    model = FDADiffusionModel2D(
+        feature_dim=cfg.feature_dim,
+        hidden_dim=cfg.hidden_dim,
+        diffusion_steps=cfg.diffusion_steps,
+    ).to(device)
+
+    panel_t = torch.from_numpy(panel).to(device)  # (M, rows, F)
+    model.fit_feature_stats(panel_t)
+    live = int(model.live_mask.sum().item())
+    print(f"[fda] joint per-channel normalization: {live}/{cfg.feature_dim} live "
+          f"channels", flush=True)
+    norm_panel = model.normalize(panel_t)  # (M, rows, F)
+
+    starts = np.arange(0, rows - window_len, 1, dtype=np.int64)
+    start_regime = torch.from_numpy(
+        _market_regime_by_start(panel, window_len, starts)
+    ).to(device)
+    starts_t = torch.from_numpy(starts).to(device)
+
+    opt = torch.optim.AdamW(model.parameters(), lr=cfg.lr)
+    torch.manual_seed(cfg.seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed_all(cfg.seed)
+    gen = torch.Generator(device=device)
+    gen.manual_seed(cfg.seed)
+
+    accum = max(1, grad_accum)
+    n_params = sum(p.numel() for p in model.parameters())
+    n_starts = len(starts)
+    print(f"[fda] training JOINT diffusion denoiser (v-parameterization): "
+          f"params={n_params:,} symbols={M} n_assets={n_assets} "
+          f"window_len={window_len} starts={n_starts} epochs={cfg.epochs} "
+          f"batch={cfg.batch_size}×accum{accum}={cfg.batch_size * accum} "
+          f"T_diff={cfg.diffusion_steps} seed={cfg.seed}", flush=True)
+
+    for epoch in range(cfg.epochs):
+        perm = torch.randperm(n_starts, device=device, generator=gen)
+        loss_sum = 0.0
+        n_batches = 0
+        micro = 0
+        opt.zero_grad(set_to_none=True)
+        for i in range(0, n_starts, cfg.batch_size):
+            bsel = perm[i : i + cfg.batch_size]
+            b_starts = starts_t[bsel]
+            regime = start_regime[bsel]
+            B = b_starts.shape[0]
+            # Per-window random asset subset → (B, n_assets, T, F). Real data has
+            # the market block identical across the N axis, so the sliced windows
+            # already carry that invariant; no re-broadcast needed in training.
+            batch = torch.empty(B, n_assets, window_len, feat_dim, device=device)
+            for b in range(B):
+                if M == n_assets:
+                    asset_idx = torch.arange(M, device=device)
+                else:
+                    asset_idx = torch.randperm(M, device=device, generator=gen)[:n_assets]
+                s = int(b_starts[b])
+                batch[b] = norm_panel[asset_idx, s : s + window_len, :]
+
+            t = torch.randint(1, cfg.diffusion_steps + 1, (B,), device=device)
+            eps = torch.randn(batch.shape, device=device, generator=gen)
+            ab = model.alpha_bar[t][:, None, None, None]
+            sqrt_ab = torch.sqrt(ab)
+            sqrt_om = torch.sqrt(1.0 - ab)
+            noisy = sqrt_ab * batch + sqrt_om * eps
+            v_target = sqrt_ab * eps - sqrt_om * batch
+            v_pred = model(noisy, t, regime)
+            loss = F.mse_loss(v_pred, v_target)
+            (loss / accum).backward()
+            loss_sum += float(loss.detach())
+            n_batches += 1
+            micro += 1
+            if micro % accum == 0:
+                opt.step()
+                opt.zero_grad(set_to_none=True)
+        if micro % accum != 0:  # flush the trailing partial accumulation
+            opt.step()
+            opt.zero_grad(set_to_none=True)
+        mean_loss = loss_sum / max(n_batches, 1)
+        if epoch < 10 or (epoch + 1) % 10 == 0 or epoch == cfg.epochs - 1:
+            print(f"[fda] joint epoch {epoch + 1}/{cfg.epochs} mse={mean_loss:.4f}",
+                  flush=True)
+    return model
+
+
+def sample_joint_diffusion_windows(
+    model: FDADiffusionModel2D,
+    n_windows: int,
+    n_assets: int,
+    window_len: int,
+    feature_dim: int,
+    regimes: np.ndarray | None = None,
+    device: torch.device | None = None,
+    x0_clip: float = 5.0,
+    eta: float = 0.0,
+    share_market_block: bool = True,
+) -> np.ndarray:
+    """DDIM reverse sampler for the 2D joint denoiser → (n_windows, N, T, F).
+
+    Identical math to sample_diffusion_windows, lifted to the (B, N, T, F)
+    tensor (alpha_bar broadcasts over three trailing axes). After denormalising
+    we re-broadcast the market block's cross-asset mean so the market-wide
+    features are identical across assets, matching real joint-window structure
+    (analogous to the RSI reconciliation in the per-asset path).
+    """
+    dev = device or next(model.parameters()).device
+    x_t = torch.randn(n_windows, n_assets, window_len, feature_dim, device=dev)
+    if regimes is None:
+        regime = torch.randint(0, 4, (n_windows,), device=dev)
+    else:
+        regime = torch.from_numpy(regimes.astype(np.int64)).to(dev)
+
+    model.eval()
+    with torch.no_grad():
+        for step in range(model.diffusion_steps, 0, -1):
+            t = torch.full((n_windows,), step, dtype=torch.long, device=dev)
+            v_theta = model(x_t, t, regime)
+            alpha_bar_t = model.alpha_bar[t][:, None, None, None]
+            alpha_bar_prev = (
+                model.alpha_bar[t - 1][:, None, None, None]
+                if step > 1
+                else torch.ones_like(alpha_bar_t)
+            )
+            sqrt_ab = torch.sqrt(alpha_bar_t)
+            sqrt_om = torch.sqrt(1.0 - alpha_bar_t)
+            x0_hat = sqrt_ab * x_t - sqrt_om * v_theta
+            eps_theta = sqrt_om * x_t + sqrt_ab * v_theta
+            x0_hat = torch.clamp(x0_hat, -x0_clip, x0_clip)
+            if step > 1:
+                sigma_t = eta * torch.sqrt(
+                    (1.0 - alpha_bar_prev) / (1.0 - alpha_bar_t)
+                ) * torch.sqrt(1.0 - alpha_bar_t / alpha_bar_prev)
+                dir_coef = torch.sqrt(
+                    torch.clamp(1.0 - alpha_bar_prev - sigma_t**2, min=0.0)
+                )
+                noise = torch.randn_like(x_t)
+                x_t = (
+                    torch.sqrt(alpha_bar_prev) * x0_hat
+                    + dir_coef * eps_theta
+                    + sigma_t * noise
+                )
+            else:
+                x_t = x0_hat
+    x_0 = model.denormalize(x_t)
+    if share_market_block:
+        mb = x_0[:, :, :, MARKET_FEATURE_OFFSET:].mean(dim=1, keepdim=True)
+        x_0[:, :, :, MARKET_FEATURE_OFFSET:] = mb
+    return x_0.cpu().numpy().astype(np.float32)
 
 
 def _allocate_regime_ids(
@@ -1125,6 +1486,250 @@ def write_synthetic_shards(
     return out_paths
 
 
+# ── Joint generation / validation / writing ──────────────────────────────────
+
+
+def sample_real_joint_windows(
+    panel: np.ndarray,
+    n_assets: int,
+    window_len: int,
+    n_windows: int,
+    seed: int = 42,
+    share_market_block: bool = True,
+) -> np.ndarray:
+    """Draw real (n_windows, n_assets, T, F) joint windows from the panel.
+
+    Random asset subset + time-start per window — the reference distribution for
+    the cross-asset gate, built the same way the model's training windows are
+    sampled.
+    """
+    M, rows, feat_dim = panel.shape
+    if M < n_assets:
+        raise RuntimeError(f"panel has {M} symbols < n_assets={n_assets}")
+    rng = np.random.default_rng(seed)
+    starts = rng.integers(0, rows - window_len, size=n_windows)
+    out = np.empty((n_windows, n_assets, window_len, feat_dim), dtype=np.float32)
+    for k, s in enumerate(starts):
+        idx = (np.arange(M) if M == n_assets
+               else rng.choice(M, size=n_assets, replace=False))
+        out[k] = panel[idx, s : s + window_len, :]
+    if share_market_block:
+        mb = out[:, :, :, MARKET_FEATURE_OFFSET:].mean(axis=1, keepdims=True)
+        out[:, :, :, MARKET_FEATURE_OFFSET:] = mb
+    return out
+
+
+def _joint_cross_asset_stats(
+    joint_windows: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-window betas + MVP weights; each (N, T, F) joint window is one pool."""
+    betas: list[np.ndarray] = []
+    mvp: list[np.ndarray] = []
+    for w in joint_windows:
+        b, m = _pool_cross_asset_stats(w)
+        betas.append(b)
+        mvp.append(m)
+    return (
+        np.concatenate(betas).astype(np.float64),
+        np.concatenate(mvp).astype(np.float64),
+    )
+
+
+def compute_cross_asset_reference_joint(
+    real_joint_windows: np.ndarray,
+) -> CrossAssetReference:
+    """Cross-asset reference from real joint windows (each window is a pool)."""
+    if real_joint_windows.ndim != 4:
+        raise ValueError("real_joint_windows must be (n, N, T, F)")
+    betas, mvp = _joint_cross_asset_stats(real_joint_windows)
+    return CrossAssetReference(
+        beta_samples=betas,
+        mvp_weight_samples=mvp,
+        pool_size=int(real_joint_windows.shape[1]),
+        n_pool_samples=int(real_joint_windows.shape[0]),
+    )
+
+
+def validate_cross_asset_structure_joint(
+    synth_joint_windows: np.ndarray,
+    reference: CrossAssetReference,
+    beta_ks_threshold: float = 0.20,
+    mvp_ks_threshold: float = 0.20,
+) -> CrossAssetReport:
+    """Cross-asset gate on joint windows: KS of synth vs real beta + MVP dists.
+
+    Each synthetic joint window is scored as its own pool (no random
+    re-sampling needed — the asset axis already is the pool), then compared to
+    the real reference distribution via the two-sample KS statistic.
+    """
+    if synth_joint_windows.ndim != 4:
+        raise ValueError("synth_joint_windows must be (n, N, T, F)")
+    synth_betas, synth_mvp = _joint_cross_asset_stats(synth_joint_windows)
+    beta_ks = _ks_statistic(reference.beta_samples, synth_betas)
+    mvp_ks = _ks_statistic(reference.mvp_weight_samples, synth_mvp)
+    checks = {
+        "beta_distribution": beta_ks < beta_ks_threshold,
+        "mvp_weight_distribution": mvp_ks < mvp_ks_threshold,
+    }
+    metrics = {
+        "beta_ks": beta_ks,
+        "mvp_ks": mvp_ks,
+        "beta_ks_threshold": beta_ks_threshold,
+        "mvp_ks_threshold": mvp_ks_threshold,
+        "pool_size": float(reference.pool_size),
+        "n_real_pools": float(reference.n_pool_samples),
+        "n_synth_pools": float(synth_joint_windows.shape[0]),
+    }
+    return CrossAssetReport(passed=all(checks.values()), checks=checks, metrics=metrics)
+
+
+def generate_valid_joint_windows(
+    model: FDADiffusionModel2D,
+    reference: ReferenceStats,
+    cfg: FDAConfig,
+    n_assets: int,
+    window_len: int,
+    feature_dim: int = 280,
+    thresholds: CalibratedThresholds | None = None,
+    eta: float = 0.0,
+    x0_clip: float = 5.0,
+    asset_pass_frac: float = 0.8,
+) -> tuple[np.ndarray, dict]:
+    """Accept/reject joint windows on the per-asset stylized-fact gate.
+
+    Each candidate joint window has its per-asset RSI reconciled with its
+    return series, then each asset's (T, F) slice is run through the 9-point
+    stylized-fact gate. A joint window is accepted when at least
+    `asset_pass_frac` of its assets pass — the per-asset marginals must be
+    realistic before the batch-level cross-asset gate (run after generation)
+    checks the joint structure.
+    """
+    import time
+    accepted: list[np.ndarray] = []
+    accepted_cond_regimes: list[int] = []
+    candidate_count = 0
+    pass_total = 0
+    rounds = 0
+    asset_fail_counts: dict[str, int] = {}
+    t_start = time.time()
+    print(f"[fda] starting JOINT generation: target={cfg.target_valid_windows} "
+          f"n_assets={n_assets} window_len={window_len} "
+          f"batch={cfg.generation_batch_size} asset_pass_frac={asset_pass_frac}",
+          flush=True)
+
+    while len(accepted) < cfg.target_valid_windows:
+        rounds += 1
+        if rounds > cfg.max_generation_rounds:
+            top = sorted(asset_fail_counts.items(), key=lambda kv: -kv[1])[:5]
+            raise RuntimeError(
+                f"joint FDA generation exceeded max rounds "
+                f"({cfg.max_generation_rounds}): accepted {len(accepted)}/"
+                f"{cfg.target_valid_windows}. Top per-asset failing checks: {top}. "
+                f"Try larger --epochs, --max-generation-rounds, or a lower "
+                f"--joint-asset-pass-frac."
+            )
+        round_regimes = _allocate_regime_ids(
+            cfg.generation_batch_size, cfg.regime_quotas
+        )
+        candidates = sample_joint_diffusion_windows(
+            model,
+            n_windows=cfg.generation_batch_size,
+            n_assets=n_assets,
+            window_len=window_len,
+            feature_dim=feature_dim,
+            regimes=round_regimes,
+            eta=eta,
+            x0_clip=x0_clip,
+        )
+        candidate_count += len(candidates)
+        for jw, cond_regime in zip(candidates, round_regimes):
+            n_pass = 0
+            for a in range(jw.shape[0]):
+                w = jw[a]
+                if w.shape[1] > RSI_FEATURE_INDEX:
+                    rsi_from_r = _compute_rsi_like(w[:, RETURN_FEATURE_INDEX])
+                    w[:, RSI_FEATURE_INDEX] = np.clip(
+                        (rsi_from_r - 50.0) / 50.0, -1.0, 1.0
+                    )
+                rep = validate_stylized_facts(
+                    w, reference, max_abs_feature=cfg.max_abs_feature,
+                    thresholds=thresholds,
+                )
+                if rep.passed:
+                    n_pass += 1
+                else:
+                    for k, ok in rep.checks.items():
+                        if not ok:
+                            asset_fail_counts[k] = asset_fail_counts.get(k, 0) + 1
+            if n_pass >= int(round(asset_pass_frac * jw.shape[0])):
+                pass_total += 1
+                accepted.append(jw)
+                accepted_cond_regimes.append(int(cond_regime))
+                if len(accepted) >= cfg.target_valid_windows:
+                    break
+        if rounds % 5 == 0 or len(accepted) >= cfg.target_valid_windows:
+            elapsed = time.time() - t_start
+            top = sorted(asset_fail_counts.items(), key=lambda kv: -kv[1])[:3]
+            print(
+                f"[fda] joint round {rounds}/{cfg.max_generation_rounds} "
+                f"accepted={len(accepted)}/{cfg.target_valid_windows} "
+                f"candidates={candidate_count} elapsed={elapsed:.0f}s "
+                f"top_asset_fails={top}",
+                flush=True,
+            )
+    accepted_arr = np.stack(accepted, axis=0)  # (n, N, T, F)
+    cond_arr = np.asarray(accepted_cond_regimes, dtype=np.int64)
+    cond_counts = np.bincount(cond_arr, minlength=4).tolist()
+    # Post-hoc realized regime: market-level (cross-asset mean window) label.
+    post = [infer_regime_label(jw.mean(axis=0)) for jw in accepted_arr]
+    post_counts = np.bincount(np.asarray(post, dtype=np.int64), minlength=4).tolist()
+    n_acc = max(len(accepted_arr), 1)
+    stats = {
+        "candidates": candidate_count,
+        "accepted": pass_total,
+        "accept_rate": float(pass_total / max(candidate_count, 1)),
+        # Aliases so write_fda_manifest (per-asset schema) consumes joint stats.
+        "pass_rate": float(pass_total / max(candidate_count, 1)),
+        "check_fail_counts": asset_fail_counts,
+        "asset_fail_counts": asset_fail_counts,
+        "conditioned_regime_counts": cond_counts,
+        "conditioned_regime_distribution": [c / n_acc for c in cond_counts],
+        "realized_regime_counts": post_counts,
+        "realized_regime_distribution": [c / n_acc for c in post_counts],
+    }
+    return accepted_arr, stats
+
+
+def write_joint_synthetic_shards(
+    joint_windows: np.ndarray,
+    output_dir: Path,
+    split: str = "train",
+    prefix: str = "FDA_SYNTH",
+) -> list[Path]:
+    """Write each (N, T, F) joint window as one flat FDA_SYNTH_*.f32bin.
+
+    Layout is N×T×F float32, exactly what SyntheticWindowPortfolioDataset
+    reshapes (n_assets, rows_per_window, FEATURE_DIM). The FDA_SYNTH_ prefix is
+    what the portfolio trainer auto-detects for batch mixing.
+    """
+    if joint_windows.ndim != 4:
+        raise ValueError("joint_windows must have shape (n, N, T, F)")
+    split_dir = output_dir / split
+    split_dir.mkdir(parents=True, exist_ok=True)
+    n = joint_windows.shape[0]
+    print(f"[fda] writing {n} JOINT synthetic shards "
+          f"(each {joint_windows.shape[1]}×{joint_windows.shape[2]}×"
+          f"{joint_windows.shape[3]}) to {split_dir}", flush=True)
+    out_paths: list[Path] = []
+    for i, w in enumerate(joint_windows):
+        path = split_dir / f"{prefix}_{i:08d}.f32bin"
+        w.astype(np.float32).tofile(path)
+        out_paths.append(path)
+        if (i + 1) % max(n // 10, 1) == 0 or i + 1 == n:
+            print(f"[fda] wrote {i + 1}/{n} joint shards", flush=True)
+    return out_paths
+
+
 def write_fda_manifest(
     output_dir: Path,
     cfg: FDAConfig,
@@ -1265,6 +1870,41 @@ def _parse_args() -> argparse.Namespace:
                         help="KS threshold on per-asset beta distribution (spec §8.5: 0.20).")
     parser.add_argument("--cross-asset-mvp-ks", type=float, default=0.20,
                         help="KS threshold on MVP weight distribution.")
+    # Joint (multi-asset) generation for portfolio training.
+    parser.add_argument(
+        "--joint", action="store_true",
+        help="Generate JOINT multi-asset windows (2D score network) for the "
+             "portfolio head + cross-asset warm-up, instead of per-asset TCP windows.",
+    )
+    parser.add_argument(
+        "--joint-n-assets", type=int, default=100,
+        help="Assets per joint window (must equal the portfolio universe size).",
+    )
+    parser.add_argument(
+        "--joint-seq-len", type=int, default=64,
+        help="Portfolio seq_len T for joint windows (default 64).",
+    )
+    parser.add_argument(
+        "--joint-corr-window", type=int, default=20,
+        help="Cross-asset warm-up correlation horizon; joint window rows = "
+             "seq_len + 1 + corr_window (default 64+1+20=85), serving both the "
+             "warm-up (horizon>0) and head (uses first seq_len+1 rows) loaders.",
+    )
+    parser.add_argument(
+        "--joint-asset-pass-frac", type=float, default=0.8,
+        help="Fraction of a joint window's assets that must pass the per-asset "
+             "stylized-fact gate for the window to be accepted.",
+    )
+    parser.add_argument(
+        "--joint-ref-windows", type=int, default=512,
+        help="Number of real joint windows used to build the cross-asset reference.",
+    )
+    parser.add_argument(
+        "--joint-grad-accum", type=int, default=1,
+        help="Accumulate gradients over N micro-batches per optimizer step. "
+             "Effective batch = batch-size × this; raise it (and lower "
+             "--batch-size) to fit the tuned effective batch on a small GPU.",
+    )
     return parser.parse_args()
 
 
@@ -1282,8 +1922,14 @@ def main() -> None:
         regime_quotas=args.regime_quotas,
         device=args.device,
     )
+    # Joint windows are seq_len + 1 + corr_window rows: serves the warm-up's
+    # out-of-window correlation target and the head's in-window slice. Calibrate
+    # the per-asset stylized-fact gate on the same row length.
+    joint_window_len = args.joint_seq_len + 1 + args.joint_corr_window
+    if args.joint:
+        cfg.window_len = joint_window_len
     print(f"[fda] config: device={cfg.device} input_dir={args.input_dir} "
-          f"output_dir={args.output_dir}", flush=True)
+          f"output_dir={args.output_dir} joint={args.joint}", flush=True)
     shard_paths = sorted(args.input_dir.glob("*.f32bin"))
     if not shard_paths:
         raise RuntimeError(f"no shards found under {args.input_dir}")
@@ -1327,19 +1973,40 @@ def main() -> None:
     print(f"[fda] real-window compound pass rate (≥6 of 9): "
           f"{real_pass_rate:.3f} — synthetic target band", flush=True)
 
-    model = train_diffusion_model(windows, regimes, cfg)
-    print(f"[fda] sampler: eta={args.eta} x0_clip={args.x0_clip}", flush=True)
-    synth, stats = generate_valid_synthetic_windows(
-        model=model,
-        reference=ref,
-        cfg=cfg,
-        window_len=cfg.window_len,
-        feature_dim=cfg.feature_dim,
-        thresholds=thresholds,
-        eta=args.eta,
-        x0_clip=args.x0_clip,
-    )
-    out_paths = write_synthetic_shards(synth, args.output_dir, split="train")
+    if args.joint:
+        panel = load_real_panel(shard_paths)
+        model = train_joint_diffusion_model(
+            panel, cfg, n_assets=args.joint_n_assets, window_len=joint_window_len,
+            grad_accum=args.joint_grad_accum,
+        )
+        print(f"[fda] sampler: eta={args.eta} x0_clip={args.x0_clip}", flush=True)
+        synth, stats = generate_valid_joint_windows(
+            model=model,
+            reference=ref,
+            cfg=cfg,
+            n_assets=args.joint_n_assets,
+            window_len=joint_window_len,
+            feature_dim=cfg.feature_dim,
+            thresholds=thresholds,
+            eta=args.eta,
+            x0_clip=args.x0_clip,
+            asset_pass_frac=args.joint_asset_pass_frac,
+        )
+        out_paths = write_joint_synthetic_shards(synth, args.output_dir, split="train")
+    else:
+        model = train_diffusion_model(windows, regimes, cfg)
+        print(f"[fda] sampler: eta={args.eta} x0_clip={args.x0_clip}", flush=True)
+        synth, stats = generate_valid_synthetic_windows(
+            model=model,
+            reference=ref,
+            cfg=cfg,
+            window_len=cfg.window_len,
+            feature_dim=cfg.feature_dim,
+            thresholds=thresholds,
+            eta=args.eta,
+            x0_clip=args.x0_clip,
+        )
+        out_paths = write_synthetic_shards(synth, args.output_dir, split="train")
 
     cond_pct = ", ".join(f"{x:.1%}" for x in stats["conditioned_regime_distribution"])
     real_pct = ", ".join(f"{x:.1%}" for x in stats["realized_regime_distribution"])
@@ -1351,30 +2018,46 @@ def main() -> None:
 
     cross_report: CrossAssetReport | None = None
     if not args.no_cross_asset_check:
-        print(
-            f"[fda] running cross-asset validation "
-            f"(pool_size={args.cross_asset_pool_size}, "
-            f"real_pools={args.cross_asset_real_pools}, "
-            f"synth_pools={args.cross_asset_synth_pools})",
-            flush=True,
-        )
-        print(f"[fda] building cross-asset reference from real windows "
-              f"({args.cross_asset_real_pools} pools × "
-              f"{args.cross_asset_pool_size} windows)", flush=True)
-        cross_ref = compute_cross_asset_reference(
-            windows,
-            pool_size=args.cross_asset_pool_size,
-            n_pool_samples=args.cross_asset_real_pools,
-        )
-        print(f"[fda] scoring synthetic pools against reference "
-              f"({args.cross_asset_synth_pools} pools)", flush=True)
-        cross_report = validate_cross_asset_structure(
-            synth,
-            cross_ref,
-            n_pool_samples=args.cross_asset_synth_pools,
-            beta_ks_threshold=args.cross_asset_beta_ks,
-            mvp_ks_threshold=args.cross_asset_mvp_ks,
-        )
+        if args.joint:
+            print(f"[fda] building joint cross-asset reference "
+                  f"({args.joint_ref_windows} real joint windows)", flush=True)
+            real_joint = sample_real_joint_windows(
+                panel, args.joint_n_assets, joint_window_len,
+                args.joint_ref_windows, seed=cfg.seed,
+            )
+            cross_ref = compute_cross_asset_reference_joint(real_joint)
+            print("[fda] scoring synthetic joint windows against reference",
+                  flush=True)
+            cross_report = validate_cross_asset_structure_joint(
+                synth, cross_ref,
+                beta_ks_threshold=args.cross_asset_beta_ks,
+                mvp_ks_threshold=args.cross_asset_mvp_ks,
+            )
+        else:
+            print(
+                f"[fda] running cross-asset validation "
+                f"(pool_size={args.cross_asset_pool_size}, "
+                f"real_pools={args.cross_asset_real_pools}, "
+                f"synth_pools={args.cross_asset_synth_pools})",
+                flush=True,
+            )
+            print(f"[fda] building cross-asset reference from real windows "
+                  f"({args.cross_asset_real_pools} pools × "
+                  f"{args.cross_asset_pool_size} windows)", flush=True)
+            cross_ref = compute_cross_asset_reference(
+                windows,
+                pool_size=args.cross_asset_pool_size,
+                n_pool_samples=args.cross_asset_real_pools,
+            )
+            print(f"[fda] scoring synthetic pools against reference "
+                  f"({args.cross_asset_synth_pools} pools)", flush=True)
+            cross_report = validate_cross_asset_structure(
+                synth,
+                cross_ref,
+                n_pool_samples=args.cross_asset_synth_pools,
+                beta_ks_threshold=args.cross_asset_beta_ks,
+                mvp_ks_threshold=args.cross_asset_mvp_ks,
+            )
         status = "PASS" if cross_report.passed else "FAIL"
         print(
             f"[fda] cross-asset validation {status}: "

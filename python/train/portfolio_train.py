@@ -793,11 +793,24 @@ class SyntheticWindowPortfolioDataset(IterableDataset):
         augment: bool = True,
         shuffle: bool = True,
         pta_cfg: PTAAugmentationConfig | None = None,
+        disk_horizon: int | None = None,
     ) -> None:
         self.shard_paths = shard_paths
         self.n_assets = n_assets
         self.seq_len = seq_len
         self.future_return_horizon = future_return_horizon
+        # Rows stored per window on disk = seq_len + 1 + disk_horizon. Decoupled
+        # from future_return_horizon so a single shard length (e.g. 85-row joint
+        # windows) serves both the warm-up loader (yields future_returns) and the
+        # head loader (disk_horizon matches the file, but yields no lookahead).
+        self.disk_horizon = (
+            future_return_horizon if disk_horizon is None else disk_horizon
+        )
+        if self.disk_horizon < future_return_horizon:
+            raise ValueError(
+                f"disk_horizon ({self.disk_horizon}) must be >= "
+                f"future_return_horizon ({future_return_horizon})"
+            )
         self.augment = augment
         self.shuffle = shuffle
         self.pta_cfg = pta_cfg or PTAAugmentationConfig()
@@ -808,7 +821,7 @@ class SyntheticWindowPortfolioDataset(IterableDataset):
         Each entry in the returned list is an (N, rows_per_window, F) array
         backed by a memmap — not copied into RAM until sliced.
         """
-        rows_per_window = self.seq_len + 1 + self.future_return_horizon
+        rows_per_window = self.seq_len + 1 + self.disk_horizon
         floats_per_window = self.n_assets * rows_per_window * self.FEATURE_DIM
         all_windows: list[np.ndarray] = []
         for path in self.shard_paths:
@@ -860,7 +873,9 @@ class SyntheticWindowPortfolioDataset(IterableDataset):
                 )
                 if horizon > 0:
                     future_returns = torch.from_numpy(
-                        window[:, self.seq_len + 1 :, self.RETURN_IDX].copy()  # (N, horizon)
+                        window[
+                            :, self.seq_len + 1 : self.seq_len + 1 + horizon, self.RETURN_IDX
+                        ].copy()  # (N, horizon)
                     )
                     for view_feats, view_returns in views:
                         yield view_feats, view_returns, future_returns
@@ -878,6 +893,7 @@ def build_synthetic_portfolio_loader(
     future_return_horizon: int = 0,
     num_workers: int = 0,
     pta_cfg: PTAAugmentationConfig | None = None,
+    disk_horizon: int | None = None,
 ) -> DataLoader:
     ds = SyntheticWindowPortfolioDataset(
         shard_paths=shard_paths,
@@ -886,6 +902,7 @@ def build_synthetic_portfolio_loader(
         future_return_horizon=future_return_horizon,
         augment=augment,
         pta_cfg=pta_cfg,
+        disk_horizon=disk_horizon,
     )
     return DataLoader(
         ds,
@@ -3203,6 +3220,10 @@ def main() -> None:
                 batch_size=args.batch_size,
                 augment=False,
                 num_workers=0,
+                # Joint shards store seq_len+1+corr_window rows; the head only
+                # needs the in-window slice, so read at the on-disk length but
+                # yield no lookahead.
+                disk_horizon=args.cross_asset_corr_window,
             )
             if synth_train_paths
             else None
