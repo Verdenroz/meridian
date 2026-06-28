@@ -116,6 +116,22 @@ FDA_ETA          ?= 0.0
 FDA_X0_CLIP      ?= 5.0
 FDA_MAX_GEN_ROUNDS ?= 3000
 
+# Joint (multi-asset) FDA for portfolio training — 2D score network producing
+# (N, T, F) windows. Each joint window packs n_assets, so far fewer are needed
+# than the per-asset count (and each is ~9.5MB, so 50k would be ~476GB).
+FDA_JOINT_OUT        ?= data/mmaps_synth_joint
+FDA_JOINT_TARGET     ?= 1000
+FDA_JOINT_N_ASSETS   ?= 100
+FDA_JOINT_SEQ_LEN    ?= 64
+FDA_JOINT_CORR_WIN   ?= 20
+FDA_JOINT_ASSET_PASS ?= 0.8
+FDA_JOINT_REF_WINDOWS ?= 512
+# Keep the tuned effective batch (FDA_BATCH × this) on a small GPU: raise accum
+# and lower FDA_BATCH instead of shrinking the effective batch.
+FDA_JOINT_GRAD_ACCUM ?= 1
+FDA_JOINT_TAR_DIR    ?= data/fda_joint_tars
+FDA_JOINT_TAR_PATH   ?= fda_joint_tars
+
 # HuggingFace upload settings. No-ops when HF_TOKEN is empty.
 HF_DATA_REPO     ?= Verdenroz/meridian-data
 HF_DATA_PRIVATE  ?= 1
@@ -161,7 +177,7 @@ TMUX_RUN    = tmux kill-session -t $1 2>/dev/null || true; \
               tmux new-session -d -s $1 "$(INHIBIT) bash -c '$2'"
 CKPT_IS_COMPAT = $(PYTHON) -c "import sys, torch; d = torch.load(sys.argv[1], map_location='cpu', weights_only=True); ok = d.get('format_version') == 2 and d.get('architecture_version') == 'v4.0' and d.get('pretraining_objective') == 'tcp'; raise SystemExit(0 if ok else 1)"
 
-.PHONY: collect clean-data sidecar sidecar-stop fnspid text-pca stats fda pack-fda upload-fda upload augment-data stats-aug \
+.PHONY: collect clean-data sidecar sidecar-stop fnspid text-pca stats fda fda-joint pack-fda pack-fda-joint upload-fda upload augment-data stats-aug \
         text-corpus tokenizer marketreader setup \
         pretrain portfolio-return portfolio-sharpe backtest
 
@@ -377,6 +393,36 @@ fda:
 	fi; \
 	echo "FDA complete: $${#synth_files[@]} synthetic shards available"
 
+# Joint multi-asset FDA for portfolio head + cross-asset warm-up.
+fda-joint:
+	$(PYTHON) -m train.fda_pipeline --joint \
+		--input-dir $(DATA_DIR)/train --output-dir $(FDA_JOINT_OUT) \
+		--joint-n-assets $(FDA_JOINT_N_ASSETS) \
+		--joint-seq-len $(FDA_JOINT_SEQ_LEN) \
+		--joint-corr-window $(FDA_JOINT_CORR_WIN) \
+		--joint-asset-pass-frac $(FDA_JOINT_ASSET_PASS) \
+		--joint-ref-windows $(FDA_JOINT_REF_WINDOWS) \
+		--joint-grad-accum $(FDA_JOINT_GRAD_ACCUM) \
+		--stride $(FDA_STRIDE) \
+		--epochs $(FDA_EPOCHS) --batch-size $(FDA_BATCH) \
+		--target-valid-windows $(FDA_JOINT_TARGET) --device $(FDA_DEVICE) \
+		--max-abs-feature $(FDA_MAX_ABS) --diffusion-steps $(FDA_DIFFUSION) \
+		--soft-target-pass $(FDA_SOFT_TARGET_PASS) \
+		--eta $(FDA_ETA) --x0-clip $(FDA_X0_CLIP) \
+		--max-generation-rounds $(FDA_MAX_GEN_ROUNDS)
+	@set -euo pipefail; \
+	if [ ! -f "$(FDA_JOINT_OUT)/fda_manifest.json" ]; then \
+		echo "missing $(FDA_JOINT_OUT)/fda_manifest.json; joint FDA likely failed"; \
+		exit 1; \
+	fi; \
+	shopt -s nullglob; \
+	synth_files=($(FDA_JOINT_OUT)/train/*.f32bin); \
+	if [ $${#synth_files[@]} -eq 0 ]; then \
+		echo "no joint shards in $(FDA_JOINT_OUT)/train; joint FDA likely failed"; \
+		exit 1; \
+	fi; \
+	echo "joint FDA complete: $${#synth_files[@]} joint shards available"
+
 # Upload already-packed tars from FDA_TAR_DIR to HuggingFace.
 upload-fda:
 	@set -euo pipefail; \
@@ -427,6 +473,37 @@ pack-fda:
 		--out $(FDA_TAR_DIR) \
 		--target-mib $(FDA_TAR_MIB) \
 		--source-manifest $(SYNTH_DIR)/fda_manifest.json \
+		$$upload_args
+
+# Pack + upload joint FDA shards to a distinct repo path so the portfolio
+# notebook pulls them separately from the per-asset (TCP) shards.
+pack-fda-joint:
+	@set -euo pipefail; \
+	if [ ! -d "$(FDA_JOINT_OUT)/train" ]; then \
+		echo "missing $(FDA_JOINT_OUT)/train; run 'make fda-joint' first"; \
+		exit 1; \
+	fi; \
+	shopt -s nullglob; \
+	synth_files=($(FDA_JOINT_OUT)/train/FDA_SYNTH_*.f32bin); \
+	if [ $${#synth_files[@]} -eq 0 ]; then \
+		echo "no FDA_SYNTH_* shards under $(FDA_JOINT_OUT)/train; run 'make fda-joint' first"; \
+		exit 1; \
+	fi; \
+	upload_args=""; \
+	if [ -n "$${HF_TOKEN:-}" ]; then \
+		upload_args="--upload-repo $(FDA_TAR_REPO) --upload-path-in-repo $(FDA_JOINT_TAR_PATH)"; \
+		if [ "$(FDA_TAR_PRIVATE)" = "1" ]; then \
+			upload_args="$$upload_args --upload-private"; \
+		fi; \
+		echo "uploading to HuggingFace: $(FDA_TAR_REPO)/$(FDA_JOINT_TAR_PATH) (private=$(FDA_TAR_PRIVATE))"; \
+	else \
+		echo "HF_TOKEN not set — packing locally only, skipping upload"; \
+	fi; \
+	$(PYTHON) -m tools.pack_fda_shards \
+		--src $(FDA_JOINT_OUT)/train \
+		--out $(FDA_JOINT_TAR_DIR) \
+		--target-mib $(FDA_TAR_MIB) \
+		--source-manifest $(FDA_JOINT_OUT)/fda_manifest.json \
 		$$upload_args
 
 # Push real shards to HF_DATA_REPO. No-op when HF_TOKEN is empty.
