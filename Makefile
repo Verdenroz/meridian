@@ -115,6 +115,7 @@ FDA_SOFT_TARGET_PASS ?= 0.90
 FDA_ETA          ?= 0.0
 FDA_X0_CLIP      ?= 5.0
 FDA_MAX_GEN_ROUNDS ?= 3000
+FDA_SAMPLING     ?= 100
 
 # Joint (multi-asset) FDA for portfolio training — 2D score network producing
 # (N, T, F) windows. Each joint window packs n_assets, so far fewer are needed
@@ -124,7 +125,8 @@ FDA_JOINT_TARGET     ?= 1000
 FDA_JOINT_N_ASSETS   ?= 100
 FDA_JOINT_SEQ_LEN    ?= 64
 FDA_JOINT_CORR_WIN   ?= 20
-FDA_JOINT_ASSET_PASS ?= 0.8
+FDA_JOINT_ASSET_PASS ?= 0.75
+FDA_JOINT_SAMPLING   ?= 250
 FDA_JOINT_REF_WINDOWS ?= 512
 # Keep the tuned effective batch (FDA_BATCH × this) on a small GPU: raise accum
 # and lower FDA_BATCH instead of shrinking the effective batch.
@@ -382,6 +384,7 @@ fda:
 		--max-abs-feature $(FDA_MAX_ABS) --diffusion-steps $(FDA_DIFFUSION) \
 		--soft-target-pass $(FDA_SOFT_TARGET_PASS) \
 		--eta $(FDA_ETA) --x0-clip $(FDA_X0_CLIP) \
+		--sampling-steps $(FDA_SAMPLING) \
 		--max-generation-rounds $(FDA_MAX_GEN_ROUNDS)
 	@set -euo pipefail; \
 	if [ ! -f "$(SYNTH_DIR)/fda_manifest.json" ]; then \
@@ -409,6 +412,7 @@ fda-joint:
 		--stride $(FDA_STRIDE) \
 		--epochs $(FDA_EPOCHS) --batch-size $(FDA_BATCH) \
 		--target-valid-windows $(FDA_JOINT_TARGET) --device $(FDA_DEVICE) \
+		--sampling-steps $(FDA_JOINT_SAMPLING) \
 		--max-abs-feature $(FDA_MAX_ABS) --diffusion-steps $(FDA_DIFFUSION) \
 		--soft-target-pass $(FDA_SOFT_TARGET_PASS) \
 		--eta $(FDA_ETA) --x0-clip $(FDA_X0_CLIP) \

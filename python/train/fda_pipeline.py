@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -18,6 +19,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint
 from core.self_supervised_pretraining import infer_regime_label
 from train.feature_schema import (
     MARKET_FEATURE_OFFSET,
@@ -712,26 +714,34 @@ class FDADiffusionModel(nn.Module):
 
 
 class _AdaLNResBlock2D(nn.Module):
-    """Residual Conv2D block over (N, T) with FiLM-style AdaLN conditioning.
+    """Residual block over (N, T): per-asset temporal conv + equivariant
+    cross-asset coupling, with FiLM-style AdaLN conditioning.
 
-    A (3, 3) kernel mixes both the asset axis (N) and the time axis (T). The
-    N-axis mixing is the cross-asset coupling a per-asset 1D model cannot
-    represent — it lets the joint model learn cross-asset correlation, sector
-    co-movement, and a shared market factor.
+    The asset axis is a *random subset in random order* each training step, so a
+    position-sensitive kernel over N (e.g. Conv2d 3×3) is not permutation-
+    equivariant — it can only learn to average arbitrary neighbours, which low-
+    pass-filters each asset's return series and kills fat tails / induces return
+    autocorrelation / fabricates a leverage correlation. We therefore convolve
+    along T only (kernel (1, 3)) and couple assets through a mean over N
+    broadcast back (a Deep Sets aggregation): permutation-invariant, and the
+    cross-asset mean *is* the shared market factor a per-asset 1D model can't see.
     """
 
     def __init__(self, channels: int, cond_dim: int, groups: int = 8):
         super().__init__()
         self.norm1 = nn.GroupNorm(groups, channels)
-        self.conv1 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.conv1 = nn.Conv2d(channels, channels, kernel_size=(1, 3), padding=(0, 1))
         self.norm2 = nn.GroupNorm(groups, channels)
-        self.conv2 = nn.Conv2d(channels, channels, kernel_size=3, padding=1)
+        self.conv2 = nn.Conv2d(channels, channels, kernel_size=(1, 3), padding=(0, 1))
         self.cond_proj = nn.Linear(cond_dim, 2 * channels)
+        # Permutation-equivariant cross-asset coupling: mix in the mean over N.
+        self.cross_proj = nn.Conv2d(channels, channels, kernel_size=1)
 
     def forward(self, h: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
         # h: (B, C, N, T), cond: (B, cond_dim)
         residual = h
         h = self.conv1(F.silu(self.norm1(h)))
+        h = h + self.cross_proj(h.mean(dim=2, keepdim=True))  # N is dim=2
         h = self.norm2(h)
         scale, shift = self.cond_proj(cond).chunk(2, dim=-1)
         h = h * (1.0 + scale[:, :, None, None]) + shift[:, :, None, None]
@@ -833,8 +843,15 @@ class FDADiffusionModel2D(nn.Module):
 
         h = x.permute(0, 3, 1, 2)        # (B, F, N, T)
         h = self.in_conv(h)              # (B, C, N, T)
+        # Each (B, C, N, T) block activation is large at N=100; checkpoint the
+        # blocks in training so they're recomputed in backward rather than held,
+        # keeping batch 64 inside 24 GB. No-op under no_grad sampling.
+        ckpt = self.training and torch.is_grad_enabled()
         for block in self.blocks:
-            h = block(h, cond)
+            if ckpt:
+                h = torch.utils.checkpoint.checkpoint(block, h, cond, use_reentrant=False)
+            else:
+                h = block(h, cond)
         h = self.out_conv(F.silu(self.out_norm(h)))  # (B, F, N, T)
         return h.permute(0, 2, 3, 1)     # (B, N, T, F)
 
@@ -988,21 +1005,25 @@ def train_diffusion_model(
 # ── Joint (multi-asset) FDA for portfolio training ───────────────────────────
 
 
-def load_real_panel(shard_paths: list[Path]) -> np.ndarray:
-    """Tail-align every per-asset shard into one (M, rows, F) real panel.
+def load_real_panel(shard_paths: list[Path], n_assets: int = 100) -> np.ndarray:
+    """Tail-align per-asset shards into one (M, rows, F) real panel, dropping the
+    short-history tail to maximize coverage.
 
-    Mirrors MultiAssetShardDataset._load_shards: each shard is a flat
-    `rows × 280` float32 stream; we truncate all shards to the shortest length
-    (shared calendar end) and stack. Row t is the same trading day across all
-    symbols, so a contiguous slice across the asset axis is a genuine joint
-    window with real cross-asset correlation — the property the cross-asset
-    gate checks and the joint diffusion model must learn.
+    Each shard is a flat `rows × 280` float32 stream. Truncating *every* shard to
+    the global shortest length collapses the panel to the most recent rows of the
+    newest-listed symbol (here ~240), which starves the joint denoiser of both
+    temporal diversity (only ~155 window-starts) and the full-history fat tails
+    the stylized-fact gate is calibrated on. Since a joint window samples only
+    `n_assets` symbols, we instead keep the K longest symbols that maximize total
+    coverage K × (K-th longest length), with K ≥ n_assets so a full window is
+    always drawable; the short-history outliers are dropped. Row t is the same
+    trading day across all kept symbols — the cross-asset alignment the gate and
+    the joint model require.
     """
     arrays: list[np.ndarray] = []
     malformed = 0
     for path in shard_paths:
-        # Skip synthetic shards: they have a different row count and would
-        # collapse the tail-alignment min_rows if mixed into the real corpus.
+        # Skip synthetic shards: a different row count would distort alignment.
         if path.name.startswith("FDA_SYNTH"):
             continue
         raw = np.memmap(path, dtype="float32", mode="r")
@@ -1010,14 +1031,24 @@ def load_real_panel(shard_paths: list[Path]) -> np.ndarray:
             malformed += 1
             continue
         arrays.append(np.asarray(raw.reshape(-1, 280)))
-    if not arrays:
+    if len(arrays) < n_assets:
         raise RuntimeError(
-            f"no usable shards under the panel paths (malformed={malformed}); "
-            "re-run collection to refresh shards"
+            f"only {len(arrays)} usable symbols (malformed={malformed}) "
+            f"< n_assets={n_assets}; re-run collection to refresh shards"
         )
-    min_rows = min(a.shape[0] for a in arrays)
-    panel = np.stack([a[-min_rows:] for a in arrays], axis=0).astype(np.float32)
-    print(f"[fda] real panel: symbols={panel.shape[0]} rows={panel.shape[1]} "
+    # Keep the K longest symbols maximizing coverage = K × (shortest kept length).
+    # This drops the few short-history symbols that otherwise truncate everyone.
+    arrays.sort(key=lambda a: a.shape[0], reverse=True)
+    lengths = [a.shape[0] for a in arrays]
+    best_k, best_cov = n_assets, -1
+    for k in range(n_assets, len(arrays) + 1):
+        cov = k * lengths[k - 1]
+        if cov >= best_cov:
+            best_cov, best_k = cov, k
+    min_rows = lengths[best_k - 1]
+    panel = np.stack([a[-min_rows:] for a in arrays[:best_k]], axis=0).astype(np.float32)
+    print(f"[fda] real panel: symbols={panel.shape[0]} "
+          f"(dropped {len(arrays) - best_k} short-history) rows={panel.shape[1]} "
           f"F={panel.shape[2]} malformed={malformed}", flush=True)
     return panel
 
@@ -1081,6 +1112,7 @@ def train_joint_diffusion_model(
     print(f"[fda] joint per-channel normalization: {live}/{cfg.feature_dim} live "
           f"channels", flush=True)
     norm_panel = model.normalize(panel_t)  # (M, rows, F)
+    del panel_t  # raw copy is dead after normalization; free ~1 GB on GPU
 
     starts = np.arange(0, rows - window_len, 1, dtype=np.int64)
     start_regime = torch.from_numpy(
@@ -1153,6 +1185,27 @@ def train_joint_diffusion_model(
     return model
 
 
+def _ddim_step_pairs(
+    diffusion_steps: int, sampling_steps: int | None
+) -> list[tuple[int, int]]:
+    """(t_cur, t_prev) pairs for the reverse trajectory, high noise → low.
+
+    `sampling_steps` None or ≥ `diffusion_steps` walks every consecutive step
+    (t, t-1) — the full trajectory. A smaller value evenly strides the schedule:
+    accelerated DDIM. With eta=0 the sampler is deterministic, so striding down
+    to ~50-100 steps is quality-neutral (Song et al. 2021) — the denoiser still
+    trained on all `diffusion_steps` noise levels; only the reverse walk skips.
+    t_prev=0 maps to ᾱ=1 (alpha_bar[0]), so the final step lands on x̂₀.
+    """
+    T = diffusion_steps
+    if sampling_steps is None or sampling_steps >= T:
+        ts = list(range(T, 0, -1))
+    else:
+        idx = np.linspace(T, 1, num=sampling_steps).round().astype(int)
+        ts = sorted({int(x) for x in idx}, reverse=True)
+    return list(zip(ts, ts[1:] + [0]))
+
+
 def sample_joint_diffusion_windows(
     model: FDADiffusionModel2D,
     n_windows: int,
@@ -1164,6 +1217,7 @@ def sample_joint_diffusion_windows(
     x0_clip: float = 5.0,
     eta: float = 0.0,
     share_market_block: bool = True,
+    sampling_steps: int | None = None,
 ) -> np.ndarray:
     """DDIM reverse sampler for the 2D joint denoiser → (n_windows, N, T, F).
 
@@ -1182,21 +1236,19 @@ def sample_joint_diffusion_windows(
 
     model.eval()
     with torch.no_grad():
-        for step in range(model.diffusion_steps, 0, -1):
-            t = torch.full((n_windows,), step, dtype=torch.long, device=dev)
+        for t_cur, t_prev in _ddim_step_pairs(model.diffusion_steps, sampling_steps):
+            t = torch.full((n_windows,), t_cur, dtype=torch.long, device=dev)
             v_theta = model(x_t, t, regime)
             alpha_bar_t = model.alpha_bar[t][:, None, None, None]
-            alpha_bar_prev = (
-                model.alpha_bar[t - 1][:, None, None, None]
-                if step > 1
-                else torch.ones_like(alpha_bar_t)
-            )
+            alpha_bar_prev = model.alpha_bar[
+                torch.full((n_windows,), t_prev, dtype=torch.long, device=dev)
+            ][:, None, None, None]
             sqrt_ab = torch.sqrt(alpha_bar_t)
             sqrt_om = torch.sqrt(1.0 - alpha_bar_t)
             x0_hat = sqrt_ab * x_t - sqrt_om * v_theta
             eps_theta = sqrt_om * x_t + sqrt_ab * v_theta
             x0_hat = torch.clamp(x0_hat, -x0_clip, x0_clip)
-            if step > 1:
+            if t_prev > 0:
                 sigma_t = eta * torch.sqrt(
                     (1.0 - alpha_bar_prev) / (1.0 - alpha_bar_t)
                 ) * torch.sqrt(1.0 - alpha_bar_t / alpha_bar_prev)
@@ -1260,6 +1312,7 @@ def sample_diffusion_windows(
     device: torch.device | None = None,
     x0_clip: float = 5.0,
     eta: float = 0.0,
+    sampling_steps: int | None = None,
 ) -> np.ndarray:
     """DDIM reverse sampler over a v-parameterized denoiser.
 
@@ -1295,15 +1348,13 @@ def sample_diffusion_windows(
 
     model.eval()
     with torch.no_grad():
-        for step in range(model.diffusion_steps, 0, -1):
-            t = torch.full((n_windows,), step, dtype=torch.long, device=dev)
+        for t_cur, t_prev in _ddim_step_pairs(model.diffusion_steps, sampling_steps):
+            t = torch.full((n_windows,), t_cur, dtype=torch.long, device=dev)
             v_theta = model(x_t, t, regime)
             alpha_bar_t = model.alpha_bar[t][:, None, None]
-            alpha_bar_prev = (
-                model.alpha_bar[t - 1][:, None, None]
-                if step > 1
-                else torch.ones_like(alpha_bar_t)
-            )
+            alpha_bar_prev = model.alpha_bar[
+                torch.full((n_windows,), t_prev, dtype=torch.long, device=dev)
+            ][:, None, None]
             sqrt_ab = torch.sqrt(alpha_bar_t)
             sqrt_om = torch.sqrt(1.0 - alpha_bar_t)
 
@@ -1312,7 +1363,7 @@ def sample_diffusion_windows(
             eps_theta = sqrt_om * x_t + sqrt_ab * v_theta
             x0_hat = torch.clamp(x0_hat, -x0_clip, x0_clip)
 
-            if step > 1:
+            if t_prev > 0:
                 # DDIM posterior variance with interpolation coefficient `eta`.
                 sigma_t = eta * torch.sqrt(
                     (1.0 - alpha_bar_prev) / (1.0 - alpha_bar_t)
@@ -1347,6 +1398,7 @@ def generate_valid_synthetic_windows(
     thresholds: CalibratedThresholds | None = None,
     eta: float = 0.0,
     x0_clip: float = 5.0,
+    sampling_steps: int | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Generate accepted windows. Aggregates per-check failure counts rather than
     retaining per-candidate reports (retaining ~1M dict-heavy Python objects OOMs
@@ -1389,6 +1441,7 @@ def generate_valid_synthetic_windows(
             regimes=round_regimes,
             eta=eta,
             x0_clip=x0_clip,
+            sampling_steps=sampling_steps,
         )
         candidate_count += len(candidates)
         for w, cond_regime in zip(candidates, round_regimes):
@@ -1583,6 +1636,68 @@ def validate_cross_asset_structure_joint(
     return CrossAssetReport(passed=all(checks.values()), checks=checks, metrics=metrics)
 
 
+def _atomic_save_npy(path: Path, arr: np.ndarray) -> None:
+    """Write `arr` to `path` via a temp file + rename so a crash mid-write can
+    never truncate the existing sidecar."""
+    tmp = path.with_name(path.name + ".tmp")
+    # Pass a file handle so np.save doesn't re-append a `.npy` suffix.
+    with open(tmp, "wb") as f:
+        np.save(f, arr)
+    os.replace(tmp, path)
+
+
+def _reload_joint_shards(
+    split_dir: Path,
+    prefix: str,
+    shape: tuple[int, int, int],
+    expected_bytes: int,
+) -> tuple[list[np.ndarray], list[int], list[Path]]:
+    """Reload contiguously-indexed `{prefix}_NNNNNNNN.f32bin` shards for resume.
+
+    Stops at the first index gap so generation always appends to a dense run.
+    A wrong-sized shard means the directory holds output from an incompatible
+    config; we refuse rather than silently corrupt the panel.
+    """
+    n_assets, window_len, feature_dim = shape
+    windows: list[np.ndarray] = []
+    paths: list[Path] = []
+    i = 0
+    while True:
+        path = split_dir / f"{prefix}_{i:08d}.f32bin"
+        if not path.exists():
+            break
+        nbytes = path.stat().st_size
+        if nbytes != expected_bytes:
+            # A wrong-sized shard #0 means the dir holds an incompatible config;
+            # a wrong-sized later shard is a tail write the crash truncated —
+            # drop it and regenerate from here.
+            if i == 0:
+                raise RuntimeError(
+                    f"shard {path} is {nbytes}B, expected {expected_bytes}B for "
+                    f"shape {shape}. The output dir holds shards from a different "
+                    f"config — delete {split_dir} before re-running."
+                )
+            print(f"[fda] discarding truncated tail shard {path} "
+                  f"({nbytes}B != {expected_bytes}B)", flush=True)
+            path.unlink()
+            break
+        w = np.fromfile(path, dtype=np.float32).reshape(n_assets, window_len, feature_dim)
+        windows.append(w)
+        paths.append(path)
+        i += 1
+
+    regimes: list[int] = []
+    sidecar = split_dir / f"{prefix}_cond_regimes.npy"
+    if sidecar.exists():
+        regimes = np.load(sidecar).astype(np.int64).tolist()
+    # Align regimes to reloaded shards: pad unknowns with -1, truncate extras.
+    if len(regimes) < len(windows):
+        regimes = regimes + [-1] * (len(windows) - len(regimes))
+    elif len(regimes) > len(windows):
+        regimes = regimes[: len(windows)]
+    return windows, regimes, paths
+
+
 def generate_valid_joint_windows(
     model: FDADiffusionModel2D,
     reference: ReferenceStats,
@@ -1594,8 +1709,19 @@ def generate_valid_joint_windows(
     eta: float = 0.0,
     x0_clip: float = 5.0,
     asset_pass_frac: float = 0.8,
-) -> tuple[np.ndarray, dict]:
+    sampling_steps: int | None = None,
+    output_dir: Path | None = None,
+    split: str = "train",
+    prefix: str = "FDA_SYNTH",
+    resume: bool = True,
+) -> tuple[np.ndarray, dict, list[Path]]:
     """Accept/reject joint windows on the per-asset stylized-fact gate.
+
+    When `output_dir` is given, each accepted window is flushed to its final
+    `{prefix}_{i:08d}.f32bin` shard *immediately*, with conditioning regimes
+    mirrored to an atomic sidecar. A crash (e.g. a GPU/driver hard-hang)
+    therefore loses no completed work, and a re-run with `resume=True` reloads
+    existing shards and generates only the remainder.
 
     Each candidate joint window has its per-asset RSI reconciled with its
     return series, then each asset's (T, F) slice is run through the 9-point
@@ -1607,14 +1733,31 @@ def generate_valid_joint_windows(
     import time
     accepted: list[np.ndarray] = []
     accepted_cond_regimes: list[int] = []
+    out_paths: list[Path] = []
     candidate_count = 0
     pass_total = 0
     rounds = 0
     asset_fail_counts: dict[str, int] = {}
+
+    split_dir = output_dir / split if output_dir is not None else None
+    expected_bytes = n_assets * window_len * feature_dim * 4
+    if split_dir is not None:
+        split_dir.mkdir(parents=True, exist_ok=True)
+        if resume:
+            accepted, accepted_cond_regimes, out_paths = _reload_joint_shards(
+                split_dir, prefix, (n_assets, window_len, feature_dim),
+                expected_bytes,
+            )
+            if accepted:
+                print(f"[fda] resuming JOINT generation: reloaded "
+                      f"{len(accepted)} accepted shards from {split_dir}",
+                      flush=True)
+
     t_start = time.time()
     print(f"[fda] starting JOINT generation: target={cfg.target_valid_windows} "
           f"n_assets={n_assets} window_len={window_len} "
-          f"batch={cfg.generation_batch_size} asset_pass_frac={asset_pass_frac}",
+          f"batch={cfg.generation_batch_size} asset_pass_frac={asset_pass_frac} "
+          f"have={len(accepted)}",
           flush=True)
 
     while len(accepted) < cfg.target_valid_windows:
@@ -1640,6 +1783,7 @@ def generate_valid_joint_windows(
             regimes=round_regimes,
             eta=eta,
             x0_clip=x0_clip,
+            sampling_steps=sampling_steps,
         )
         candidate_count += len(candidates)
         for jw, cond_regime in zip(candidates, round_regimes):
@@ -1665,6 +1809,17 @@ def generate_valid_joint_windows(
                 pass_total += 1
                 accepted.append(jw)
                 accepted_cond_regimes.append(int(cond_regime))
+                if split_dir is not None:
+                    # Flush the shard before the sidecar so a crash between the
+                    # two leaves a recoverable shard, never a dangling regime.
+                    idx = len(accepted) - 1
+                    path = split_dir / f"{prefix}_{idx:08d}.f32bin"
+                    jw.astype(np.float32).tofile(path)
+                    out_paths.append(path)
+                    _atomic_save_npy(
+                        split_dir / f"{prefix}_cond_regimes.npy",
+                        np.asarray(accepted_cond_regimes, dtype=np.int64),
+                    )
                 if len(accepted) >= cfg.target_valid_windows:
                     break
         if rounds % 5 == 0 or len(accepted) >= cfg.target_valid_windows:
@@ -1679,7 +1834,8 @@ def generate_valid_joint_windows(
             )
     accepted_arr = np.stack(accepted, axis=0)  # (n, N, T, F)
     cond_arr = np.asarray(accepted_cond_regimes, dtype=np.int64)
-    cond_counts = np.bincount(cond_arr, minlength=4).tolist()
+    # Resumed shards from a sidecar-less run carry -1; drop them from the tally.
+    cond_counts = np.bincount(cond_arr[cond_arr >= 0], minlength=4).tolist()
     # Post-hoc realized regime: market-level (cross-asset mean window) label.
     post = [infer_regime_label(jw.mean(axis=0)) for jw in accepted_arr]
     post_counts = np.bincount(np.asarray(post, dtype=np.int64), minlength=4).tolist()
@@ -1697,7 +1853,7 @@ def generate_valid_joint_windows(
         "realized_regime_counts": post_counts,
         "realized_regime_distribution": [c / n_acc for c in post_counts],
     }
-    return accepted_arr, stats
+    return accepted_arr, stats, out_paths
 
 
 def write_joint_synthetic_shards(
@@ -1803,6 +1959,16 @@ def _parse_args() -> argparse.Namespace:
         default=1000,
         help="DDPM noise levels T_diff. Spec §8.2: 1000. Lower values severely "
              "underfit the denoiser and produce off-manifold samples.",
+    )
+    parser.add_argument(
+        "--sampling-steps",
+        type=int,
+        default=0,
+        help="DDIM reverse-trajectory steps at generation time (0 = walk all "
+             "--diffusion-steps). The denoiser still trains on all T_diff noise "
+             "levels; this only strides the deterministic (eta=0) reverse walk. "
+             "~50-100 is quality-neutral and ~10x faster than the full 1000. "
+             "Has no effect on quality only while eta=0; raise it if eta>0.",
     )
     parser.add_argument("--target-valid-windows", type=int, default=256)
     parser.add_argument("--generation-batch-size", type=int, default=0,
@@ -1974,13 +2140,17 @@ def main() -> None:
           f"{real_pass_rate:.3f} — synthetic target band", flush=True)
 
     if args.joint:
-        panel = load_real_panel(shard_paths)
+        panel = load_real_panel(shard_paths, n_assets=args.joint_n_assets)
         model = train_joint_diffusion_model(
             panel, cfg, n_assets=args.joint_n_assets, window_len=joint_window_len,
             grad_accum=args.joint_grad_accum,
         )
-        print(f"[fda] sampler: eta={args.eta} x0_clip={args.x0_clip}", flush=True)
-        synth, stats = generate_valid_joint_windows(
+        sampling_steps = args.sampling_steps or None
+        print(f"[fda] sampler: eta={args.eta} x0_clip={args.x0_clip} "
+              f"sampling_steps={sampling_steps or cfg.diffusion_steps}", flush=True)
+        # Shards are flushed incrementally inside the generator (crash-safe);
+        # a re-run resumes from whatever already landed in output_dir/train.
+        synth, stats, out_paths = generate_valid_joint_windows(
             model=model,
             reference=ref,
             cfg=cfg,
@@ -1991,11 +2161,17 @@ def main() -> None:
             eta=args.eta,
             x0_clip=args.x0_clip,
             asset_pass_frac=args.joint_asset_pass_frac,
+            sampling_steps=sampling_steps,
+            output_dir=args.output_dir,
+            split="train",
         )
-        out_paths = write_joint_synthetic_shards(synth, args.output_dir, split="train")
+        print(f"[fda] wrote {len(out_paths)} JOINT synthetic shards "
+              f"(incremental) to {args.output_dir}/train", flush=True)
     else:
         model = train_diffusion_model(windows, regimes, cfg)
-        print(f"[fda] sampler: eta={args.eta} x0_clip={args.x0_clip}", flush=True)
+        sampling_steps = args.sampling_steps or None
+        print(f"[fda] sampler: eta={args.eta} x0_clip={args.x0_clip} "
+              f"sampling_steps={sampling_steps or cfg.diffusion_steps}", flush=True)
         synth, stats = generate_valid_synthetic_windows(
             model=model,
             reference=ref,
@@ -2005,6 +2181,7 @@ def main() -> None:
             thresholds=thresholds,
             eta=args.eta,
             x0_clip=args.x0_clip,
+            sampling_steps=sampling_steps,
         )
         out_paths = write_synthetic_shards(synth, args.output_dir, split="train")
 
