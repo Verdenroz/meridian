@@ -171,8 +171,14 @@ PRETRAIN_ADVERSARIAL_LAMBDA ?= 0.2
 PRETRAIN_ADVERSARIAL_WARMUP ?= 2000
 PRETRAIN_CROSS_ASSET_NO_SECTOR ?= 0
 PRETRAIN_SYNTHETIC_FRACTION ?= 0.2
-WARMUP_STEPS ?= 180000
+# Duration-matched to the intended ~10 H100h warm-up budget at measured
+# throughput (~0.3 it/s); watch corr_frob and extend via resume if still falling.
+WARMUP_STEPS ?= 15000
 WARMUP_BATCH ?= 8
+# Joint FDA windows are asset-anonymous: safe at a high mix in the identity-free
+# corr warm-up, lower in head training where synth return fidelity matters.
+FDA_MIX        ?= 0.25
+WARMUP_FDA_MIX ?= 0.5
 
 INHIBIT    := systemd-inhibit --what=sleep:idle --who=meridian --why=gpu-training
 TMUX_RUN    = tmux kill-session -t $1 2>/dev/null || true; \
@@ -619,6 +625,7 @@ portfolio-return:
 	$(call TMUX_RUN,portfolio,source .venv/bin/activate && PYTHONPATH=python python -m train.portfolio_train \
 		--head return --data-dir $(TRAIN_DATA) --synth-dir $(FDA_JOINT_OUT) --symbols-file $(PORTFOLIO_SYMBOLS) \
 		--steps 50000 --cross-asset-warmup-steps $(WARMUP_STEPS) --cross-asset-warmup-batch-size $(WARMUP_BATCH) --batch-size $(BATCH_PORT) --seq-len 64 \
+		--fda-mix-prob $(FDA_MIX) --warmup-fda-mix-prob $(WARMUP_FDA_MIX) \
 		--bptt-chunk $(BPTT_CHUNK_PORT) --pta-micro-batch-size $(PTA_MICRO_BS) --regime-pool-size $(REGIME_POOL) \
 		--lr 3e-5 --log-every 10 --eval-every 250 --save-every 250 --checkpoint-dir $(CKPT_PORT) $(PORT_EXTRA) \
 		$$resume_arg)
@@ -639,6 +646,7 @@ portfolio-sharpe:
 	$(call TMUX_RUN,portfolio,source .venv/bin/activate && PYTHONPATH=python python -m train.portfolio_train \
 		--head sharpe --data-dir $(TRAIN_DATA) --synth-dir $(FDA_JOINT_OUT) --symbols-file $(PORTFOLIO_SYMBOLS) \
 		--steps 30000 --cross-asset-warmup-steps 0 --cross-asset-warmup-batch-size $(WARMUP_BATCH) --batch-size $(BATCH_PORT) --seq-len 64 \
+		--fda-mix-prob $(FDA_MIX) \
 		--bptt-chunk $(BPTT_CHUNK_PORT) --pta-micro-batch-size $(PTA_MICRO_BS) --regime-pool-size $(REGIME_POOL) \
 		--lr 3e-5 --log-every 10 --eval-every 250 --save-every 250 --checkpoint-dir $(CKPT_PORT) $(PORT_EXTRA) \
 		$$resume_arg)

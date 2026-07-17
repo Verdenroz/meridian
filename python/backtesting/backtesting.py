@@ -144,6 +144,7 @@ def load_model_and_produce_weights(
     sharpe_checkpoint_path: Path | None = None,
     spec: MeridianSpec = DEFAULT_SPEC,
     device: str = "cpu",
+    symbols_file: Path | None = None,
 ) -> tuple[np.ndarray, list[str], dict[str, np.ndarray]]:
     """Load a trained Meridian model and compute portfolio weights.
 
@@ -264,7 +265,19 @@ def load_model_and_produce_weights(
     # Bootstrap recurrent state
     portfolio_s = torch.zeros(B, spec.portfolio_state_dim, device=dev)
     calendar = torch.zeros(B, spec.calendar_dim, device=dev)
-    sector_ids = torch.zeros(N, dtype=torch.long, device=dev)
+    # Same GICS sector ids the trainer feeds the fusion sector prior; must
+    # match training or the learned affinity bias is mis-applied at inference.
+    if symbols_file is not None and symbols_file.exists():
+        from train.portfolio_train import build_asset_sector_ids, load_symbol_sector_map
+
+        sym_map = load_symbol_sector_map(symbols_file)
+        sector_ids = torch.tensor(
+            build_asset_sector_ids([Path(s) for s in symbols], sym_map),
+            dtype=torch.long,
+            device=dev,
+        )
+    else:
+        sector_ids = torch.zeros(N, dtype=torch.long, device=dev)
     episodic = torch.zeros(B, spec.n_episodic_retrievals, spec.d_model, device=dev)
     regime_ema = torch.zeros(B, spec.regime_emb_dim, device=dev)
     prev_regime_emb = None
@@ -529,6 +542,12 @@ def main() -> None:
         "--smoke", action="store_true", help="run smoke test with synthetic data"
     )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    parser.add_argument(
+        "--symbols-file",
+        type=Path,
+        default=Path("portfolio_symbols.txt"),
+        help="universe file used to derive GICS sector ids (as in training)",
+    )
     args = parser.parse_args()
 
     if args.smoke:
@@ -549,6 +568,7 @@ def main() -> None:
         args.head,
         sharpe_checkpoint_path=args.checkpoint_sharpe,
         device=args.device,
+        symbols_file=args.symbols_file,
     )
 
     result = meridian_py.run_backtest(weights, symbols, candles)

@@ -65,7 +65,7 @@ from optimization.portfolio_heads import (
     MeridianS,
     PortfolioVolHead,
 )
-from torch.utils.data import DataLoader, IterableDataset
+from torch.utils.data import DataLoader, IterableDataset, get_worker_info
 
 from train.feature_schema import BLOCK_FUNDAMENTAL, BLOCK_PRICE_VOLUME, BLOCK_TECHNICAL
 from train.fda_pipeline import (
@@ -108,7 +108,10 @@ _GICS_SECTOR_NAMES = (
     "Utilities",
 )
 _SECTOR_NAME_TO_ID = {name: idx for idx, name in enumerate(_GICS_SECTOR_NAMES)}
-_DEFAULT_RETURN_CROSS_ASSET_WARMUP_STEPS = 180_000  # ~10 H100h (spec §11.4a)
+# Sized to the intended ~10 H100-hour budget at measured throughput (~0.3 it/s
+# on A100-80GB, batch 4): ~25-35 epochs over the ~2.6k distinct joint windows.
+# The old 180k figure assumed 5 it/s and was never reachable in practice.
+_DEFAULT_RETURN_CROSS_ASSET_WARMUP_STEPS = 15_000
 
 
 def load_symbol_sector_map(symbols_file: Path) -> dict[str, int]:
@@ -691,6 +694,11 @@ class MultiAssetShardDataset(IterableDataset):
             return
 
         indices = np.arange(0, n_seqs, self.stride)
+        # Partition windows across DataLoader workers; without this each worker
+        # re-emits the full window set (num_workers× duplication per epoch).
+        worker = get_worker_info()
+        if worker is not None:
+            indices = indices[worker.id :: worker.num_workers]
         if self.shuffle:
             np.random.shuffle(indices)
 
@@ -851,6 +859,13 @@ class SyntheticWindowPortfolioDataset(IterableDataset):
 
         rng = np.random.default_rng()
         indices = list(range(len(all_windows)))
+        # Same worker partitioning as MultiAssetShardDataset (currently built
+        # with num_workers=0, but keep the contract if that ever changes).
+        worker = get_worker_info()
+        if worker is not None:
+            indices = indices[worker.id :: worker.num_workers]
+        if not indices:
+            return
         horizon = self.future_return_horizon
 
         while True:
@@ -904,6 +919,16 @@ def build_synthetic_portfolio_loader(
         pta_cfg=pta_cfg,
         disk_horizon=disk_horizon,
     )
+    # Fail loudly at build time: a layout mismatch (wrong n_assets/seq_len/
+    # disk_horizon vs the files) silently skips every shard, and the empty
+    # iterator would otherwise crash mid-training with a bare StopIteration.
+    if shard_paths and not ds._load_joint_windows():
+        rows = seq_len + 1 + (disk_horizon if disk_horizon is not None else future_return_horizon)
+        raise RuntimeError(
+            f"No joint FDA windows loaded from {len(shard_paths)} shard(s); "
+            f"expected layout (n_assets={n_assets}, rows={rows}, F=280) per "
+            "window — check --synth-dir contents and --cross-asset-corr-window."
+        )
     return DataLoader(
         ds,
         batch_size=batch_size,
@@ -922,7 +947,7 @@ class PortfolioTrainConfig:
     head: str = "return"  # "return" or "sharpe"
     total_steps: int = 50_000
     # 0 default so programmatic construction (e.g. sharpe head resume) doesn't
-    # silently rerun a 10h warmup; main() overrides to 180k for return head.
+    # silently rerun a multi-hour warmup; main() overrides for the return head.
     cross_asset_warmup_steps: int = 0
     cross_asset_corr_window: int = 20
     cross_asset_warmup_batch_size: int = 8
@@ -936,6 +961,10 @@ class PortfolioTrainConfig:
     lambda_vol: float = 0.05
     fda_loss_weight: float = 0.6
     fda_mix_prob: float = 0.5
+    # Warm-up-specific synth mix; None falls back to fda_mix_prob. The corr
+    # warm-up task is asset-anonymous so synth is safe at a higher mix there
+    # than in head training, where synth return fidelity matters more.
+    warmup_fda_mix_prob: float | None = None
     enforce_regime_balance: bool = True
     regime_resample_attempts: int = 8
     regime_pool_size: int = 32  # pool size for HMM regime-balanced selection
@@ -1465,7 +1494,14 @@ class PortfolioTrainer:
                     return _extract_warmup_target(next(synth_iter))
                 except StopIteration:
                     synth_iter = iter(synthetic_loader)
-                    return _extract_warmup_target(next(synth_iter))
+                    try:
+                        return _extract_warmup_target(next(synth_iter))
+                    except StopIteration:
+                        raise RuntimeError(
+                            "synthetic loader yielded no batches after re-init; "
+                            "joint FDA shards were likely all skipped (layout "
+                            "mismatch vs --cross-asset-corr-window?)"
+                        ) from None
             try:
                 return _extract_warmup_target(next(data_iter))
             except StopIteration:
@@ -1473,9 +1509,11 @@ class PortfolioTrainer:
                 return _extract_warmup_target(next(data_iter))
 
         # Save the warm-up checkpoint periodically so a session drop mid-warm-up
-        # resumes instead of restarting the ~180k-step (~10 H100h) phase. Cap the
-        # cadence so very long warm-ups don't thrash Drive: at most ~20 saves.
-        warmup_save_every = max(cfg.save_every, cfg.cross_asset_warmup_steps // 20)
+        # resumes instead of restarting the multi-hour phase; cap the interval
+        # so a session never loses more than ~2k steps of progress.
+        warmup_save_every = max(
+            cfg.save_every, min(cfg.cross_asset_warmup_steps // 20, 2000)
+        )
         if resume_step > 0:
             print(
                 f"Resuming cross-asset warm-up at step {resume_step}/"
@@ -1486,14 +1524,34 @@ class PortfolioTrainer:
                 "Starting cross-asset warm-up: "
                 f"{cfg.cross_asset_warmup_steps} steps, corr_window={cfg.cross_asset_corr_window}"
             )
+        warmup_mix_prob = (
+            cfg.warmup_fda_mix_prob
+            if cfg.warmup_fda_mix_prob is not None
+            else cfg.fda_mix_prob
+        )
+        real_sector_ids: torch.Tensor | None = None
         for warmup_step in range(resume_step, cfg.cross_asset_warmup_steps):
             use_synth = (
                 synth_iter is not None
-                and torch.rand(1).item() < cfg.fda_mix_prob
+                and torch.rand(1).item() < warmup_mix_prob
             )
             source = "synth" if use_synth else "real"
             source_weight = cfg.fda_loss_weight if source == "synth" else 1.0
             features, future_returns = _pull_batch(source)
+            # Synth joint windows hold anonymous asset subsets — mask the
+            # sector prior (-1) instead of asserting real universe sectors.
+            if source == "synth":
+                step_sector_ids: torch.Tensor | None = torch.full(
+                    (features.shape[1],), -1, dtype=torch.long, device=self.device
+                )
+            else:
+                if real_sector_ids is None:
+                    real_sector_ids = self._resolve_asset_sector_ids(
+                        cfg.asset_sector_ids,
+                        n_assets=features.shape[1],
+                        device=self.device,
+                    )
+                step_sector_ids = real_sector_ids
 
             warmup_optimizer.zero_grad(set_to_none=True)
             with torch.autocast(
@@ -1502,7 +1560,9 @@ class PortfolioTrainer:
                 # Memory-optimised warm-up path: returns (B,N,D) time-mean
                 # directly via chunked activation checkpointing, avoiding the
                 # (B,T,N,D) fused-sequence retention that OOMs below 80 GB.
-                asset_mean = self._warmup_fused_mean(features, cfg)
+                asset_mean = self._warmup_fused_mean(
+                    features, cfg, sector_ids=step_sector_ids
+                )
                 asset_repr = F.normalize(asset_mean, dim=-1)  # (B, N, D)
                 pred_corr = torch.matmul(
                     asset_repr, asset_repr.transpose(1, 2)
@@ -1615,16 +1675,17 @@ class PortfolioTrainer:
             dim=-1,
         )  # (B, 3)
 
-        # Sector bias (constant across timesteps).
-        with torch.no_grad():
-            n_episodic = episodic.shape[1]
-            n_total = N + 1 + 1 + n_episodic
-            n_extras = n_total - N
-            extra_ids = torch.full(
-                (n_extras,), -1, dtype=torch.long, device=self.device
-            )
-            full_ids = torch.cat([sector_ids, extra_ids], dim=0)
-            precomputed_bias = self.fusion.sector_bias.bias_matrix(full_ids, n_total)
+        # Sector bias (constant across timesteps). Built with grad enabled so
+        # the learned affinity prior receives updates; under no_grad it would
+        # never leave its zero init.
+        n_episodic = episodic.shape[1]
+        n_total = N + 1 + 1 + n_episodic
+        n_extras = n_total - N
+        extra_ids = torch.full(
+            (n_extras,), -1, dtype=torch.long, device=self.device
+        )
+        full_ids = torch.cat([sector_ids, extra_ids], dim=0)
+        precomputed_bias = self.fusion.sector_bias.bias_matrix(full_ids, n_total)
 
         def _run_chunk(
             af_chunk: torch.Tensor,
@@ -1815,16 +1876,17 @@ class PortfolioTrainer:
             init_w = active_mask.to(prev_weight_padded.dtype) / float(active_mask.sum())
             prev_weight_padded[:, :N] = init_w.unsqueeze(0)
 
-        # Pre-compute sector bias (constant across all timesteps)
-        with torch.no_grad():
-            n_episodic = episodic.shape[1]
-            n_total = N + 1 + 1 + n_episodic  # assets + market + portfolio + episodic
-            n_extras = n_total - N
-            extra_ids = torch.full(
-                (n_extras,), -1, dtype=torch.long, device=self.device
-            )
-            full_ids = torch.cat([sector_ids, extra_ids], dim=0)
-            precomputed_bias = self.fusion.sector_bias.bias_matrix(full_ids, n_total)
+        # Pre-compute sector bias (constant across all timesteps). Built with
+        # grad enabled so the learned affinity prior receives updates; under
+        # no_grad it would never leave its zero init.
+        n_episodic = episodic.shape[1]
+        n_total = N + 1 + 1 + n_episodic  # assets + market + portfolio + episodic
+        n_extras = n_total - N
+        extra_ids = torch.full(
+            (n_extras,), -1, dtype=torch.long, device=self.device
+        )
+        full_ids = torch.cat([sector_ids, extra_ids], dim=0)
+        precomputed_bias = self.fusion.sector_bias.bias_matrix(full_ids, n_total)
 
         # Chunked T-loop with activation checkpointing. Each chunk rematerialises
         # its per-step backbone/SWA/fusion/head activations during backward; only
@@ -2033,6 +2095,7 @@ class PortfolioTrainer:
             m.eval()
         totals: dict[str, float] = {"total": 0.0, "dsr": 0.0}
         portfolio_ret_series: list[torch.Tensor] = []
+        sector_ids_t: torch.Tensor | None = None
         n = 0
         with (
             torch.no_grad(),
@@ -2045,7 +2108,15 @@ class PortfolioTrainer:
                     break
                 # DataLoader collates item shape (N, T, F) into (B, N, T, F).
                 returns = prepare_return_targets(shifted_returns).to(self.device)
-                weights, pred_vol, _ = self._forward(features, cfg.head, cfg)
+                if sector_ids_t is None:
+                    sector_ids_t = self._resolve_asset_sector_ids(
+                        cfg.asset_sector_ids,
+                        n_assets=features.shape[1],
+                        device=self.device,
+                    )
+                weights, pred_vol, _ = self._forward(
+                    features, cfg.head, cfg, sector_ids=sector_ids_t
+                )
                 weights, returns, pred_vol = self._trim_cold_start_steps(
                     weights,
                     returns,
@@ -2398,7 +2469,14 @@ class PortfolioTrainer:
                     return next(synth_iter)
                 except StopIteration:
                     synth_iter = iter(synthetic_loader)
-                    return next(synth_iter)
+                    try:
+                        return next(synth_iter)
+                    except StopIteration:
+                        raise RuntimeError(
+                            "synthetic loader yielded no batches after re-init; "
+                            "joint FDA shards were likely all skipped (layout "
+                            "mismatch vs --cross-asset-corr-window?)"
+                        ) from None
             try:
                 return next(data_iter)
             except StopIteration:
@@ -2509,10 +2587,21 @@ class PortfolioTrainer:
                 features = feats_cat.index_select(0, idx_t)
                 shifted_returns = shifts_cat.index_select(0, idx_t)
 
+            # Joint FDA windows are anonymous random asset subsets: real sector
+            # ids don't describe their rows. Full permutation is the symmetry-
+            # valid PTA there, and the sector prior is masked (-1) in _forward.
+            if source == "synth":
+                pta_sector_ids = None
+                forward_sector_ids = torch.full(
+                    (features.shape[1],), -1, dtype=torch.long, device=self.device
+                )
+            else:
+                pta_sector_ids = sector_ids_t
+                forward_sector_ids = sector_ids_t
             features, shifted_returns = expand_pta_training_batch(
                 features,
                 shifted_returns,
-                sector_ids=sector_ids_t,
+                sector_ids=pta_sector_ids,
                 cfg=cfg.pta_cfg,
             )
 
@@ -2555,7 +2644,11 @@ class PortfolioTrainer:
                     "cuda", dtype=torch.bfloat16, enabled=self.device.type == "cuda"
                 ):
                     weights, pred_vol, _ = self._forward(
-                        feats_g, cfg.head, cfg, active_mask=active_mask
+                        feats_g,
+                        cfg.head,
+                        cfg,
+                        sector_ids=forward_sector_ids,
+                        active_mask=active_mask,
                     )
                     loss_weights, loss_returns, loss_pred_vol = self._trim_cold_start_steps(
                         weights,
@@ -2856,7 +2949,7 @@ def main() -> None:
         type=int,
         default=-1,
         help="Cross-asset warm-up steps before head training "
-        "(default: 180000 for return, 0 for sharpe)",
+        "(default: 15000 for return, 0 for sharpe)",
     )
     parser.add_argument(
         "--cross-asset-corr-window",
@@ -2880,6 +2973,13 @@ def main() -> None:
     parser.add_argument("--lambda-vol", type=float, default=0.05)
     parser.add_argument("--fda-loss-weight", type=float, default=0.6)
     parser.add_argument("--fda-mix-prob", type=float, default=0.5)
+    parser.add_argument(
+        "--warmup-fda-mix-prob",
+        type=float,
+        default=None,
+        help="synth mix probability during cross-asset warm-up "
+        "(default: inherit --fda-mix-prob)",
+    )
     parser.add_argument(
         "--pta-prob",
         type=float,
@@ -3137,6 +3237,7 @@ def main() -> None:
                 lambda_vol=args.lambda_vol,
                 fda_loss_weight=args.fda_loss_weight,
                 fda_mix_prob=args.fda_mix_prob,
+                warmup_fda_mix_prob=args.warmup_fda_mix_prob,
                 enforce_regime_balance=False,
                 regime_resample_attempts=args.regime_resample_attempts,
                 regime_pool_size=args.regime_pool_size,
@@ -3302,6 +3403,7 @@ def main() -> None:
             lambda_vol=args.lambda_vol,
             fda_loss_weight=args.fda_loss_weight,
             fda_mix_prob=args.fda_mix_prob,
+            warmup_fda_mix_prob=args.warmup_fda_mix_prob,
             enforce_regime_balance=not args.disable_regime_balance,
             regime_resample_attempts=args.regime_resample_attempts,
             regime_pool_size=args.regime_pool_size,

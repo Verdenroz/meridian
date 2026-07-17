@@ -648,8 +648,8 @@ class FDADiffusionModel(nn.Module):
         self.register_buffer("feature_std", torch.ones(feature_dim))
         # 1.0 for channels with non-trivial raw std in the training set,
         # 0.0 for channels that were exactly constant zero across every
-        # real window (fundamental/options/text/unused-market dimensions
-        # not yet populated by the historical collector). `denormalize`
+        # real window (only a handful of fundamental/event dims today —
+        # text/options/market channels are collector-populated). `denormalize`
         # post-multiplies by this mask so synthetic shards match real on
         # dead channels exactly. Without it, the diffusion's tiny Gaussian
         # noise on dead channels is a near-perfect real-vs-synth
