@@ -116,7 +116,9 @@ class AssetAdversarialHead(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, lambda_: float = 1.0) -> torch.Tensor:
-        return self.net(grad_reverse(x, lambda_))
+        # Normalize so the encoder can't defeat the head by inflating feature
+        # norms (unbounded CE blow-up); it must remove identity *direction*.
+        return self.net(F.normalize(grad_reverse(x, lambda_), dim=-1))
 
 
 def infer_regime_label(feature_seq: np.ndarray) -> int:
