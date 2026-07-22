@@ -1944,10 +1944,10 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--window-len",
         type=int,
-        default=68,
-        help="Synth shard length. Defaults to 68 = TCP seq_len 64 + positive_offset 4 "
-             "so each synth shard contains a (W_t, W_{t+4}) pair for spec §11.3 "
-             "contrastive pretraining. Lower values silently drop synth from TCP.",
+        default=FDAConfig.window_len,
+        help="Synth shard length. Defaults to 128 = TCP seq_len 64 + positive_offset 64 "
+             "so each synth shard contains a full (W_t, W_{t+64}) contrastive pair. "
+             "Lower values silently drop synth from TCP.",
     )
     parser.add_argument("--stride", type=int, default=4)
     parser.add_argument("--epochs", type=int, default=200)

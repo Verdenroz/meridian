@@ -106,7 +106,7 @@ endif
 FDA_BATCH        ?= 64
 FDA_TARGET_VALID ?= 50000
 FDA_DEVICE       ?= cuda
-FDA_WINDOW       ?= 68
+FDA_WINDOW       ?= 128
 FDA_STRIDE       ?= 4
 FDA_EPOCHS	   ?= 200
 FDA_DIFFUSION    ?= 1000
