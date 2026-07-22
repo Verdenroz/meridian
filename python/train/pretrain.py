@@ -227,6 +227,14 @@ def main() -> None:
         "0 disables it and reproduces the legacy instance-only objective.",
     )
     parser.add_argument(
+        "--lambda-regime-ce",
+        type=float,
+        default=DEFAULT_SPEC.tcp_lambda_regime_ce,
+        help="Regime classification CE auxiliary weight. Forms the regime "
+        "geometry SupCon cannot (overlapping classes pin SupCon near its "
+        "uniform value); 0 disables.",
+    )
+    parser.add_argument(
         "--fda-loss-weight", type=float, default=DEFAULT_SPEC.pretrain_fda_loss_weight
     )
     parser.add_argument(
@@ -415,6 +423,7 @@ def main() -> None:
             contrastive_weight=args.lambda_contrastive,
             prediction_weight=args.lambda_prediction,
             supcon_weight=args.lambda_supcon,
+            regime_ce_weight=args.lambda_regime_ce,
             positive_pair_offset=args.positive_offset,
             fda_loss_weight=args.fda_loss_weight,
             multi_asset_corr_threshold=args.multi_asset_corr_threshold,
@@ -491,6 +500,7 @@ def _run_with_smoke_data(
         contrastive_weight=args.lambda_contrastive,
         prediction_weight=args.lambda_prediction,
         supcon_weight=args.lambda_supcon,
+        regime_ce_weight=args.lambda_regime_ce,
         positive_pair_offset=args.positive_offset,
         fda_loss_weight=args.fda_loss_weight,
         multi_asset_corr_threshold=args.multi_asset_corr_threshold,

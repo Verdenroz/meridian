@@ -121,6 +121,29 @@ class AssetAdversarialHead(nn.Module):
         return self.net(F.normalize(grad_reverse(x, lambda_), dim=-1))
 
 
+class RegimeClassificationHead(nn.Module):
+    """Predicts the market regime from the pooled embedding (CE auxiliary).
+
+    SupCon cannot form regime geometry here: with four heavily-overlapping
+    classes (~56% linearly decodable at init) its achievable gain over the
+    uniform value is ~0.04 nats, so silhouette never moves. Direct CE trains
+    reliably through the same path as the vol head and pulls within-regime
+    features together as training progresses.
+    """
+
+    def __init__(self, d_model: int, n_regimes: int = 4) -> None:
+        super().__init__()
+        hidden = max(64, d_model // 2)
+        self.net = nn.Sequential(
+            nn.Linear(d_model, hidden),
+            nn.SiLU(),
+            nn.Linear(hidden, n_regimes),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
 def infer_regime_label(feature_seq: np.ndarray) -> int:
     """Heuristic 4-state regime label for synthetic shards lacking HMM labels.
 
@@ -1377,6 +1400,7 @@ class TrainConfig:
     contrastive_weight: float = 0.6
     prediction_weight: float = 0.2
     supcon_weight: float = 0.2
+    regime_ce_weight: float = 0.2
     positive_pair_offset: int = 4
     fda_loss_weight: float = 0.5
     hard_negative_boost: float = 0.25
@@ -1446,6 +1470,11 @@ class SelfSupervisedPretrainer:
         ).to(self.device)
         self.n_assets = n_assets
 
+        # Backbone embeddings live in a tight cone (mean pairwise cos ~0.92 at
+        # init); SupCon applied to them directly sits at its uniform fixed point.
+        # A dedicated projector lets the loss minimize while shaping the encoder.
+        self.supcon_head = ProjectionHead(d_model=d_model).to(self.device)
+        self.regime_ce_head = RegimeClassificationHead(d_model=d_model).to(self.device)
         self._all_modules = nn.ModuleList(
             [
                 backbone,
@@ -1453,6 +1482,8 @@ class SelfSupervisedPretrainer:
                 regime_detector,
                 input_projection,
                 self.projection_head,
+                self.supcon_head,
+                self.regime_ce_head,
                 self.prediction_head,
                 self.adversarial_head,
             ]
@@ -1501,6 +1532,8 @@ class SelfSupervisedPretrainer:
             "regime_detector": self.regime_detector.state_dict(),
             "input_projection": self.input_projection.state_dict(),
             "projection_head": self.projection_head.state_dict(),
+            "supcon_head": self.supcon_head.state_dict(),
+            "regime_ce_head": self.regime_ce_head.state_dict(),
             "prediction_head": self.prediction_head.state_dict(),
             "adversarial_head": self.adversarial_head.state_dict(),
         }
@@ -1513,8 +1546,14 @@ class SelfSupervisedPretrainer:
         self.input_projection.load_state_dict(state["input_projection"])
         self.projection_head.load_state_dict(state["projection_head"])
         self.prediction_head.load_state_dict(state["prediction_head"])
-        # Adversarial head is new; older checkpoints don't have it. Init from
-        # scratch in that case rather than failing the load.
+        # supcon/adversarial heads are newer than some checkpoints; init fresh
+        # when absent rather than failing the load.
+        supcon_state = state.get("supcon_head")
+        if supcon_state is not None:
+            self.supcon_head.load_state_dict(supcon_state)
+        regime_ce_state = state.get("regime_ce_head")
+        if regime_ce_state is not None:
+            self.regime_ce_head.load_state_dict(regime_ce_state)
         adv_state = state.get("adversarial_head")
         if adv_state is not None:
             try:
@@ -1534,6 +1573,8 @@ class SelfSupervisedPretrainer:
         totals: dict[str, float] = {
             "contrastive": 0.0,
             "supcon": 0.0,
+            "regime_ce": 0.0,
+            "regime_ce_acc": 0.0,
             "prediction": 0.0,
             "adversarial": 0.0,
             "adversarial_acc": 0.0,
@@ -1577,6 +1618,7 @@ class SelfSupervisedPretrainer:
                         contrastive_weight=cfg.contrastive_weight,
                         prediction_weight=cfg.prediction_weight,
                         supcon_weight=cfg.supcon_weight,
+                        regime_ce_weight=cfg.regime_ce_weight,
                         hard_negative_boost=cfg.hard_negative_boost,
                         correlation_threshold=cfg.multi_asset_corr_threshold,
                         min_negative_gap=cfg.negative_min_separation,
@@ -1587,6 +1629,8 @@ class SelfSupervisedPretrainer:
                 for k in (
                     "contrastive",
                     "supcon",
+                    "regime_ce",
+                    "regime_ce_acc",
                     "prediction",
                     "adversarial",
                     "adversarial_acc",
@@ -1875,6 +1919,7 @@ class SelfSupervisedPretrainer:
         contrastive_weight: float = 0.7,
         prediction_weight: float = 0.3,
         supcon_weight: float = 0.0,
+        regime_ce_weight: float = 0.0,
         hard_negative_boost: float = 0.25,
         correlation_threshold: float = 0.6,
         min_negative_gap: int = 50,
@@ -1950,11 +1995,13 @@ class SelfSupervisedPretrainer:
             adv_acc = torch.zeros((), device=self.device, dtype=torch.float32)
 
         if supcon_weight > 0.0 and regime_ids is not None:
-            # SupCon shapes the backbone embeddings, not the projection head, so
-            # its regime-grouping gradient reaches the space the gate measures.
+            # Through a dedicated projector: directly on the backbone embedding
+            # the loss is pinned at its uniform fixed point by cone-collapsed
+            # geometry (all pairwise cos ~0.9) and never trains. The encoder
+            # still gets regime-organized through the projector's gradient.
             loss_supcon = regime_supervised_contrastive_loss(
-                view_a,
-                view_b,
+                self.supcon_head(view_a),
+                self.supcon_head(view_b),
                 regime_ids,
                 temperature=temperature,
                 sample_weights=sample_weights,
@@ -1962,15 +2009,38 @@ class SelfSupervisedPretrainer:
         else:
             loss_supcon = torch.zeros((), device=self.device, dtype=torch.float32)
 
+        if regime_ce_weight > 0.0 and regime_ids is not None:
+            regime_logits = self.regime_ce_head(
+                torch.cat([view_a, view_b], dim=0).to(torch.float32)
+            )
+            regime_targets = torch.cat([regime_ids, regime_ids], dim=0)
+            ce_per_sample = F.cross_entropy(
+                regime_logits, regime_targets, reduction="none"
+            )
+            if sample_weights is None:
+                loss_regime_ce = ce_per_sample.mean()
+            else:
+                w2 = torch.cat([sample_weights, sample_weights], dim=0)
+                loss_regime_ce = (ce_per_sample * w2).sum() / w2.sum().clamp_min(1e-8)
+            regime_ce_acc = (
+                (regime_logits.argmax(dim=-1) == regime_targets).float().mean().detach()
+            )
+        else:
+            loss_regime_ce = torch.zeros((), device=self.device, dtype=torch.float32)
+            regime_ce_acc = torch.zeros((), device=self.device, dtype=torch.float32)
+
         loss_total = (
             contrastive_weight * loss_contrastive
             + supcon_weight * loss_supcon
+            + regime_ce_weight * loss_regime_ce
             + prediction_weight * loss_prediction
             + loss_adversarial
         )
         out: dict[str, torch.Tensor] = {
             "contrastive": loss_contrastive,
             "supcon": loss_supcon,
+            "regime_ce": loss_regime_ce,
+            "regime_ce_acc": regime_ce_acc,
             "prediction": loss_prediction,
             "adversarial": loss_adversarial,
             "adversarial_acc": adv_acc,
@@ -2118,6 +2188,7 @@ class SelfSupervisedPretrainer:
                     contrastive_weight=cfg.contrastive_weight,
                     prediction_weight=cfg.prediction_weight,
                     supcon_weight=cfg.supcon_weight,
+                    regime_ce_weight=cfg.regime_ce_weight,
                     hard_negative_boost=cfg.hard_negative_boost,
                     correlation_threshold=cfg.multi_asset_corr_threshold,
                     min_negative_gap=cfg.negative_min_separation,
@@ -2137,6 +2208,8 @@ class SelfSupervisedPretrainer:
                     for k in (
                         "contrastive",
                         "supcon",
+                        "regime_ce",
+                        "regime_ce_acc",
                         "prediction",
                         "adversarial",
                         "adversarial_acc",

@@ -95,6 +95,9 @@ class MeridianSpec:
     tcp_temperature: float = 0.1
     tcp_lambda_contrastive: float = 0.6
     tcp_lambda_supcon: float = 0.2
+    # Direct regime-CE auxiliary: forms the regime geometry SupCon cannot
+    # (overlapping classes pin SupCon ~0.04 nats below its uniform value).
+    tcp_lambda_regime_ce: float = 0.2
     tcp_lambda_prediction: float = 0.2
     pretrain_fda_loss_weight: float = 0.5
     # Full window length: an overlapping positive (old value 4 → 94% shared rows)
@@ -155,6 +158,7 @@ class MeridianSpec:
         assert self.tcp_temperature == 0.1
         assert self.tcp_lambda_contrastive == 0.6
         assert self.tcp_lambda_supcon == 0.2
+        assert self.tcp_lambda_regime_ce == 0.2
         assert self.tcp_lambda_prediction == 0.2
         assert self.pretrain_fda_loss_weight == 0.5
         assert self.pretrain_positive_offset == 64
