@@ -97,7 +97,9 @@ class MeridianSpec:
     tcp_lambda_supcon: float = 0.2
     tcp_lambda_prediction: float = 0.2
     pretrain_fda_loss_weight: float = 0.5
-    pretrain_positive_offset: int = 4
+    # Full window length: an overlapping positive (old value 4 → 94% shared rows)
+    # makes TCP solvable by input similarity alone, so no representation learning.
+    pretrain_positive_offset: int = 64
     dropout: float = 0.1
 
     @property
@@ -155,7 +157,7 @@ class MeridianSpec:
         assert self.tcp_lambda_supcon == 0.2
         assert self.tcp_lambda_prediction == 0.2
         assert self.pretrain_fda_loss_weight == 0.5
-        assert self.pretrain_positive_offset == 4
+        assert self.pretrain_positive_offset == 64
 
 
 DEFAULT_SPEC = MeridianSpec()

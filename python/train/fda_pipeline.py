@@ -35,13 +35,12 @@ class FDAConfig:
     # denoiser, producing off-manifold samples that the statistical gate cannot
     # distinguish from valid ones.
     #
-    # window_len = 68 (= TCP seq_len 64 + positive_offset 4): the spec §11.3
-    # contrastive pretrainer needs each synth shard to contain a (W_t, W_{t+4})
-    # pair, otherwise IterableShardDataset._iter_shard drops the shard for
-    # `n_seqs <= 0`. Spec §8.2's nominal T=64 refers to the validation-gate
-    # window; the 4 trailing rows are extra coherent timeseries that let TCP
-    # form the offset positive pair within a single synth shard.
-    window_len: int = 68
+    # window_len = 128 (= TCP seq_len 64 + positive_offset 64): each synth shard
+    # must contain a full (W_t, W_{t+offset}) pair or the pretrain dataset drops
+    # it for `n_seqs <= 0`. The offset moved to 64 (non-overlapping positives)
+    # because overlapping pairs made TCP solvable by input similarity alone.
+    # Shards generated at the old 68-row length yield zero windows now.
+    window_len: int = 128
     feature_dim: int = 280
     diffusion_steps: int = 1000
     hidden_dim: int = 256

@@ -1002,6 +1002,19 @@ def build_split_loaders(
             "Run `python -m market_data.pipeline collect` first."
         )
 
+    # Shards shorter than one anchor+positive pair emit zero windows silently
+    # (e.g. FDA synth generated at the pre-offset-64 window_len of 68 rows).
+    min_rows = seq_len + abs(positive_offset)
+    row_bytes = 280 * 4
+    short = [p for p in train_shards if p.stat().st_size // row_bytes < min_rows]
+    if short:
+        print(
+            f"WARNING: {len(short)}/{len(train_shards)} train shards have "
+            f"< {min_rows} rows and will yield ZERO windows at "
+            f"positive_offset={positive_offset} (e.g. {short[0].name}). "
+            "Regenerate FDA synth with the current window_len or train real-only."
+        )
+
     # Globally-consistent asset IDs (required for correct multi-worker batching).
     all_stems = sorted({p.stem for p in train_shards + val_shards})
     symbol_to_id = {stem: idx for idx, stem in enumerate(all_stems)}
@@ -1527,6 +1540,8 @@ class SelfSupervisedPretrainer:
         }
         pred_values: list[torch.Tensor] = []
         target_values: list[torch.Tensor] = []
+        persistence_values: list[torch.Tensor] = []
+        ewma_values: list[torch.Tensor] = []
         n = 0
         with torch.no_grad():
             for batch_idx, batch in enumerate(val_loader):
@@ -1580,24 +1595,56 @@ class SelfSupervisedPretrainer:
                     totals[k] += v.item()
                 pred_values.append(losses["pred_logvol"].detach().cpu())
                 target_values.append(losses["target_logvol"].detach().cpu())
+                # Naive vol baselines from the anchor window's own returns: the
+                # backbone only demonstrates learning if it beats these (ΔR² > 0).
+                rets = features[:, :, RETURN_FEATURE_INDEX].to(torch.float64)
+                persistence_values.append(
+                    torch.log(rets[:, -PREDICTION_HORIZON:].std(dim=1) + _LOG_VOL_FLOOR)
+                    .to(torch.float32)
+                    .cpu()
+                )
+                lam = 0.94
+                w = lam ** torch.arange(
+                    rets.shape[1] - 1, -1, -1, dtype=torch.float64, device=rets.device
+                )
+                ewma_var = (rets.pow(2) * w).sum(dim=1) * (1.0 - lam) / (
+                    1.0 - lam ** rets.shape[1]
+                )
+                ewma_values.append(
+                    torch.log(ewma_var.sqrt() + _LOG_VOL_FLOOR).to(torch.float32).cpu()
+                )
                 n += 1
         self._all_modules.train()
         metrics = {k: v / max(n, 1) for k, v in totals.items()}
         if pred_values:
             pred = torch.cat(pred_values).to(torch.float32)
             target = torch.cat(target_values).to(torch.float32)
-            sse = torch.sum((pred - target) ** 2)
-            sst = torch.sum((target - target.mean()) ** 2)
-            metrics["prediction_r2"] = (1.0 - (sse / sst)).item() if sst > 0 else 0.0
+
+            def _r2(p: torch.Tensor) -> float:
+                sse = torch.sum((p - target) ** 2)
+                sst = torch.sum((target - target.mean()) ** 2)
+                return (1.0 - (sse / sst)).item() if sst > 0 else 0.0
+
+            metrics["prediction_r2"] = _r2(pred)
+            metrics["baseline_r2_persistence"] = _r2(torch.cat(persistence_values))
+            metrics["baseline_r2_ewma"] = _r2(torch.cat(ewma_values))
+            best_baseline = max(
+                metrics["baseline_r2_persistence"], metrics["baseline_r2_ewma"]
+            )
+            metrics["prediction_delta_r2"] = metrics["prediction_r2"] - best_baseline
             # Diagnostic: surface scale mismatches so catastrophic R² can be
             # traced to pred/target distribution rather than modelling failure.
             print(
                 f"  val logvol  mean={pred.mean().item():+.3e} std={pred.std().item():.3e}  "
                 f"target mean={target.mean().item():+.3e} std={target.std().item():.3e}  "
-                f"SSE={sse.item():.4f}  SST={sst.item():.4f}"
+                f"baseline_r2 persist={metrics['baseline_r2_persistence']:.4f} "
+                f"ewma={metrics['baseline_r2_ewma']:.4f}"
             )
         else:
             metrics["prediction_r2"] = 0.0
+            metrics["baseline_r2_persistence"] = 0.0
+            metrics["baseline_r2_ewma"] = 0.0
+            metrics["prediction_delta_r2"] = 0.0
 
         # Diagnostic gates — separate methods keep the hot eval loop lean.
         metrics["swa_entropy"] = self.eval_swa_entropy(
@@ -2140,17 +2187,21 @@ class SelfSupervisedPretrainer:
                         break
                 swa_ent = val_metrics.get("swa_entropy", float("nan"))
                 regime_sep = val_metrics.get("regime_separation", float("nan"))
-                acc_gate = "PASS" if val_contrastive_acc > 0.60 else "FAIL"
-                r2_gate = "PASS" if val_pred_r2 > 0.01 else "FAIL"
+                delta_r2 = val_metrics.get("prediction_delta_r2", 0.0)
+                # acc gate is meaningful only with non-overlapping positives
+                # (offset >= seq_len): random-init scores 0.00 there vs 1.00 on
+                # the old overlapping task. Threshold 0.10 vs ~0.03 chance.
+                acc_gate = "PASS" if val_contrastive_acc > 0.10 else "FAIL"
+                dr2_gate = "PASS" if delta_r2 > 0.0 else "FAIL"
                 swa_gate = "PASS" if swa_ent < 0.80 else "FAIL"
                 sep_gate = "PASS" if regime_sep > 0.10 else "FAIL"
                 print(
                     f"  val total={val_loss:.4f}  "
                     f"contrastive_acc={val_contrastive_acc:.4f}[{acc_gate}]  "
-                    f"pred_r2={val_pred_r2:.4f}[{r2_gate}]  "
+                    f"pred_r2={val_pred_r2:.4f}  "
+                    f"delta_r2_vs_baseline={delta_r2:+.4f}[{dr2_gate}]  "
                     f"swa_entropy={swa_ent:.3f}[{swa_gate}]  "
                     f"cluster_silhouette={regime_sep:.3f}[{sep_gate}]  "
-                    f"best_contrastive_acc={best_val_contrastive_acc:.4f}  "
                     f"best_loss={best_val_loss:.4f}  "
                     f"stale={stale_eval_count}"
                 )
