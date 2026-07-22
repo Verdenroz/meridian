@@ -742,6 +742,7 @@ def build_portfolio_loader(
     augment: bool = False,
     future_return_horizon: int = 0,
     pta_cfg: PTAAugmentationConfig | None = None,
+    drop_last: bool = False,
 ) -> DataLoader:
     ds = MultiAssetShardDataset(
         shard_paths,
@@ -752,9 +753,12 @@ def build_portfolio_loader(
         future_return_horizon=future_return_horizon,
         pta_cfg=pta_cfg,
     )
+    # Training loaders set drop_last: a runt batch changes the batch dim, which
+    # forces a torch.compile recompile that crashes under activation checkpointing.
     return DataLoader(
         ds,
         batch_size=batch_size,
+        drop_last=drop_last,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         persistent_workers=num_workers > 0,
@@ -909,6 +913,7 @@ def build_synthetic_portfolio_loader(
     num_workers: int = 0,
     pta_cfg: PTAAugmentationConfig | None = None,
     disk_horizon: int | None = None,
+    drop_last: bool = False,
 ) -> DataLoader:
     ds = SyntheticWindowPortfolioDataset(
         shard_paths=shard_paths,
@@ -932,6 +937,7 @@ def build_synthetic_portfolio_loader(
     return DataLoader(
         ds,
         batch_size=batch_size,
+        drop_last=drop_last,
         num_workers=num_workers,
         pin_memory=torch.cuda.is_available(),
         persistent_workers=num_workers > 0,
@@ -3207,7 +3213,7 @@ def main() -> None:
                 td / "validation" / f"ASSET{i:02d}.f32bin" for i in range(n_smoke)
             ]
             train_loader = build_portfolio_loader(
-                shard_paths, args.seq_len, args.batch_size, num_workers=0
+                shard_paths, args.seq_len, args.batch_size, num_workers=0, drop_last=True
             )
             cross_asset_warmup_train_loader = (
                 build_portfolio_loader(
@@ -3216,6 +3222,7 @@ def main() -> None:
                     args.cross_asset_warmup_batch_size,
                     num_workers=0,
                     future_return_horizon=args.cross_asset_corr_window,
+                    drop_last=True,
                 )
                 if cross_asset_warmup_steps > 0
                 else None
@@ -3325,6 +3332,7 @@ def main() -> None:
             num_workers=args.workers,
             stride=args.stride,
             augment=False,
+            drop_last=True,
         )
         synthetic_loader = (
             build_synthetic_portfolio_loader(
@@ -3338,6 +3346,7 @@ def main() -> None:
                 # needs the in-window slice, so read at the on-disk length but
                 # yield no lookahead.
                 disk_horizon=args.cross_asset_corr_window,
+                drop_last=True,
             )
             if synth_train_paths
             else None
@@ -3351,6 +3360,7 @@ def main() -> None:
                 stride=args.stride,
                 augment=False,
                 future_return_horizon=args.cross_asset_corr_window,
+                drop_last=True,
             )
             if cross_asset_warmup_steps > 0
             else None
@@ -3364,6 +3374,7 @@ def main() -> None:
                 augment=False,
                 future_return_horizon=args.cross_asset_corr_window,
                 num_workers=0,
+                drop_last=True,
             )
             if (
                 synthetic_loader is not None
