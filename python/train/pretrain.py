@@ -181,9 +181,14 @@ def _write_synthetic_shard(path: Path, n_rows: int, feature_dim: int = 280) -> N
             f.write(row_struct.pack(*row))
 
 
-def _make_smoke_shards(tmp_dir: Path, seq_len: int) -> tuple[Path, Path]:
+def _make_smoke_shards(
+    tmp_dir: Path, seq_len: int, positive_offset: int = 0
+) -> tuple[Path, Path]:
     """Create minimal synthetic shards (train + val) for smoke testing."""
-    n_rows = seq_len + 10  # enough rows for a few sequences
+    # A window needs seq_len + |offset| rows; without the offset term the shard
+    # yields zero windows at the default offset=64 and the loader StopIterations
+    # on the first step. +64 leaves room for several batches.
+    n_rows = seq_len + abs(positive_offset) + 64
     for split in ("train", "validation"):
         shard_path = tmp_dir / split / "SMOKE.f32bin"
         _write_synthetic_shard(shard_path, n_rows)
@@ -453,7 +458,7 @@ def _run_with_smoke_data(
     tmp_dir: Path,
 ) -> None:
     """Run smoke training inside a temporary directory."""
-    _make_smoke_shards(tmp_dir, args.seq_len)
+    _make_smoke_shards(tmp_dir, args.seq_len, args.positive_offset)
 
     from market_data.dataset_ingestion import enumerate_shards
 
