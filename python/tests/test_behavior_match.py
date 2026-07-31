@@ -4,6 +4,7 @@ and the pure window statistics the verdicts are computed from."""
 from __future__ import annotations
 
 from datetime import date
+from typing import Any
 
 import pytest
 from behavior_match import stats
@@ -29,12 +30,14 @@ def row(d: str, weights: dict[str, float], **meta: object) -> dict:
 
 
 def test_criteria_are_internally_consistent() -> None:
-    assert CRITERIA["window_start"] < CRITERIA["window_end"]
-    assert CRITERIA["window_end"] < CRITERIA["earliest_evaluation"]
-    assert CRITERIA["reference_end"] < CRITERIA["window_start"]
-    assert 0 < CRITERIA["weight_tol"] < CRITERIA["weight_tol_hard"]
-    assert 0 < CRITERIA["min_match_rate"] <= 1
-    assert CRITERIA["band_lo_pct"] < CRITERIA["band_hi_pct"]
+    # the frozen CRITERIA mapping is str-valued unions; cast for comparisons
+    c: dict[str, Any] = dict(CRITERIA)
+    assert c["window_start"] < c["window_end"]
+    assert c["window_end"] < c["earliest_evaluation"]
+    assert c["reference_end"] < c["window_start"]
+    assert 0 < c["weight_tol"] < c["weight_tol_hard"]
+    assert 0 < c["min_match_rate"] <= 1
+    assert c["band_lo_pct"] < c["band_hi_pct"]
 
 
 def test_guard_refuses_before_opening_date() -> None:

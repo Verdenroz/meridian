@@ -121,6 +121,11 @@ uv run python -m vol_race run
 # at a third of the null's drawdown. Re-run as OOS accrues; never retune)
 uv run python -m credit_race run
 
+# Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
+# Explanation only: analogs never touch allocation without a new pre-registered race
+uv run python -m episodic run                     # analogs for the latest close
+uv run python -m episodic run --date 2020-03-16   # any panel date
+
 # Daily shadow decisions (paper-trading record; runs post-close via CI cron).
 # data/shadow/decisions.jsonl is append-only, git-tracked, point-in-time — never
 # regenerate or hand-edit rows; retire+rename contenders instead of editing them
