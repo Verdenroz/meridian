@@ -112,6 +112,11 @@ uv run python -m eightk_race run
 # Vol-forecaster race (pre-registered; FAILED 2026-07-31 — VIX beats EWMA on forecast
 # correlation but loses the allocator race; forecast quality never gates shipping)
 uv run python -m vol_race run
+
+# Credit-spread race (pre-registered; nominal PASS 2026-07-31 but margins are noise —
+# held; BAA10Y is the first regime feature with OOS value: spine 4f 0.44 → 5f 0.50
+# at a third of the null's drawdown. Re-run as OOS accrues; never retune)
+uv run python -m credit_race run
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,
