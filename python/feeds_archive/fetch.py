@@ -7,7 +7,7 @@ import json
 import urllib.error
 import urllib.parse
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 USER_AGENT = "meridian-feeds-archive/1.0"
 HTTP_TIMEOUT = 30
@@ -53,7 +53,7 @@ def _item_row(kind: str, source: str, symbol: str | None, payload: dict) -> dict
     row_id = hashlib.sha256(f"{source}|{url}|{content_hash}".encode()).hexdigest()[:32]
     return {
         "id": row_id,
-        "fetched_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "fetched_at": datetime.now(UTC).isoformat(timespec="seconds"),
         "kind": kind,
         "source": source,
         "symbol": symbol,

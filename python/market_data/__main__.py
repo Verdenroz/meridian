@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from market_data import DEFAULT_FRED_SERIES, DEFAULT_SYMBOLS
@@ -25,7 +25,12 @@ from market_data.client import (
 from market_data.crosscheck import CrossCheckError, verify_adj_close
 from market_data.macro import TREASURY_FIRST_YEAR, normalize_fred, normalize_treasury
 from market_data.series import normalize_candles
-from market_data.store import DEFAULT_STORE_DIR, list_snapshots, read_snapshot, write_snapshot
+from market_data.store import (
+    DEFAULT_STORE_DIR,
+    list_snapshots,
+    read_snapshot,
+    write_snapshot,
+)
 
 
 def _fetch_symbol(base_url: str, store_dir: Path, symbol: str) -> dict:
@@ -50,7 +55,7 @@ def _fetch_macro(base_url: str, store_dir: Path, fred_ids: tuple[str, ...]) -> N
         rows = normalize_fred(fetch_fred_series(base_url, series_id))
         write_snapshot(store_dir, "macro", series_id, {"rows": rows})
         print(f"  macro {series_id}: {len(rows)} rows ({rows[0]['date']}..{rows[-1]['date']})")
-    this_year = datetime.now(timezone.utc).year
+    this_year = datetime.now(UTC).year
     yields: list[dict] = []
     for year in range(TREASURY_FIRST_YEAR, this_year + 1):
         yields.extend(fetch_treasury_yields(base_url, year))

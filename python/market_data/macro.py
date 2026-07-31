@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import datetime
-
 TREASURY_FIRST_YEAR = 1990
 
 
@@ -22,6 +20,7 @@ def normalize_treasury(rows: list[dict]) -> list[dict]:
         raw = row.get("date")
         if not raw:
             continue
-        date = datetime.strptime(raw, "%m/%d/%Y").strftime("%Y-%m-%d")
+        month, day, year = raw.split("/")
+        date = f"{year}-{month}-{day}"
         out.append({"date": date, **{k: v for k, v in row.items() if k != "date"}})
     return sorted(out, key=lambda r: r["date"])

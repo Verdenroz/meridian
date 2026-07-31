@@ -1,9 +1,9 @@
 """Invariant tests for the harness: engine math, guardrails, no-lookahead."""
 
+import itertools
 import math
 
 import pytest
-
 from harness.engine import GuardrailViolation, run_backtest
 from harness.metrics import compute_metrics, max_drawdown
 from harness.panel import Panel
@@ -149,7 +149,7 @@ class TestWalkForward:
         splits = walk_forward_splits(0, 1000, min_train_days=400, test_days=252)
         assert splits[0][1] == 400
         assert splits[-1][2] == 999
-        for (_, _, prev_end), (_, next_start, _) in zip(splits, splits[1:]):
+        for (_, _, prev_end), (_, next_start, _) in itertools.pairwise(splits):
             assert next_start == prev_end + 1
 
     def test_fit_end_precedes_test_start(self):

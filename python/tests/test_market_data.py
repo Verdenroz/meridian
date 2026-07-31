@@ -5,7 +5,6 @@ reconstruction, the loud-failure paths, and snapshot integrity.
 """
 
 import pytest
-
 from market_data.crosscheck import (
     CrossCheckError,
     dividends_by_date,

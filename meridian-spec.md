@@ -245,6 +245,9 @@ not decided here.
 - **Scoring:** an LLM reads filings/news items and emits structured risk assessments
   (severity, scope: asset vs market, direction of risk). Served via an OpenAI-compatible
   endpoint; local model on the appliance is the default, hosted models are config swaps.
+  Verified 2026-07-31: llama-swap at `http://127.0.0.1:12434/v1` serving `qwen3.6:35b-a3b`
+  (chat) plus embedding models. Client abstraction is **chimeric** (published
+  multi-provider library) so provider switching stays configuration, not code.
   Scores are versioned by (model, prompt) and stored beside — never inside — the raw archive.
 - **Integration:** scores enter the risk engine as features (per-asset risk elevation,
   market news-flow intensity), influencing positions only through §4's sizing math.

@@ -9,7 +9,7 @@ operation, never flattering.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from harness.engine import Strategy, run_backtest
 from harness.panel import Panel

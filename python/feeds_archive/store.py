@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 # Feeds roll over within hours; two weeks of look-back is far more than any
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS heartbeats (
 
 
 def _utc_today() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    return datetime.now(UTC).strftime("%Y-%m-%d")
 
 
 def _day_files(jsonl_dir: Path, limit_days: int | None = None) -> list[Path]:
@@ -67,7 +67,7 @@ def append_heartbeat(jsonl_dir: Path, new_items: int, stats: dict) -> None:
     hb_dir = jsonl_dir / "heartbeats"
     hb_dir.mkdir(parents=True, exist_ok=True)
     beat = {
-        "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "ts": datetime.now(UTC).isoformat(timespec="seconds"),
         "new_items": new_items,
         "stats": stats,
     }

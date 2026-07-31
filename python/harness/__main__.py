@@ -10,16 +10,16 @@ measured against these numbers in this same engine.
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
-from harness.engine import Strategy
+from market_data.store import DEFAULT_STORE_DIR
+
+from harness.engine import Strategy, run_backtest
 from harness.metrics import compute_metrics
 from harness.panel import Panel, build_panel
 from harness.strategies import BuyHold, VolTarget
-from harness.engine import run_backtest
 from harness.walkforward import run_walk_forward
-from market_data.store import DEFAULT_STORE_DIR
 
 _COLUMNS = ("cagr", "ann_vol", "sharpe", "max_drawdown", "worst_day")
 

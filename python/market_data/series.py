@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 def utc_date(ts: int) -> str:
     # US sessions open 13:30/14:30 UTC, so a daily bar's UTC calendar date
     # always equals its exchange-local trading date.
-    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%d")
+    return datetime.fromtimestamp(ts, UTC).strftime("%Y-%m-%d")
 
 
 def normalize_candles(candles: list[dict]) -> tuple[list[dict], dict]:

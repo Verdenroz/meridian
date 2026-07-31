@@ -59,26 +59,29 @@ module invocation — `PYTHONPATH=python python -m <package> ...` from the repo 
 
 ## Common commands
 
-```bash
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
+Python tooling is **uv** (`uv sync` creates `.venv` from `pyproject.toml`/`uv.lock`;
+dev tools live in the `dev` dependency group). The repo is dual-language: Python under
+`python/`, Rust under `src/` (the DataBus live poller, built with cargo).
 
-ruff check python                 # lint
-mypy python                       # types
-pytest python/tests               # tests (deliberately minimal — see below)
+```bash
+uv sync                           # create/update .venv (includes dev group)
+
+uv run ruff check python          # lint
+uv run mypy python                # types
+uv run pytest python/tests       # tests (deliberately minimal — see below)
 
 # News/feeds archive
-PYTHONPATH=python python -m feeds_archive fetch       # one-shot poll (what CI runs)
-PYTHONPATH=python python -m feeds_archive build-db    # compile JSONL → SQLite index
-PYTHONPATH=python python -m feeds_archive status      # archive freshness
+uv run python -m feeds_archive fetch      # one-shot poll (CI uses PYTHONPATH=python instead)
+uv run python -m feeds_archive build-db   # compile JSONL → SQLite index
+uv run python -m feeds_archive status     # archive freshness
 
 # Historical market/macro data (ETF core + VIX + treasury curve)
-PYTHONPATH=python python -m market_data fetch         # fetch, cross-check, store
-PYTHONPATH=python python -m market_data verify        # re-run adjClose cross-check
-PYTHONPATH=python python -m market_data status        # what's in data/market/
+uv run python -m market_data fetch        # fetch, cross-check, store
+uv run python -m market_data verify       # re-run adjClose cross-check
+uv run python -m market_data status       # what's in data/market/
 
 # Null baseline race (the bar everything must clear)
-PYTHONPATH=python python -m harness null              # full-sample + walk-forward OOS
+uv run python -m harness null             # full-sample + walk-forward OOS
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,
@@ -96,6 +99,16 @@ silently poison data.
   `archive/` is **git-tracked** — it is the permanent news record.
 - Survivorship bias exists in Yahoo-sourced stock history; every backtest reports it as a
   known limitation.
+
+## LLM access (for the event pipeline, §5 — gated on the event study)
+
+- Local-first: OpenAI-compatible endpoint at `http://127.0.0.1:12434/v1` (llama-swap on the
+  appliance; verified 2026-07-31: `qwen3.6:35b-a3b` chat + `harrier-oss:0.6b` /
+  `nomic-embed-text` embeddings). Never assume it's running — check `/v1/models` first.
+- Client abstraction: **chimeric** (Harvey's published multi-provider LLM library, on PyPI) —
+  local model is the default, hosted models are config swaps.
+- ML/NN components remain welcome as **challengers** through the walk-forward gate (§1.7);
+  the local eGPU is available for training/testing runs.
 
 ## Build order
 
