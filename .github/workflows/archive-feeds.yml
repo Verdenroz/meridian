@@ -1,0 +1,38 @@
+name: Archive news feeds
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: archive-feeds
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch and append new items
+        env:
+          PYTHONPATH: python
+        run: python3 -m feeds_archive fetch
+
+      - name: Commit and push
+        run: |
+          git config user.name "feeds-archive-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add archive/feeds
+          if git diff --cached --quiet; then
+            echo "no new items"
+            exit 0
+          fi
+          git commit -m "chore: archive feeds $(date -u +%Y-%m-%dT%H:%MZ)"
+          # Retry once on race with a concurrent push
+          git push || (git pull --rebase && git push)
