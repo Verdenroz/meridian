@@ -100,6 +100,10 @@ uv run python -m event_study run          # passed 2026-07-31, scoped to 8-Ks
 # LLM event pipeline (8-K scoring; local qwen via chimeric)
 uv run python -m event_pipeline score --limit 5   # score newest unscored 8-Ks
 uv run python -m event_pipeline status            # counts by scorer version
+
+# Score study (pre-registered gate; FAILED 2026-07-31 — severity ranks no vol uplift,
+# so scores are break-glass inputs only; don't retune the gate post hoc)
+uv run python -m score_study run
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,
