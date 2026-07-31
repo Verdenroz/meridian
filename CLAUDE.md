@@ -127,6 +127,11 @@ uv run python -m credit_race run
 uv run python -m shadow run               # fetch latest, log today's decisions
 uv run python -m shadow status            # log summary
 
+# Monthly re-race of the held gates (CI cron, 1st of month; verdicts append to
+# git-tracked data/races/reraces.jsonl — one row per (month, race), idempotent)
+uv run python -m rerace run               # fetch, re-run eightk_race + credit_race, log
+uv run python -m rerace status            # verdict history
+
 # Behavior-match gate (pre-registered 2026-07-31, frozen — never edit criteria.py;
 # the evaluator refuses to run before 2026-11-02, and PASS satisfies §1.3(b) only,
 # it is not a performance gate)

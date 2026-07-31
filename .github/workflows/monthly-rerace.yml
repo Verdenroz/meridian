@@ -1,0 +1,45 @@
+name: Monthly re-race of held gates
+
+on:
+  schedule:
+    # 1st of the month, 22:15 UTC — after US close when the 1st is a weekday;
+    # otherwise the panel simply ends at the last trading day
+    - cron: "15 22 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: monthly-rerace
+  cancel-in-progress: false
+
+jobs:
+  rerace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install environment
+        run: uv sync --frozen
+
+      - name: Fetch data and re-run held races
+        env:
+          PYTHONPATH: python
+        run: uv run python -m rerace run | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Commit and push
+        run: |
+          git config user.name "rerace-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/races
+          if git diff --cached --quiet; then
+            echo "no new verdicts (already logged this month)"
+            exit 0
+          fi
+          git commit -m "chore: monthly re-race verdicts $(date -u +%Y-%m)"
+          # Retry once on race with a concurrent push
+          git push || (git pull --rebase && git push)
