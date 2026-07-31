@@ -104,6 +104,10 @@ uv run python -m event_pipeline status            # counts by scorer version
 # Score study (pre-registered gate; FAILED 2026-07-31 — severity ranks no vol uplift,
 # so scores are break-glass inputs only; don't retune the gate post hoc)
 uv run python -m score_study run
+
+# Occurrence-flag race (pre-registered; PASSED 2026-07-31 but fragile — held, not
+# shipped; re-run as OOS accrues, never retune the frozen parameters)
+uv run python -m eightk_race run
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,
