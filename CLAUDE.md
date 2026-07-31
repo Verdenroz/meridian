@@ -96,6 +96,10 @@ uv run python -m spine vol-eval           # EWMA forecast quality vs 0.67 bar
 
 # Event study (§5 gate; criteria are pre-registered — don't retune post hoc)
 uv run python -m event_study run          # passed 2026-07-31, scoped to 8-Ks
+
+# LLM event pipeline (8-K scoring; local qwen via chimeric)
+uv run python -m event_pipeline score --limit 5   # score newest unscored 8-Ks
+uv run python -m event_pipeline status            # counts by scorer version
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,

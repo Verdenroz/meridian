@@ -9,6 +9,7 @@ description = "Regime-adaptive risk engine: classical spine, walk-forward gated,
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+  "chimeric>=0.3.0",
   "numpy>=2.0",
 ]
 
