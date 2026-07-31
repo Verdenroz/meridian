@@ -320,8 +320,8 @@ this table.
 1. **Archive live** — push the feeds archiver + workflow so collection starts. *(implemented, live in CI)*
 2. **Data layer** — historical loaders (upstream `adjClose` + dividends/splits cross-check), macro panel, point-in-time store. *(implemented: `python/market_data/`; ETF core verified at ≤2e-6 divergence)*
 3. **Null baseline + harness** — SPY + vol-target in the walk-forward engine with costs. Nothing else is evaluated until this exists. *(implemented: `python/harness/`; OOS 1998–2026 after costs — buy-hold 9.3% CAGR/0.44 Sharpe, vol-target 8.2%/0.49)*
-4. **Classical spine** — vol models, shrunk correlations, regime detector; allocator v0 (ETF core only).
-5. **Backtest vs null** — first honest race. Stock sleeve added only after the ETF core wins.
+4. **Classical spine** — vol models, shrunk correlations, regime detector; allocator v0 (ETF core only). *(implemented: `python/spine/` — EWMA incumbent verifies the 0.67 probing bar (0.666 measured), Ledoit–Wolf shrinkage, 2-state Gaussian HMM filtered causally, allocator v0)*
+5. **Backtest vs null** — first honest race. Stock sleeve added only after the ETF core wins. *(first race run 2026-07-31: spine v0 OOS Sharpe 0.47 vs nulls 0.44/0.49 — not shipping; far better tail profile (15% maxdd vs 42/55%) but chronically under-invested. Next: allocator mapping selected on train windows only, regime sensitivity tuned per §4.3)*
 6. **Event study** — do filings/news precede realized-vol elevation? Gates all text work.
 7. **LLM event pipeline** — only if §6 passes; scores as risk-engine features + break-glass severity.
 8. **Episodic memory** — analog retrieval + briefing explanations.

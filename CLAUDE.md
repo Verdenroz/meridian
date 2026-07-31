@@ -82,6 +82,10 @@ uv run python -m market_data status       # what's in data/market/
 
 # Null baseline race (the bar everything must clear)
 uv run python -m harness null             # full-sample + walk-forward OOS
+
+# Classical spine
+uv run python -m spine race               # walk-forward race: spine vs nulls
+uv run python -m spine vol-eval           # EWMA forecast quality vs 0.67 bar
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,

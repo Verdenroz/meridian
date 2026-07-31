@@ -14,7 +14,9 @@ from market_data.store import DEFAULT_STORE_DIR
 # The stock sleeve is added only after the ETF core beats the null baseline.
 DEFAULT_SYMBOLS = ("SPY", "TLT", "GLD", "BIL", "SH")
 
-DEFAULT_FRED_SERIES = ("VIXCLS",)
+# VIXCLS: implied vol; T10Y3M: 10Y-3M curve spread (treasury endpoint lacks
+# y10 before 2001, so the spread comes straight from FRED).
+DEFAULT_FRED_SERIES = ("VIXCLS", "T10Y3M")
 
 __all__ = [
     "DEFAULT_BASE_URL",
