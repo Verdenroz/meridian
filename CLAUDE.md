@@ -11,6 +11,9 @@ defense in stress. It does **not** forecast returns (measured IC ≈ 0; this is 
 decision, not an open question). Decisions are daily, with a rare event-driven intraday
 break-glass path. The bar it must clear: **beat SPY + a simple vol-target rule, after costs,
 out-of-sample** — that null baseline is implemented in the same harness and raced honestly.
+Bar amended 2026-07-31 (§1.3): outright Sharpe win, or Sharpe non-inferiority (−0.05) with
+max drawdown ≤⅔ of the null's and a matched-vol placebo control — prospective only; held
+candidates pass on post-amendment evidence, never on the backtest that motivated the change.
 
 `meridian-spec.md` is the canonical spec; its **Charter (§1) is authoritative** over
 everything, including this file. Read it before design work. Do not cite spec section
