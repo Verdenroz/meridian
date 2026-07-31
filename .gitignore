@@ -9,7 +9,9 @@ build/
 dist/
 *.egg-info/
 *.pyc
-data/
+data/*
+# LLM enrichment scores are versioned, not derived — 5+ GPU-hours to regenerate
+!data/scores/
 checkpoints/
 logs/
 reports/
