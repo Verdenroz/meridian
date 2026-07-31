@@ -117,6 +117,12 @@ uv run python -m vol_race run
 # held; BAA10Y is the first regime feature with OOS value: spine 4f 0.44 → 5f 0.50
 # at a third of the null's drawdown. Re-run as OOS accrues; never retune)
 uv run python -m credit_race run
+
+# Daily shadow decisions (paper-trading record; runs post-close via CI cron).
+# data/shadow/decisions.jsonl is append-only, git-tracked, point-in-time — never
+# regenerate or hand-edit rows; retire+rename contenders instead of editing them
+uv run python -m shadow run               # fetch latest, log today's decisions
+uv run python -m shadow status            # log summary
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,

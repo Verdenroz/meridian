@@ -12,6 +12,8 @@ dist/
 data/*
 # LLM enrichment scores are versioned, not derived — 5+ GPU-hours to regenerate
 !data/scores/
+# Shadow decisions are point-in-time evidence — not rebuildable, ever
+!data/shadow/
 checkpoints/
 logs/
 reports/

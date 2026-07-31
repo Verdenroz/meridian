@@ -1,0 +1,44 @@
+name: Daily shadow decisions
+
+on:
+  schedule:
+    # 21:30 UTC — after US close (17:30 ET summer, 16:30 winter)
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: shadow-decisions
+  cancel-in-progress: false
+
+jobs:
+  decide:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Install environment
+        run: uv sync --frozen
+
+      - name: Fetch data and log decisions
+        env:
+          PYTHONPATH: python
+        run: uv run python -m shadow run
+
+      - name: Commit and push
+        run: |
+          git config user.name "shadow-decisions-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add data/shadow
+          if git diff --cached --quiet; then
+            echo "no new decisions (holiday or already logged)"
+            exit 0
+          fi
+          git commit -m "chore: shadow decisions $(date -u +%Y-%m-%d)"
+          # Retry once on race with a concurrent push
+          git push || (git pull --rebase && git push)
