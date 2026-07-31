@@ -225,6 +225,15 @@ def main() -> None:
         "--lambda-prediction", type=float, default=DEFAULT_SPEC.tcp_lambda_prediction
     )
     parser.add_argument(
+        "--block-dropout-prob",
+        type=float,
+        default=0.0,
+        help="Per-sample dropout probability for the smooth-context feature "
+        "blocks (market / risk_analytics / fundamental) during training. These "
+        "let the contrastive task be solved from calendar position alone; "
+        "masking them forces the encoder onto price and text structure.",
+    )
+    parser.add_argument(
         "--lambda-supcon",
         type=float,
         default=DEFAULT_SPEC.tcp_lambda_supcon,
@@ -428,6 +437,7 @@ def main() -> None:
             contrastive_weight=args.lambda_contrastive,
             prediction_weight=args.lambda_prediction,
             supcon_weight=args.lambda_supcon,
+            block_dropout_prob=args.block_dropout_prob,
             regime_ce_weight=args.lambda_regime_ce,
             positive_pair_offset=args.positive_offset,
             fda_loss_weight=args.fda_loss_weight,
@@ -505,6 +515,7 @@ def _run_with_smoke_data(
         contrastive_weight=args.lambda_contrastive,
         prediction_weight=args.lambda_prediction,
         supcon_weight=args.lambda_supcon,
+        block_dropout_prob=args.block_dropout_prob,
         regime_ce_weight=args.lambda_regime_ce,
         positive_pair_offset=args.positive_offset,
         fda_loss_weight=args.fda_loss_weight,

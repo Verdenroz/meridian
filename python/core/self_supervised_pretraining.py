@@ -1402,6 +1402,59 @@ def _vol_score(pred: torch.Tensor, target: torch.Tensor) -> dict[str, float]:
     return {"r2": r2, "corr": corr, "bias": (pred.mean() - target.mean()).item()}
 
 
+def effective_dim(z: torch.Tensor) -> float:
+    """Participation ratio of the embedding covariance spectrum: (Σλ)²/Σλ².
+
+    Measures how many of d_model directions the representation actually uses.
+    768 = isotropic, 1 = rank-one. Every other pretrain gate (contrastive acc,
+    silhouette, swa entropy) reads healthy on a collapsed representation —
+    4 regime clusters are trivially separable in 5 dimensions — so dimensional
+    collapse is invisible without this. Needs n_samples > d_model to be
+    unbiased; below that the value is capped by n_samples - 1.
+    """
+    Z = z.to(torch.float64)
+    Z = Z - Z.mean(dim=0, keepdim=True)
+    n = Z.shape[0]
+    if n < 3:
+        return float("nan")
+    cov = (Z.T @ Z) / (n - 1)
+    ev = torch.linalg.eigvalsh(cov).clamp_min(0.0)
+    denom = (ev**2).sum()
+    return float((ev.sum() ** 2 / denom).item()) if denom > 0 else float("nan")
+
+
+# Blocks that let the contrastive task be solved by calendar position rather
+# than asset dynamics: they drift smoothly, so "adjacent vs far in time" is
+# readable straight off them. Measured reliance (masking each at eval):
+# market -0.52, risk_analytics -0.41, fundamental -0.33 contrastive acc, while
+# masking all 52 price_volume+technical dims costs only -0.03.
+_SHORTCUT_BLOCK_SPANS: tuple[tuple[int, int], ...] = (
+    (94, 102),   # risk_analytics
+    (64, 94),    # fundamental
+    (184, 280),  # market-wide
+)
+
+
+def apply_block_dropout(
+    x: torch.Tensor, prob: float, spans: tuple[tuple[int, int], ...] = _SHORTCUT_BLOCK_SPANS
+) -> torch.Tensor:
+    """Zero whole smooth-context blocks per-sample so they can't be relied on.
+
+    Applied independently per view, so the shortcut is only available when both
+    views keep the block — at prob=0.5 that is 25% of pairs, enough gradient
+    pressure to force the model onto price/text structure instead.
+    """
+    if prob <= 0.0:
+        return x
+    out = x.clone()
+    b = out.shape[0]
+    for start, end in spans:
+        drop = torch.rand(b, device=out.device) < prob
+        if bool(drop.any()):
+            out[drop, :, start:end] = 0.0
+    return out
+
+
 def _naive_vol_baselines(features: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """Persistence and EWMA log-vol baselines from the anchor window's own returns.
 
@@ -1445,6 +1498,10 @@ class TrainConfig:
     prediction_weight: float = 0.2
     supcon_weight: float = 0.2
     regime_ce_weight: float = 0.2
+    # Per-sample dropout of the smooth-context blocks (market / risk_analytics /
+    # fundamental) during training, to stop the contrastive task being solvable
+    # from calendar position alone.
+    block_dropout_prob: float = 0.0
     positive_pair_offset: int = 4
     fda_loss_weight: float = 0.5
     hard_negative_boost: float = 0.25
@@ -1744,8 +1801,10 @@ class SelfSupervisedPretrainer:
         # when available — val (calendar 2023) has 0% hi-vol/crisis and cannot
         # show 4 clusters regardless of model quality.
         sep_loader = diagnostic_loader if diagnostic_loader is not None else val_loader
-        metrics["regime_separation"] = self.eval_regime_separation(
-            sep_loader, max_batches=min(max_eval_batches, 20)
+        metrics.update(
+            self.eval_regime_separation(
+                sep_loader, max_batches=min(max_eval_batches, 20)
+            )
         )
         if diagnostic_loader is not None:
             metrics.update(
@@ -1845,15 +1904,18 @@ class SelfSupervisedPretrainer:
         self,
         val_loader: DataLoader,
         max_batches: int = 20,
-    ) -> float:
-        """Silhouette of backbone embeddings against true regime labels (gate: > 0.10).
+    ) -> dict[str, float]:
+        """Regime silhouette (gate: > 0.10) and embedding effective dim, one pass.
 
-        Scores separation of the actual regimes, not generic k-means clusterability.
+        Silhouette scores separation of the actual regimes, not generic k-means
+        clusterability. Effective dim shares the pass because both need the same
+        embeddings and the forward is the expensive part.
         """
         from sklearn.metrics import silhouette_score
 
         self._all_modules.eval()
         all_embs: list[torch.Tensor] = []
+        all_raw: list[torch.Tensor] = []
         all_labels: list[torch.Tensor] = []
         with torch.no_grad():
             for batch_idx, batch in enumerate(val_loader):
@@ -1862,20 +1924,23 @@ class SelfSupervisedPretrainer:
                 unpacked = self._unpack_batch(batch)
                 features = unpacked[0].to(self.device)
                 regime_ids = unpacked[4]
-                emb = self._encode_sequence(features)  # (B, D)
+                encoded = self._encode_sequence(features)  # (B, D)
+                emb = encoded if isinstance(encoded, torch.Tensor) else encoded[0]
+                all_raw.append(emb.float().cpu())
                 all_embs.append(F.normalize(emb.float(), dim=-1).cpu())
                 all_labels.append(regime_ids.cpu())
         self._all_modules.train()
 
         if not all_embs:
-            return float("nan")
+            return {"regime_separation": float("nan"), "effective_dim": float("nan")}
+        eff_dim = effective_dim(torch.cat(all_raw, dim=0))
 
         embs_np = torch.cat(all_embs, dim=0).numpy()  # (N, D)
         labels_np = torch.cat(all_labels, dim=0).numpy()  # (N,)
         # silhouette needs ≥2 regimes present and ≥1 extra sample beyond label count.
         if len(embs_np) < 8 or len(np.unique(labels_np)) < 2:
-            return float("nan")
-        return float(
+            return {"regime_separation": float("nan"), "effective_dim": eff_dim}
+        sil = float(
             silhouette_score(
                 embs_np,
                 labels_np,
@@ -1884,6 +1949,7 @@ class SelfSupervisedPretrainer:
                 random_state=0,
             )
         )
+        return {"regime_separation": sil, "effective_dim": eff_dim}
 
     def eval_tsne_plot(
         self,
@@ -2285,6 +2351,11 @@ class SelfSupervisedPretrainer:
                 adv_lambda_now = cfg.adversarial_lambda
 
             optimizer.zero_grad(set_to_none=True)
+            # Train-time only: eval must see intact features or the gates move
+            # for reasons unrelated to what the encoder learned.
+            if cfg.block_dropout_prob > 0.0:
+                features = apply_block_dropout(features, cfg.block_dropout_prob)
+                positives = apply_block_dropout(positives, cfg.block_dropout_prob)
             with torch.autocast(
                 device_type=self.device.type,
                 dtype=torch.bfloat16,
@@ -2402,6 +2473,10 @@ class SelfSupervisedPretrainer:
                 # Silhouette is measured on the train-shard diagnostic loader:
                 # in-sample, and directly optimized by the regime-CE term.
                 sep_gate = "PASS" if regime_sep > 0.10 else "FAIL"
+                # Dimensional collapse: a 768-dim encoder using ~5 directions
+                # passes every other gate here. 32 is a floor, not a target.
+                eff_dim = val_metrics.get("effective_dim", float("nan"))
+                dim_gate = "PASS" if eff_dim > 32.0 else "FAIL"
                 print(
                     f"  val total={val_loss:.4f}  "
                     f"contrastive_acc={val_contrastive_acc:.4f}[{acc_gate}]  "
@@ -2411,6 +2486,7 @@ class SelfSupervisedPretrainer:
                     f"delta_r2={delta_r2:+.4f}  "
                     f"swa_entropy={swa_ent:.3f}[{swa_gate}]  "
                     f"silhouette[in-sample]={regime_sep:.3f}[{sep_gate}]  "
+                    f"eff_dim={eff_dim:.1f}[{dim_gate}]  "
                     f"best_loss={best_val_loss:.4f}  "
                     f"stale={stale_eval_count}"
                 )
