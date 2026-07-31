@@ -108,6 +108,10 @@ uv run python -m score_study run
 # Occurrence-flag race (pre-registered; PASSED 2026-07-31 but fragile — held, not
 # shipped; re-run as OOS accrues, never retune the frozen parameters)
 uv run python -m eightk_race run
+
+# Vol-forecaster race (pre-registered; FAILED 2026-07-31 — VIX beats EWMA on forecast
+# correlation but loses the allocator race; forecast quality never gates shipping)
+uv run python -m vol_race run
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,
