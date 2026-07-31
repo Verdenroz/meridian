@@ -93,6 +93,9 @@ uv run python -m harness null             # full-sample + walk-forward OOS
 # Classical spine
 uv run python -m spine race               # walk-forward race: spine vs nulls
 uv run python -m spine vol-eval           # EWMA forecast quality vs 0.67 bar
+
+# Event study (§5 gate; criteria are pre-registered — don't retune post hoc)
+uv run python -m event_study run          # passed 2026-07-31, scoped to 8-Ks
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,

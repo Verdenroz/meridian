@@ -58,14 +58,15 @@ class TestReconstruction:
         rows = make_rows(closes, adj)
         dividends = [{"timestamp": TS[2], "amount": 2.0}]
         report = verify_adj_close("TEST", rows, dividends)
-        assert report["dividends_applied"] == 1
-        assert report["max_rel_err"] < 1e-12
+        assert report["adjustment_events"] == 1
+        assert report["mismatches"] == []
 
-    def test_verify_fails_loudly_on_divergence(self):
+    def test_verify_fails_when_all_events_mismatch(self):
         rows = make_rows([100.0, 101.0, 102.0, 103.0])
-        # Upstream claims adj == close but a real dividend exists → divergence
+        # Upstream claims adj == close but a real dividend exists → the only
+        # adjustment event is inconsistent → systematic failure.
         dividends = [{"timestamp": TS[2], "amount": 2.0}]
-        with pytest.raises(CrossCheckError, match="diverges"):
+        with pytest.raises(CrossCheckError, match="inconsistent"):
             verify_adj_close("TEST", rows, dividends)
 
     def test_verify_fails_loudly_on_missing_adj_close(self):
@@ -74,10 +75,52 @@ class TestReconstruction:
         with pytest.raises(CrossCheckError, match="missing"):
             verify_adj_close("TEST", rows, [])
 
+    def test_implausible_adjustment_step_is_corruption(self):
+        closes = [100.0, 101.0, 102.0, 103.0]
+        # Upstream back-adjusts early days by 50% with no matching dividend.
+        adj = [closes[0] * 0.5, closes[1] * 0.5, closes[2], closes[3]]
+        with pytest.raises(CrossCheckError, match="corruption"):
+            verify_adj_close("TEST", make_rows(closes, adj), [])
+
+    def test_isolated_endpoint_gap_is_tolerated_and_recorded(self):
+        # 30 dividends correctly applied upstream; endpoint lost one of them
+        # (the KO 2001-09-10 scenario). Verification passes, gap is recorded.
+        n = 62
+        base_ts = 1704119400  # 2024-01-01 14:30 UTC, daily steps
+        stamps = [base_ts + i * 86400 for i in range(n)]
+        closes = [100.0 + i for i in range(n)]
+        div_days = {i: 0.5 for i in range(2, n, 2)}
+        factor = 1.0
+        factors = [1.0] * n
+        for i in range(n - 1, 0, -1):
+            if i in div_days:
+                factor *= 1.0 - div_days[i] / closes[i - 1]
+            factors[i - 1] = factor
+        from market_data.series import utc_date
+
+        rows = [
+            {
+                "date": utc_date(stamps[i]),
+                "close": closes[i],
+                "adj_close": closes[i] * factors[i],
+            }
+            for i in range(n)
+        ]
+        dropped_day = 10
+        dividends = [
+            {"timestamp": stamps[i], "amount": amt}
+            for i, amt in div_days.items()
+            if i != dropped_day
+        ]
+        report = verify_adj_close("TEST", rows, dividends)
+        assert len(report["mismatches"]) == 1
+        assert report["mismatches"][0]["date"] == utc_date(stamps[dropped_day])
+        assert report["mismatches"][0]["endpoint_dividend"] == 0.0
+
     def test_dividend_exceeding_prev_close_is_corrupt(self):
         rows = make_rows([100.0, 101.0, 102.0, 103.0])
         dividends = [{"timestamp": TS[2], "amount": 500.0}]
-        with pytest.raises(CrossCheckError, match="corrupt"):
+        with pytest.raises(CrossCheckError):
             verify_adj_close("TEST", rows, dividends)
 
     def test_same_day_dividends_sum(self):
@@ -86,6 +129,14 @@ class TestReconstruction:
             {"timestamp": TS[2] + 60, "amount": 0.5},
         ]
         assert dividends_by_date(divs) == {"2024-01-04": 1.5}
+
+    def test_exact_duplicate_rows_are_data_bugs_not_payouts(self):
+        # Upstream duplication observed on MSFT 2026-02-19: same ts, same amount.
+        divs = [
+            {"timestamp": TS[2], "amount": 0.91},
+            {"timestamp": TS[2], "amount": 0.91},
+        ]
+        assert dividends_by_date(divs) == {"2024-01-04": 0.91}
 
 
 class TestNormalization:

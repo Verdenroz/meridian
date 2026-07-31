@@ -16,38 +16,18 @@ from pathlib import Path
 from market_data import DEFAULT_FRED_SERIES, DEFAULT_SYMBOLS
 from market_data.client import (
     DEFAULT_BASE_URL,
-    fetch_chart,
-    fetch_dividends,
     fetch_fred_series,
-    fetch_splits,
     fetch_treasury_yields,
 )
 from market_data.crosscheck import CrossCheckError, verify_adj_close
 from market_data.macro import TREASURY_FIRST_YEAR, normalize_fred, normalize_treasury
-from market_data.series import normalize_candles
+from market_data.pipeline import fetch_symbol as _fetch_symbol
 from market_data.store import (
     DEFAULT_STORE_DIR,
     list_snapshots,
     read_snapshot,
     write_snapshot,
 )
-
-
-def _fetch_symbol(base_url: str, store_dir: Path, symbol: str) -> dict:
-    chart = fetch_chart(base_url, symbol)
-    rows, issues = normalize_candles(chart["candles"])
-    dividends = fetch_dividends(base_url, symbol)
-    splits = fetch_splits(base_url, symbol)
-    report = verify_adj_close(symbol, rows, dividends)
-    write_snapshot(
-        store_dir,
-        "charts",
-        symbol,
-        {"rows": rows, "issues": issues, "crosscheck": report, "meta": chart.get("meta")},
-    )
-    write_snapshot(store_dir, "dividends", symbol, {"dividends": dividends})
-    write_snapshot(store_dir, "splits", symbol, {"splits": splits})
-    return report
 
 
 def _fetch_macro(base_url: str, store_dir: Path, fred_ids: tuple[str, ...]) -> None:
@@ -71,8 +51,8 @@ def cmd_fetch(args: argparse.Namespace) -> int:
             report = _fetch_symbol(args.base_url, args.store_dir, symbol)
             print(
                 f"  {symbol}: {report['rows']} rows, "
-                f"{report['dividends_applied']} dividends, "
-                f"max cross-check err {report['max_rel_err']:.2e}"
+                f"{report['adjustment_events']} adjustment events, "
+                f"{len(report['mismatches'])} tolerated mismatches"
             )
         except CrossCheckError as exc:
             failures += 1
@@ -95,7 +75,10 @@ def cmd_verify(args: argparse.Namespace) -> int:
             report = verify_adj_close(
                 symbol, chart["data"]["rows"], divs["data"]["dividends"]
             )
-            print(f"  {symbol}: ok (max rel err {report['max_rel_err']:.2e})")
+            print(
+                f"  {symbol}: ok ({report['adjustment_events']} events, "
+                f"{len(report['mismatches'])} tolerated mismatches)"
+            )
         except CrossCheckError as exc:
             failures += 1
             print(f"  {symbol}: CROSS-CHECK FAILED — {exc}", file=sys.stderr)
