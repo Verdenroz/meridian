@@ -31,6 +31,13 @@ numbers in code comments — the spec is internal; comments explain the *why* br
 - **finance-query is an unmodified upstream API.** All development is self-contained in this
   repo; never patch finance-query (or any external service) as part of Meridian work, even
   though it is our own project.
+- **Don't rebuild what the finance-query crate has.** Its Rust crate ships a signal-based
+  backtester (indicator strategies, stops, grid/Bayesian walk-forward parameter search,
+  Monte Carlo) and risk math (VaR, beta, ratios; `/v2/risk` is the API surface). If Meridian
+  ever needs those, consume the crate (Rust side) or the API — don't port them to Python.
+  Meridian's own harness exists because it is a different abstraction the crate does not
+  provide: daily *target-weight* allocation from regime posteriors, T-bill cash accrual,
+  charter guardrails, and one-engine-for-everything promotion gates.
 
 ## Repository state
 

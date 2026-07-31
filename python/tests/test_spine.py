@@ -7,7 +7,7 @@ from harness.panel import Panel
 from spine.allocator import allocate
 from spine.correlation import ledoit_wolf_constant_corr, rolling_correlation
 from spine.regime import GaussianHMM
-from spine.strategy import SpineStrategy
+from spine.strategy import AllocatorConfig, SpineStrategy, TunedSpineStrategy
 from spine.vol import ewma_vol_series, forecast_correlation, forward_realized_vol
 
 
@@ -126,23 +126,28 @@ class TestVol:
 
 class TestAllocator:
     def test_benign_is_equity_heavy(self):
-        weights = allocate(p_stress=0.0, equity_vol_weight=1.0, safe_assets={})
-        assert weights == {"SPY": 1.0}
+        assert allocate(1.0, {}) == {"SPY": 1.0}
 
     def test_stress_moves_to_defense(self):
-        weights = allocate(
-            p_stress=0.9, equity_vol_weight=1.0, safe_assets={"TLT": True, "GLD": False}
-        )
+        weights = allocate(0.1, {"TLT": True, "GLD": False})
         assert weights["SPY"] == pytest.approx(0.1)
         assert weights["TLT"] == pytest.approx(0.2 * 0.9)
         assert "GLD" not in weights
 
     def test_weights_never_leveraged_or_short(self):
-        for p in (0.0, 0.3, 0.7, 1.0):
-            for evw in (0.0, 0.5, 1.0, 2.0):
-                weights = allocate(p, evw, {"TLT": True, "GLD": True})
-                assert all(w >= 0 for w in weights.values())
-                assert sum(weights.values()) <= 1.0 + 1e-12
+        for equity in (-0.5, 0.0, 0.3, 0.7, 1.0, 2.0):
+            weights = allocate(equity, {"TLT": True, "GLD": True})
+            assert all(w >= 0 for w in weights.values())
+            assert sum(weights.values()) <= 1.0 + 1e-12
+
+    def test_mapping_variants(self):
+        product = AllocatorConfig("product").equity_weight(0.3, 0.8)
+        assert product == pytest.approx(0.8 * 0.7)
+        assert AllocatorConfig("min").equity_weight(0.3, 0.8) == pytest.approx(0.7)
+        thresh = AllocatorConfig("threshold", threshold=0.85)
+        assert thresh.equity_weight(0.5, 0.8) == pytest.approx(0.8)
+        assert thresh.equity_weight(0.9, 0.8) == pytest.approx(0.8 * 0.25)
+        assert AllocatorConfig("vol_only").equity_weight(0.99, 0.8) == pytest.approx(0.8)
 
 
 class TestStrategyInEngine:
@@ -178,3 +183,19 @@ class TestStrategyInEngine:
         result = run_backtest(panel, strategy, start=200, end=390, cost_bps={"SPY": 1.0})
         # calm block: low vol → vol-target caps at 1, stress prob low
         assert result["final_weights"].get("SPY", 0.0) > 0.8
+
+    def test_tuner_chooses_on_train_only_and_runs_oos(self):
+        panel, features = self.make_regime_panel()
+        strategy = TunedSpineStrategy(panel, features)
+        result = run_backtest(panel, strategy, start=450, cost_bps={"SPY": 1.0})
+        assert strategy.chosen is not None
+        assert strategy.chosen in strategy.candidates
+        assert len(result["returns"]) == panel.n_days - 1 - 450
+
+    def test_tuner_is_deterministic(self):
+        panel, features = self.make_regime_panel()
+        a = TunedSpineStrategy(panel, features)
+        b = TunedSpineStrategy(panel, features)
+        run_backtest(panel, a, start=450, end=500, cost_bps={"SPY": 1.0})
+        run_backtest(panel, b, start=450, end=500, cost_bps={"SPY": 1.0})
+        assert a.chosen == b.chosen

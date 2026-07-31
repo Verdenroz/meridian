@@ -19,7 +19,7 @@ from harness.walkforward import run_walk_forward
 from market_data.store import DEFAULT_STORE_DIR
 
 from spine.features import build_features
-from spine.strategy import SpineStrategy
+from spine.strategy import SpineStrategy, TunedSpineStrategy
 from spine.vol import ewma_vol_series, forecast_correlation, forward_realized_vol
 
 RACE_SYMBOLS = ("SPY", "TLT", "GLD")
@@ -31,10 +31,18 @@ def cmd_race(args: argparse.Namespace) -> int:
     features = build_features(panel, args.store_dir)
     first = panel.first_index_with_data(("SPY",))
 
+    tuned_instances: list[TunedSpineStrategy] = []
+
+    def tuned_factory() -> Strategy:
+        strategy = TunedSpineStrategy(panel, features)
+        tuned_instances.append(strategy)
+        return strategy
+
     contenders: dict[str, Callable[[], Strategy]] = {
         "buy-hold SPY": lambda: BuyHold("SPY"),
         "vol-target SPY 15%": lambda: VolTarget("SPY"),
         "spine v0 (2-state HMM)": lambda: SpineStrategy(panel, features),
+        "spine tuned (train-select)": tuned_factory,
     }
 
     print(f"walk-forward OOS race, after costs (universe {', '.join(RACE_SYMBOLS)} + cash)")
@@ -57,6 +65,14 @@ def cmd_race(args: argparse.Namespace) -> int:
         f"({len(result['windows'])} windows). The spine ships only if it beats "
         "the nulls here."
     )
+    if tuned_instances:
+        counts: dict[str, int] = {}
+        for strategy in tuned_instances:
+            if strategy.chosen is not None:
+                label = strategy.chosen.label()
+                counts[label] = counts.get(label, 0) + 1
+        picks = ", ".join(f"{k}×{v}" for k, v in sorted(counts.items()))
+        print(f"tuner picks per window (train-data selection): {picks}")
     return 0
 
 
