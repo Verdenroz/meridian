@@ -32,9 +32,9 @@ numbers in code comments — the spec is internal; comments explain the *why* br
   repo; never patch finance-query (or any external service) as part of Meridian work, even
   though it is our own project.
 
-## Repository state (transition)
+## Repository state
 
-The repo is being rebuilt around the charter. Current inventory:
+The repo has been rebuilt around the charter. Current inventory:
 
 - **Live, new core:** `python/feeds_archive/` — append-only news/feeds archiver
   (`fetch` / `loop` / `build-db` / `status`), stdlib-only. Runs via
@@ -42,10 +42,10 @@ The repo is being rebuilt around the charter. Current inventory:
   The SQLite index (`data/feeds_archive.db`) is derived and rebuildable; JSONL is truth.
 - **Being repurposed:** Rust `src/` (DataBus) becomes the live market/event poller for
   daily decisions and break-glass monitoring — no longer a training-corpus builder.
-- **Legacy — do not extend:** the prior training stack (`python/train/`, `python/core/`,
-  `python/quantization/`, `python/adaptation/`, `c/`, FDA/TCP/pretraining pipelines, the
-  Makefile's training targets, colab notebooks). It is slated for archival. Don't build on
-  it, don't "fix" it, don't assume its Makefile targets are the way to run new work.
+- **Legacy — do not extend:** the prior v4 training stack is archived under `legacy/`
+  (old `python/` packages, `c/`, FDA/TCP/pretraining pipelines, the training Makefile,
+  colab notebooks, the v4 README). It is reference-only. Don't build on it, don't "fix"
+  it, don't assume its Makefile targets are the way to run new work.
 
 New work goes in fresh packages under `python/` (small focused modules), driven by direct
 module invocation — `PYTHONPATH=python python -m <package> ...` from the repo root.
@@ -54,7 +54,7 @@ module invocation — `PYTHONPATH=python python -m <package> ...` from the repo 
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
-pip install -e ".[train,dev]"
+pip install -e ".[dev]"
 
 ruff check python                 # lint
 mypy python                       # types
