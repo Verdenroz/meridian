@@ -156,10 +156,14 @@ every dependency below was verified live on 2026-07-30 (Appendix A).
 
 - Daily OHLCV via `/v2/chart/{symbol}?range=max&interval=1d` (batch: `/v2/charts`).
   Depth: to instrument inception (SPY 1993, KO 1985, TLT 2002, GLD 2004, BIL 2007, SH 2006).
-- **Total-return construction:** the chart endpoint does not populate `adjClose`; adjusted
-  series are computed locally from `/v2/dividends/{symbol}` and `/v2/splits/{symbol}`
-  (both full-history). Total-return series are the canonical input for all return, volatility,
-  and backtest math; raw close is retained for price-level features.
+- **Total-return series:** the chart endpoint populates `adjClose` (dividend- and
+  split-adjusted; verified 2026-07-31 — zero nulls to inception, ratio steps on ex-div
+  dates, converges to close on the latest bar). Upstream `adjClose` is the canonical input
+  for all return, volatility, and backtest math; raw close is retained for price-level
+  features. The data loader cross-checks `adjClose` against a local reconstruction from
+  `/v2/dividends/{symbol}` and `/v2/splits/{symbol}` and fails loudly on divergence — this
+  field was null until 2026-07-30, so upstream regression is a live risk, and silent
+  adjustment errors would poison every downstream estimate.
 - Intraday bars (1m–1h) are available for live monitoring; they are not training data.
 
 ### 3.2 Macro data
@@ -311,7 +315,7 @@ this table.
 ## 10. Roadmap (build order)
 
 1. **Archive live** — push the feeds archiver + workflow so collection starts. *(implemented; pending push)*
-2. **Data layer** — historical loaders, total-return construction, macro panel, point-in-time store.
+2. **Data layer** — historical loaders (upstream `adjClose` + dividends/splits cross-check), macro panel, point-in-time store.
 3. **Null baseline + harness** — SPY + vol-target in the walk-forward engine with costs. Nothing else is evaluated until this exists.
 4. **Classical spine** — vol models, shrunk correlations, regime detector; allocator v0 (ETF core only).
 5. **Backtest vs null** — first honest race. Stock sleeve added only after the ETF core wins.
@@ -328,7 +332,8 @@ this table.
 | Need | Endpoint | Verified |
 |---|---|---|
 | Daily OHLCV, decades | `/v2/chart/{s}?range=max&interval=1d` | SPY 8,430 bars → 1993; KO → 1985; TLT/GLD/BIL/SH/QQQ → inception |
-| Dividends (for total return) | `/v2/dividends/{s}` | SPY: 135 payments, full history |
+| Adjusted close (total return) | same chart endpoint, `adjClose` field | populated since 2026-07-30; verified 2026-07-31: SPY/AAPL full history, no nulls, dividend+split adjusted |
+| Dividends (adjClose cross-check) | `/v2/dividends/{s}` | SPY: 135 payments, full history |
 | Splits | `/v2/splits/{s}` | AAPL: 5 splits → 1987 |
 | FRED series | `/v2/fred/series/{id}` | VIXCLS: 9,541 obs, 1990 → present |
 | Treasury curve | `/v2/fred/treasury-yields?year=` | 2008 verified (251 rows) |

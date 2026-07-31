@@ -75,8 +75,8 @@ silently poison data.
 
 - All market/text data comes from `https://finance-query.com` (v2). Verified availability
   (depths, endpoints, the one gap — historical news) is tabled in the spec's Appendix A.
-- Total-return series are constructed locally from chart + dividends + splits endpoints
-  (`adjClose` is not populated upstream).
+- Total-return series come from the chart endpoint's `adjClose` (populated upstream since
+  2026-07-30), cross-checked against a local dividends+splits reconstruction in the loader.
 - `data/`, `checkpoints/`, `reports/`, `logs/` are gitignored (derived, regenerated).
   `archive/` is **git-tracked** — it is the permanent news record.
 - Survivorship bias exists in Yahoo-sourced stock history; every backtest reports it as a
