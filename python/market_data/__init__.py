@@ -15,8 +15,9 @@ from market_data.store import DEFAULT_STORE_DIR
 DEFAULT_SYMBOLS = ("SPY", "TLT", "GLD", "BIL", "SH")
 
 # VIXCLS: implied vol; T10Y3M: 10Y-3M curve spread (treasury endpoint lacks
-# y10 before 2001, so the spread comes straight from FRED).
-DEFAULT_FRED_SERIES = ("VIXCLS", "T10Y3M")
+# y10 before 2001, so the spread comes straight from FRED). BAA10Y: Moody's
+# Baa-10Y credit spread — ICE BofA OAS series are truncated to ~3y upstream.
+DEFAULT_FRED_SERIES = ("VIXCLS", "T10Y3M", "BAA10Y")
 
 __all__ = [
     "DEFAULT_BASE_URL",
