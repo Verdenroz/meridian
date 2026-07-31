@@ -314,9 +314,9 @@ this table.
 
 ## 10. Roadmap (build order)
 
-1. **Archive live** — push the feeds archiver + workflow so collection starts. *(implemented; pending push)*
-2. **Data layer** — historical loaders (upstream `adjClose` + dividends/splits cross-check), macro panel, point-in-time store.
-3. **Null baseline + harness** — SPY + vol-target in the walk-forward engine with costs. Nothing else is evaluated until this exists.
+1. **Archive live** — push the feeds archiver + workflow so collection starts. *(implemented, live in CI)*
+2. **Data layer** — historical loaders (upstream `adjClose` + dividends/splits cross-check), macro panel, point-in-time store. *(implemented: `python/market_data/`; ETF core verified at ≤2e-6 divergence)*
+3. **Null baseline + harness** — SPY + vol-target in the walk-forward engine with costs. Nothing else is evaluated until this exists. *(implemented: `python/harness/`; OOS 1998–2026 after costs — buy-hold 9.3% CAGR/0.44 Sharpe, vol-target 8.2%/0.49)*
 4. **Classical spine** — vol models, shrunk correlations, regime detector; allocator v0 (ETF core only).
 5. **Backtest vs null** — first honest race. Stock sleeve added only after the ETF core wins.
 6. **Event study** — do filings/news precede realized-vol elevation? Gates all text work.

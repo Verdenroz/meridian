@@ -40,6 +40,13 @@ The repo has been rebuilt around the charter. Current inventory:
   (`fetch` / `loop` / `build-db` / `status`), stdlib-only. Runs via
   `.github/workflows/archive-feeds.yml` (10-min cron) committing JSONL to `archive/feeds/`.
   The SQLite index (`data/feeds_archive.db`) is derived and rebuildable; JSONL is truth.
+- **Live, new core:** `python/market_data/` — historical loaders (charts/dividends/splits,
+  FRED, treasury curve) with a loud-failure adjClose cross-check; snapshots under
+  `data/market/` (derived, rebuildable, `fetched_at`-stamped).
+- **Live, new core:** `python/harness/` — walk-forward backtest engine (after-cost returns,
+  long-only/unlevered guardrails in the engine, lookahead-proof `HistoryView`) and the null
+  baselines (SPY buy-hold, SPY 15% vol-target). Every component ships only by beating the
+  null in this engine.
 - **Being repurposed:** Rust `src/` (DataBus) becomes the live market/event poller for
   daily decisions and break-glass monitoring — no longer a training-corpus builder.
 - **Legacy — do not extend:** the prior v4 training stack is archived under `legacy/`
@@ -60,10 +67,18 @@ ruff check python                 # lint
 mypy python                       # types
 pytest python/tests               # tests (deliberately minimal — see below)
 
-# News/feeds archive (the one live new component)
+# News/feeds archive
 PYTHONPATH=python python -m feeds_archive fetch       # one-shot poll (what CI runs)
 PYTHONPATH=python python -m feeds_archive build-db    # compile JSONL → SQLite index
 PYTHONPATH=python python -m feeds_archive status      # archive freshness
+
+# Historical market/macro data (ETF core + VIX + treasury curve)
+PYTHONPATH=python python -m market_data fetch         # fetch, cross-check, store
+PYTHONPATH=python python -m market_data verify        # re-run adjClose cross-check
+PYTHONPATH=python python -m market_data status        # what's in data/market/
+
+# Null baseline race (the bar everything must clear)
+PYTHONPATH=python python -m harness null              # full-sample + walk-forward OOS
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,
