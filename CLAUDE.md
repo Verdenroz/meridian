@@ -126,6 +126,12 @@ uv run python -m credit_race run
 # regenerate or hand-edit rows; retire+rename contenders instead of editing them
 uv run python -m shadow run               # fetch latest, log today's decisions
 uv run python -m shadow status            # log summary
+
+# Behavior-match gate (pre-registered 2026-07-31, frozen — never edit criteria.py;
+# the evaluator refuses to run before 2026-11-02, and PASS satisfies §1.3(b) only,
+# it is not a performance gate)
+uv run python -m behavior_match criteria  # print the frozen pre-registration
+uv run python -m behavior_match run       # evaluate the closed shadow window
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,
