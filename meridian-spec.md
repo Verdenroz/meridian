@@ -242,6 +242,9 @@ exists. Trigger thresholds were calibrated 2026-08-01 on SPY 1993–2026 EOD his
 price/volume-only (LLM-free per §4.5); the SEC 8-K feed is polled as context recorded on
 alerts, never a trigger (consistent with the held occurrence-flag race and the failed score
 study). One alert per (session, level), escalation allowed, restart-safe via the journal.
+Alerts notify (§1.11) via an optional `MERIDIAN_ALERT_WEBHOOK` env var — configuration
+outside the model's reach; absent or failing webhook degrades to journal+log, never to a
+blocked alert. Appliance deployment: `deploy/meridian-bus.service` (systemd, §9).
 
 ---
 

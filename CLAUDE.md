@@ -148,7 +148,9 @@ uv run python -m rerace status            # verdict history
 uv run python -m behavior_match criteria  # print the frozen pre-registration
 uv run python -m behavior_match run       # evaluate the closed shadow window
 
-# Live poller + break-glass monitor (Rust; runs on the appliance during market hours)
+# Live poller + break-glass monitor (Rust; runs on the appliance during market hours;
+# appliance service unit: deploy/meridian-bus.service, install steps in its comments.
+# Optional MERIDIAN_ALERT_WEBHOOK env var POSTs alert rows, e.g. to an ntfy topic)
 cargo run --release --bin meridian-bus -- live     # persistent poll loop
 cargo run --bin meridian-bus -- once               # one cycle, print snapshot
 cargo run --bin meridian-bus -- status             # alert + journal summary

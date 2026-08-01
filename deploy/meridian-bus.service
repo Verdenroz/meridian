@@ -1,0 +1,31 @@
+# Meridian live poller / break-glass monitor — appliance service (spec §9).
+#
+# Install on the Framework Desktop:
+#   cargo build --release
+#   sudo cp deploy/meridian-bus.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now meridian-bus
+#   journalctl -u meridian-bus -f          # logs (bus writes to stderr)
+#
+# The process is idle-cheap off-hours (5-minute heartbeat), so it runs 24/7
+# rather than being calendar-gated — market-state gating lives in the bus.
+# Paths in the bus are repo-relative; WorkingDirectory must be the repo root.
+
+[Unit]
+Description=Meridian live poller / break-glass monitor
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=harvey
+WorkingDirectory=/home/harvey/projects/meridian
+ExecStart=/home/harvey/projects/meridian/target/release/meridian-bus live
+Restart=on-failure
+RestartSec=30
+Environment=RUST_LOG=info
+# Optional break-glass notification (e.g. an ntfy topic). Absent = journal+log only.
+#Environment=MERIDIAN_ALERT_WEBHOOK=https://ntfy.sh/<private-topic>
+
+[Install]
+WantedBy=multi-user.target

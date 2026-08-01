@@ -14,5 +14,6 @@ pub mod feed;
 pub mod history;
 pub mod journal;
 pub mod monitor;
+pub mod notify;
 pub mod quotes;
 pub mod severity;

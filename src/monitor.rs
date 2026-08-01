@@ -234,7 +234,7 @@ impl Monitor {
             &snapshot,
         )?;
         journal::write_latest(&self.cfg.latest_path, &snapshot)?;
-        self.maybe_alert(&snapshot, &market_reading)?;
+        self.maybe_alert(&snapshot, &market_reading).await?;
         Ok(snapshot)
     }
 
@@ -278,7 +278,7 @@ impl Monitor {
         }
     }
 
-    fn maybe_alert(&mut self, snap: &Snapshot, market: &SymbolReading) -> Result<()> {
+    async fn maybe_alert(&mut self, snap: &Snapshot, market: &SymbolReading) -> Result<()> {
         let in_session = snap.market_state.as_deref() == Some("REGULAR");
         if snap.level == Level::None || !in_session {
             return Ok(());
@@ -301,6 +301,8 @@ impl Monitor {
             drivers = ?snap.drivers,
             "BREAK-GLASS journal: alert recorded"
         );
+        let title = format!("Meridian {} — {}", snap.level, snap.drivers.join("; "));
+        crate::notify::alert_webhook(&title, &row).await;
         self.alerted_date = Some(snap.session_date);
         self.alerted = snap.level;
         Ok(())
