@@ -105,21 +105,43 @@ class ScaledVolTarget(VolTarget):
         return {self.symbol: weight}
 
 
-def _run(panel: Panel, factory: Callable[[], Strategy], first: int) -> dict:
+def _run(
+    panel: Panel,
+    factory: Callable[[], Strategy],
+    first: int,
+    oos_start: str | None = None,
+) -> dict:
+    """Walk-forward run + metrics; `oos_start` restricts the scored span
+    (races whose panel opens long before their pre-registered OOS window)."""
     result = run_walk_forward(panel, factory, first)
     cash_by_date = dict(zip(panel.dates, panel.cash_returns))
+    kept = [
+        (d, r)
+        for d, r in zip(result["dates"], result["returns"])
+        if oos_start is None or d >= oos_start
+    ]
     metrics = compute_metrics(
-        result["returns"], [cash_by_date[d] for d in result["dates"]]
+        [r for _, r in kept], [cash_by_date[d] for d, _ in kept]
     )
-    years = len(result["returns"]) / 252
+    years = len(kept) / 252
     metrics["turnover_oneway"] = (
-        sum(w["turnover_oneway"] for w in result["windows"]) / years
+        sum(
+            w["turnover_oneway"]
+            for w in result["windows"]
+            if oos_start is None or w["test_end"] >= oos_start
+        )
+        / years
     )
-    return {"result": result, "metrics": metrics}
+    return {"result": result, "metrics": metrics, "oos_start": oos_start}
 
 
 def _amended_bar(
-    label: str, chall: dict, null: dict, panel: Panel, first: int
+    label: str,
+    chall: dict,
+    null: dict,
+    panel: Panel,
+    first: int,
+    oos_start: str | None = None,
 ) -> dict:
     """Apply the amended §1.3 gate to one challenger; runs the matched-vol
     placebo only when the (b) branch needs it."""
@@ -150,7 +172,7 @@ def _amended_bar(
         scale = min(
             1.0, chall["metrics"]["ann_vol"] / max(null["metrics"]["ann_vol"], 1e-9)
         )
-        placebo = _run(panel, lambda: ScaledVolTarget("SPY", scale), first)
+        placebo = _run(panel, lambda: ScaledVolTarget("SPY", scale), first, oos_start)
         co["placebo"] = {
             "scale": scale,
             "sharpe": placebo["metrics"]["sharpe"],
