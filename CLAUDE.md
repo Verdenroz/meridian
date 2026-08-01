@@ -126,6 +126,20 @@ uv run python -m vol_race run
 # at a third of the null's drawdown. Re-run as OOS accrues; never retune)
 uv run python -m credit_race run
 
+# Quality-spread race (pre-registered; FAILED 2026-08-01 — Baa−Aaa adds nothing
+# beyond BAA10Y's level, 6f dilutes the spine; matched-vol placebo killed the
+# (b)-route correctly. HY OAS itself is unusable: upstream truncates ICE BofA ~3y)
+uv run python -m quality_race run
+
+# VRP race (pre-registered; FAILED 2026-08-01 decisively — premium terciles and
+# turnover bands don't move VIX sizing off 0.41 vs null 0.49; VIX branch closed)
+uv run python -m vrp_race run
+
+# Deep-history 8-K occurrence race (pre-registered 2026-08-01; full per-CIK SEC
+# histories, 15-name panel, OOS 2004+ — the high-power second look at the held
+# occurrence gate; frozen mechanics, never retune)
+uv run python -m deep_eightk fetch && uv run python -m deep_eightk run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered race
 uv run python -m episodic run                     # analogs for the latest close
