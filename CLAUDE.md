@@ -187,22 +187,35 @@ uv run python -m nstate_race run
 # 0.438); n-scanning closed, learned regime challengers are the next axis)
 uv run python -m nstate4_race run
 
-# Deep filing-tone study (pre-registered; fetch SEC accession index, FinBERT-
-# score 8-K text on the RTX 3090 into the standing sentiment cache, then run.
-# Content-at-high-power: the untested cell after severity FAIL + occurrence
-# FAIL + headline-content PASS)
+# Deep filing-tone study (pre-registered; FAILED 2026-08-01 — 4,856 8-K texts
+# FinBERT-scored on the RTX 3090 (~3 min), 4,871 filing days 1994-2026: only
+# 1.3% of filing days read negative (boilerplate), rank spearman 0.051 < 0.10
+# gate. Filing text closed on all three fronts (severity/occurrence/content);
+# headline content remains the only passing text signal)
 #   uv run python -m filing_tone fetch && uv run python -m filing_tone status
 #   uv run --with torch --with transformers python -m filing_tone score
 uv run python -m filing_tone run
 
-# Topic-salience race (pre-registered; first slow news-derived regime feature:
-# inflation/rates anchor cosine over 1.13M cached embeddings, 21d mean, z)
+# Topic-salience race (pre-registered; PASSED 2026-08-01 on the letter, the
+# weakest held candidate — 7f 0.883 vs null 0.864 on the easy 2010-2024 span,
+# salience alone FAILS, bootstrap noise. Held, low confidence; LOCAL-ONLY
+# adjudication: needs data/embed_cache, so excluded from CI rerace)
 uv run python -m salience_race run
 
+# Champion consolidation race (pre-registered; PASSED 2026-08-01 route (a) —
+# 7f × 3-state 0.900 > 6f-3s 0.885 > 7f-2s 0.883 > null 0.864 on the clipped
+# span: the feature and state axes are additive. 6f 3-state stays the
+# full-span leader; 7f 3-state is the salience-era variant, local-only)
+uv run python -m champion_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
-# Explanation only: analogs never touch allocation without a new pre-registered race
+# Explanation only: analogs never touch allocation without a new pre-registered
+# race. News analogs added 2026-08-01: per-day headline-embedding centroids;
+# live dates embed archive titles via the local endpoint
 uv run python -m episodic run                     # analogs for the latest close
 uv run python -m episodic run --date 2020-03-16   # any panel date
+uv run python -m episodic build-news              # rebuild news centroid store
+uv run python -m episodic news --date 2020-03-16  # news-similar days
 
 # Daily shadow decisions (paper-trading record; runs post-close via CI cron).
 # data/shadow/decisions.jsonl is append-only, git-tracked, point-in-time — never
