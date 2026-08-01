@@ -9,6 +9,7 @@ import argparse
 import json
 from pathlib import Path
 
+from harness.racing import metrics_table
 from market_data.store import DEFAULT_STORE_DIR
 
 from vrp_race.race import run_race
@@ -20,11 +21,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     report = run_race(args.store_dir)
     print("VRP race: premium-adjusted VIX sizing, after costs, walk-forward")
     print(f"OOS {report['oos_span'][0]}..{report['oos_span'][1]}")
-    header = f"{'strategy':<30}" + "".join(f"{c:>16}" for c in _COLUMNS)
-    print(header)
-    for label, m in report["metrics"].items():
-        row = f"{label:<30}" + "".join(f"{m[c]:>16.4f}" for c in _COLUMNS)
-        print(row)
+    print(metrics_table(report["metrics"], _COLUMNS, label_width=30, col_width=16))
     print()
     print(json.dumps(report["verdicts"], indent=2))
     print(f"race_pass: {report['race_pass']}")

@@ -25,14 +25,16 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
-from eightk_race.race import BrakeVolTarget, brake_series
 from harness.engine import Strategy
 from harness.metrics import compute_metrics
 from harness.panel import Panel, build_panel
+from harness.signals import BrakeVolTarget, brake_series, causal_zscores
 from harness.strategies import BuyHold, VolTarget
 from harness.walkforward import run_walk_forward
 from spine.features import _ffill_series, _macro_by_date, build_features
 from spine.strategy import TunedSpineStrategy
+
+__all__ = ["causal_zscores", "run_race", "widening_brake"]
 
 SERIES = "BAA10Y"
 GATE = {
@@ -44,25 +46,6 @@ GATE = {
     "z_min_obs": 120,
 }
 RACE_SYMBOLS = ("SPY", "TLT", "GLD")
-
-
-def causal_zscores(
-    values: np.ndarray, window: int = 252, min_obs: int = 120
-) -> np.ndarray:
-    """z[t] compares values[t] to the trailing `window` observations before
-    t — same convention as the event study's intensity z-scores."""
-    out = np.full(len(values), np.nan)
-    for t in range(len(values)):
-        if not np.isfinite(values[t]):
-            continue
-        past = values[max(0, t - window) : t]
-        past = past[np.isfinite(past)]
-        if len(past) < min_obs:
-            continue
-        std = past.std()
-        if std > 0:
-            out[t] = (values[t] - past.mean()) / std
-    return out
 
 
 def credit_spread_series(store_dir: Path, dates: list[str]) -> np.ndarray:

@@ -37,13 +37,15 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
-from eightk_race.race import BrakeVolTarget, brake_series, signal_check
+from eightk_race.race import signal_check
 from event_study.events import intensity_zscores
 from event_study.study import PANEL
 from harness.engine import Strategy
+from harness.gates import amended_bar
 from harness.panel import build_panel
+from harness.racing import race_contenders
+from harness.signals import BrakeVolTarget, brake_series
 from harness.strategies import BuyHold, VolTarget
-from quality_race.race import _amended_bar, _run
 
 from deep_eightk.fetch import load_8k_dates
 from deep_eightk.stats import sharpe_diff_bootstrap
@@ -109,16 +111,11 @@ def run_race(store_dir: Path) -> dict:
             "SPY", active, GATE["brake_scale"]
         ),
     }
-    runs = {
-        label: _run(panel, factory, first, OOS_START)
-        for label, factory in contenders.items()
-    }
+    runs = race_contenders(panel, contenders, first, OOS_START)
 
     null = runs["vol-target SPY 15% (null)"]
     chall = runs["vol-target + deep 8-K brake"]
-    verdict = _amended_bar(
-        "vol-target + deep 8-K brake", chall, null, panel, first, OOS_START
-    )
+    verdict = amended_bar(chall, null, panel, first, GATE, OOS_START)
 
     # Diagnostics (non-gating): signal spearman + bootstrap on the OOS span.
     diag_signal = signal_check(panel, z)

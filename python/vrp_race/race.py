@@ -33,10 +33,11 @@ from pathlib import Path
 
 import numpy as np
 from harness.engine import Strategy
+from harness.gates import amended_bar
 from harness.panel import build_panel
+from harness.racing import race_contenders
 from harness.strategies import BuyHold, VolTarget
 from harness.view import HistoryView
-from quality_race.race import _amended_bar, _run
 from vol_race.forecasters import vix_vol_series
 from vol_race.race import PRIMARY_HORIZON, CalibratedVolTarget
 
@@ -118,7 +119,7 @@ def run_race(store_dir: Path) -> dict:
             "SPY", vix, returns, band=GATE["wide_band"]
         ),
     }
-    runs = {label: _run(panel, factory, first) for label, factory in contenders.items()}
+    runs = race_contenders(panel, contenders, first)
 
     null = runs["vol-target SPY 15% (null)"]
     challengers = (
@@ -126,7 +127,7 @@ def run_race(store_dir: Path) -> dict:
         "vix global + wide band",
         "vix tercile + wide band",
     )
-    verdicts = {c: _amended_bar(c, runs[c], null, panel, first) for c in challengers}
+    verdicts = {c: amended_bar(runs[c], null, panel, first, GATE) for c in challengers}
 
     sample = null["result"]
     return {

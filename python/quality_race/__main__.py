@@ -9,11 +9,10 @@ import argparse
 import json
 from pathlib import Path
 
+from harness.racing import metrics_table
 from market_data.store import DEFAULT_STORE_DIR
 
 from quality_race.race import run_race
-
-_COLUMNS = ("cagr", "ann_vol", "sharpe", "max_drawdown", "worst_day")
 
 
 def cmd_run(args: argparse.Namespace) -> int:
@@ -23,11 +22,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         f"OOS {report['oos_span'][0]}..{report['oos_span'][1]}, "
         f"brake active {report['brake_active_days']} days"
     )
-    header = f"{'strategy':<28}" + "".join(f"{c:>14}" for c in _COLUMNS)
-    print(header)
-    for label, m in report["metrics"].items():
-        row = f"{label:<28}" + "".join(f"{m[c]:>14.4f}" for c in _COLUMNS)
-        print(row)
+    print(metrics_table(report["metrics"]))
     print()
     print(json.dumps(report["verdicts"], indent=2))
     print(f"race_pass: {report['race_pass']}")

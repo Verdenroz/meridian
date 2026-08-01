@@ -37,18 +37,13 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
-from credit_race.race import (
-    build_features5,
-    causal_zscores,
-    widening_brake,
-)
-from eightk_race.race import BrakeVolTarget
+from credit_race.race import build_features5, widening_brake
 from harness.engine import Strategy
-from harness.metrics import compute_metrics
+from harness.gates import amended_bar
 from harness.panel import Panel, build_panel
+from harness.racing import race_contenders
+from harness.signals import BrakeVolTarget, causal_zscores
 from harness.strategies import BuyHold, VolTarget
-from harness.view import HistoryView
-from harness.walkforward import run_walk_forward
 from market_data.store import read_snapshot
 from spine.features import _ffill_series, _macro_by_date
 from spine.strategy import TunedSpineStrategy
@@ -87,107 +82,6 @@ def build_features6(panel: Panel, store_dir: Path) -> np.ndarray:
     return np.column_stack([build_features5(panel, store_dir), quality])
 
 
-class ScaledVolTarget(VolTarget):
-    """The null statically de-levered by a constant — the matched-vol
-    placebo of §1.3(3). Any drawdown edge a constant de-lever reproduces
-    is exposure, not skill."""
-
-    def __init__(self, symbol: str, scale: float) -> None:
-        super().__init__(symbol)
-        self.scale = scale
-
-    def target_weights(self, view: HistoryView) -> dict[str, float] | None:
-        vol = self._ewma_vol(view.returns_window(self.symbol, self.window))
-        weight = 0.0 if vol is None else min(1.0, self.target_vol / vol) * self.scale
-        if self._last_target is not None and abs(weight - self._last_target) < self.band:
-            return None
-        self._last_target = weight
-        return {self.symbol: weight}
-
-
-def _run(
-    panel: Panel,
-    factory: Callable[[], Strategy],
-    first: int,
-    oos_start: str | None = None,
-) -> dict:
-    """Walk-forward run + metrics; `oos_start` restricts the scored span
-    (races whose panel opens long before their pre-registered OOS window)."""
-    result = run_walk_forward(panel, factory, first)
-    cash_by_date = dict(zip(panel.dates, panel.cash_returns))
-    kept = [
-        (d, r)
-        for d, r in zip(result["dates"], result["returns"])
-        if oos_start is None or d >= oos_start
-    ]
-    metrics = compute_metrics(
-        [r for _, r in kept], [cash_by_date[d] for d, _ in kept]
-    )
-    years = len(kept) / 252
-    metrics["turnover_oneway"] = (
-        sum(
-            w["turnover_oneway"]
-            for w in result["windows"]
-            if oos_start is None or w["test_end"] >= oos_start
-        )
-        / years
-    )
-    return {"result": result, "metrics": metrics, "oos_start": oos_start}
-
-
-def _amended_bar(
-    label: str,
-    chall: dict,
-    null: dict,
-    panel: Panel,
-    first: int,
-    oos_start: str | None = None,
-) -> dict:
-    """Apply the amended §1.3 gate to one challenger; runs the matched-vol
-    placebo only when the (b) branch needs it."""
-    outright = chall["metrics"]["sharpe"] > null["metrics"]["sharpe"]
-    verdict: dict[str, object] = {
-        "outright_sharpe_win": bool(outright),
-        "co_criterion": None,
-        "passes": bool(outright),
-        "route": "a" if outright else None,
-    }
-    if outright:
-        return verdict
-
-    noninferior = (
-        chall["metrics"]["sharpe"]
-        >= null["metrics"]["sharpe"] - GATE["noninferiority_margin"]
-    )
-    better_tail = (
-        chall["metrics"]["max_drawdown"]
-        <= GATE["maxdd_ratio"] * null["metrics"]["max_drawdown"]
-    )
-    co: dict[str, object] = {
-        "noninferior_sharpe": bool(noninferior),
-        "tail_two_thirds": bool(better_tail),
-        "placebo": None,
-    }
-    if noninferior and better_tail:
-        scale = min(
-            1.0, chall["metrics"]["ann_vol"] / max(null["metrics"]["ann_vol"], 1e-9)
-        )
-        placebo = _run(panel, lambda: ScaledVolTarget("SPY", scale), first, oos_start)
-        co["placebo"] = {
-            "scale": scale,
-            "sharpe": placebo["metrics"]["sharpe"],
-            "ann_vol": placebo["metrics"]["ann_vol"],
-            "max_drawdown": placebo["metrics"]["max_drawdown"],
-        }
-        beats_placebo = chall["metrics"]["sharpe"] > placebo["metrics"]["sharpe"]
-        co["beats_placebo"] = bool(beats_placebo)
-        if beats_placebo:
-            verdict["passes"] = True
-            verdict["route"] = "b (held: re-race + behavior-match required)"
-    verdict["co_criterion"] = co
-    return verdict
-
-
 def run_race(store_dir: Path) -> dict:
     panel = build_panel(store_dir, RACE_SYMBOLS)
     features5 = build_features5(panel, store_dir)
@@ -205,11 +99,11 @@ def run_race(store_dir: Path) -> dict:
         "spine tuned 5f (reference)": lambda: TunedSpineStrategy(panel, features5),
         "spine tuned 6f (+quality)": lambda: TunedSpineStrategy(panel, features6),
     }
-    runs = {label: _run(panel, factory, first) for label, factory in contenders.items()}
+    runs = race_contenders(panel, contenders, first)
 
     null = runs["vol-target SPY 15% (null)"]
     challengers = ("vol-target + quality brake", "spine tuned 6f (+quality)")
-    verdicts = {c: _amended_bar(c, runs[c], null, panel, first) for c in challengers}
+    verdicts = {c: amended_bar(runs[c], null, panel, first, GATE) for c in challengers}
 
     sample = runs["vol-target SPY 15% (null)"]["result"]
     return {

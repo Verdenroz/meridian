@@ -17,6 +17,7 @@ from credit_race.race import run_race as run_credit_race
 from eightk_race.race import INTENSITY_PANEL
 from eightk_race.race import run_race as run_eightk_race
 from event_study.events import fetch_filings
+from harness.racing import plain as _plain
 from shadow.job import refresh
 from shadow.log import append_decision, load_decisions
 
@@ -26,17 +27,6 @@ RACES = {
     "eightk_race": run_eightk_race,
     "credit_race": run_credit_race,
 }
-
-
-def _plain(value: object) -> object:
-    """Recursively coerce numpy scalars so verdicts serialize as JSON."""
-    if isinstance(value, dict):
-        return {k: _plain(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain(v) for v in value]
-    if hasattr(value, "item"):
-        return value.item()  # type: ignore[attr-defined]
-    return value
 
 
 def logged_months(path: Path) -> set[tuple[str, str]]:

@@ -182,6 +182,34 @@ backtests against the null baseline, and smoke runs — not broad unit coverage.
 an 80%-coverage gate; do test point-in-time logic and dedupe/storage invariants, where bugs
 silently poison data.
 
+## Hypothesis framework (pre-registered races & studies)
+
+Every hypothesis gets a small dedicated package under `python/` whose module docstring
+*is* the frozen pre-registration, racing challengers against the untouched null in the
+one walk-forward engine. Shared mechanics live in `python/harness/`; a race module owns
+only the hypothesis — features, challengers, frozen constants:
+
+- `harness/racing.py` — `run_contender` (walk-forward + after-cost metrics, optional
+  `oos_start`), `race_contenders` (labeled lineup, same engine/span), `metrics_table`,
+  `plain` (JSON-safe verdict serialization).
+- `harness/gates.py` — `amended_bar` (the §1.3 promotion bar: outright Sharpe win, or
+  the held (b)-route: non-inferiority + tail bound + matched-vol placebo) and the
+  `ScaledVolTarget` placebo. Gate margins are required arguments — criteria live in each
+  race's frozen `GATE` dict, never as defaults in the shared layer.
+- `harness/signals.py` — `causal_zscores`, `brake_series`, `BrakeVolTarget`, the
+  inherited-frozen burst/brake mechanics.
+- `harness/stats.py` — rank stats (`spearman`, `mann_whitney_u`) and the seeded
+  `sharpe_diff_bootstrap` (block length / resamples / seed are per-study registrations,
+  passed explicitly).
+
+New race checklist: (1) write the module docstring as the pre-registration — motivation,
+challengers, gate — *before* computing any result; (2) freeze every constant in a `GATE`
+dict; (3) contenders always include the untouched null; run `race_contenders`, judge
+with `amended_bar(runs[c], null, panel, first, GATE)`; (4) record the verdict in the
+spec and CLAUDE.md and never retune post hoc. Completed race modules are historical
+record: framework changes must never alter a frozen race's output (verdict equality was
+checked when the shared layer was extracted, 2026-08-01).
+
 ## Data
 
 - All market/text data comes from `https://finance-query.com` (v2). Verified availability

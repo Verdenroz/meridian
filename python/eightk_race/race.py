@@ -30,14 +30,16 @@ from pathlib import Path
 
 import numpy as np
 from event_study.events import intensity_zscores, load_filings
-from event_study.stats import spearman
 from harness.engine import Strategy
 from harness.metrics import compute_metrics
 from harness.panel import Panel, build_panel
+from harness.signals import BrakeVolTarget, brake_series
+from harness.stats import spearman
 from harness.strategies import BuyHold, VolTarget
-from harness.view import HistoryView
 from harness.walkforward import run_walk_forward
 from spine.vol import ewma_vol_series, forward_realized_vol
+
+__all__ = ["BrakeVolTarget", "brake_series", "run_race"]
 
 # Study names with 8-K coverage since <= 2021-01-06 (availability-driven).
 INTENSITY_PANEL = (
@@ -68,36 +70,6 @@ def eightk_daily_counts(store_dir: Path, dates: list[str]) -> dict[str, int]:
             if i < len(dates):
                 counts[dates[i]] += 1
     return dict(counts)
-
-
-def brake_series(z: np.ndarray, burst_z: float, brake_days: int) -> np.ndarray:
-    """active[t] iff any of z[t-brake_days+1 .. t] >= burst_z — causal."""
-    burst = np.isfinite(z) & (z >= burst_z)
-    active = np.zeros(len(z), dtype=bool)
-    for t in np.flatnonzero(burst):
-        active[t : t + brake_days] = True
-    return active
-
-
-class BrakeVolTarget(VolTarget):
-    """The null vol-target with exposure scaled down while the brake is on."""
-
-    def __init__(
-        self, symbol: str, active: np.ndarray, brake_scale: float
-    ) -> None:
-        super().__init__(symbol)
-        self.active = active
-        self.brake_scale = brake_scale
-
-    def target_weights(self, view: HistoryView) -> dict[str, float] | None:
-        vol = self._ewma_vol(view.returns_window(self.symbol, self.window))
-        weight = 0.0 if vol is None else min(1.0, self.target_vol / vol)
-        if self.active[view.t]:
-            weight *= self.brake_scale
-        if self._last_target is not None and abs(weight - self._last_target) < self.band:
-            return None
-        self._last_target = weight
-        return {self.symbol: weight}
 
 
 def _oos_metrics(panel: Panel, result: dict, oos_start: str) -> dict:
