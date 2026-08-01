@@ -1,11 +1,11 @@
 """Monthly re-race of the held gates on their frozen pre-registrations.
 
-The held races (eightk_race, credit_race) re-run as out-of-sample data
-accrues: a real edge should strengthen, a fluke should fade. Nothing here
-retunes anything — the race modules own their frozen parameters; this job
-only refreshes data, runs them, and appends each verdict to an
-append-only, git-tracked log so the evidence trail lives in the repo
-rather than in CI logs. One row per (month, race); re-runs are no-ops.
+The held races re-run as out-of-sample data accrues: a real edge should
+strengthen, a fluke should fade. Nothing here retunes anything — the race
+modules own their frozen parameters; this job only refreshes data, runs
+them, and appends each verdict to an append-only, git-tracked log so the
+evidence trail lives in the repo rather than in CI logs. One row per
+(month, race); re-runs are no-ops.
 """
 
 from __future__ import annotations
@@ -13,11 +13,14 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from compound_race.race import run_race as run_compound_race
 from credit_race.race import run_race as run_credit_race
 from eightk_race.race import INTENSITY_PANEL
 from eightk_race.race import run_race as run_eightk_race
 from event_study.events import fetch_filings
 from harness.racing import plain as _plain
+from hedge_race.race import run_race as run_hedge_race
+from rate_race.race import run_race as run_rate_race
 from shadow.job import refresh
 from shadow.log import append_decision, load_decisions
 
@@ -26,6 +29,9 @@ DEFAULT_LOG_PATH = Path("data/races/reraces.jsonl")
 RACES = {
     "eightk_race": run_eightk_race,
     "credit_race": run_credit_race,
+    "rate_race": run_rate_race,
+    "hedge_race": run_hedge_race,
+    "compound_race": run_compound_race,
 }
 
 

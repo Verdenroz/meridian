@@ -24,16 +24,25 @@ from eightk_race.race import BrakeVolTarget
 from harness.panel import Panel
 from harness.strategies import VolTarget
 from harness.view import HistoryView
+from hedge_race.race import rate_veto_series
+from rate_race.race import rate_vol_feature
 from spine.strategy import TunedSpineStrategy
 
 
 def build_contenders(panel: Panel, store_dir: Path) -> dict[str, object]:
     features5 = build_features5(panel, store_dir)
+    features6 = np.column_stack(
+        [features5, rate_vol_feature(store_dir, panel.dates)]
+    )
     active = widening_brake(credit_spread_series(store_dir, panel.dates))
+    veto = {"TLT": rate_veto_series(store_dir, panel.dates)}
     return {
         "null_voltarget": VolTarget("SPY"),
         "credit_brake": BrakeVolTarget("SPY", active, CREDIT_GATE["brake_scale"]),
         "spine5f_credit": TunedSpineStrategy(panel, features5),
+        # Added 2026-08-01 with the rate/hedge race passes (held candidates).
+        "spine6f_rate": TunedSpineStrategy(panel, features6),
+        "spine5fc_veto": TunedSpineStrategy(panel, features5, safe_veto=veto),
     }
 
 

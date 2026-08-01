@@ -18,7 +18,8 @@ DEFAULT_SYMBOLS = ("SPY", "TLT", "GLD", "BIL", "SH")
 # y10 before 2001, so the spread comes straight from FRED). BAA10Y: Moody's
 # Baa-10Y credit spread — ICE BofA OAS series are truncated to ~3y upstream.
 # AAA10Y: Moody's Aaa-10Y, the low leg of the quality spread (quality_race).
-DEFAULT_FRED_SERIES = ("VIXCLS", "T10Y3M", "BAA10Y", "AAA10Y")
+# DGS10: 10Y constant-maturity yield (1962+) — rate-vol channel (rate_race).
+DEFAULT_FRED_SERIES = ("VIXCLS", "T10Y3M", "BAA10Y", "AAA10Y", "DGS10")
 
 __all__ = [
     "DEFAULT_BASE_URL",

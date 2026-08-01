@@ -153,6 +153,28 @@ uv run python -m tone_study run
 # only add value as regime features. Tone market-defense closed)
 uv run python -m tone_race run
 
+# Rate-vol race (pre-registered; PASSED 2026-08-01 route (a) — first outright
+# Sharpe wins: 5f-rate 0.52 and 6f credit+ratevol 0.53 vs null 0.49 at a third
+# of the drawdown; channels compound, no quality-race dilution. Bootstrap
+# margins are noise → held, not shipped; 6f is the new leading candidate)
+uv run python -m rate_race run
+
+# Hedge-veto race (pre-registered; PASSED 2026-08-01 route (a) — TLT barred
+# from the defensive sleeve 21 sessions after a rate-vol burst strictly
+# improves the 5f-credit spine (0.509/12.9%dd vs 0.502/13.7%). Held. Value is
+# conditional on the regime model lacking the rate channel — see compound race)
+uv run python -m hedge_race run
+
+# Stock-bond correlation race (pre-registered; FAILED 2026-08-01 — 60d
+# corr(SPY, −ΔDGS10) adds nothing alone (placebo kill) and dilutes the 6f
+# leader (7f 0.43 vs 0.53). Co-movement sign regime closed as a feature)
+uv run python -m corr_race run
+
+# Compound race (pre-registered; PASSED 2026-08-01 vs null but BELOW its 6f
+# parent (0.521 vs 0.528) — veto double-counts once rate vol is in the HMM.
+# 6f alone leads; don't stack the veto on rate-aware regime models)
+uv run python -m compound_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered race
 uv run python -m episodic run                     # analogs for the latest close
