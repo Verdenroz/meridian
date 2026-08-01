@@ -293,6 +293,22 @@ not decided here.
   **Status (2026-07-31): passed for 8-K filings only** (see §10 step 6) — pipeline
   investment proceeds scoped to filing-event scoring at short horizons; news-volume
   features remain shelved unless content-scored variants pass this same gate.
+  **Status (2026-08-01): the content-scored variant passed** (`python/tone_study/`,
+  pre-registered; FinBERT tone over the FNSPID corpus via the legacy sentiment cache,
+  1.41M headlines, zero new inference). Both legs clear at the 5-day horizon:
+  negative-tone days (≥3 headlines, mean ≤ −0.3; n=596) beat a *matched news-active
+  neutral control* on forward-vol uplift (+6.5% median, p=0.0078) — while beating the
+  plain baseline only weakly (+4.7%, p=0.035), i.e. the elevation is content, not
+  volume, and neutral news-active days sit *below* baseline; market-wide negative tone
+  rank-predicts SPY 5d residual vol (spearman 0.128, p≈1e-14, n=3,550 days,
+  2009–2023). Same fingerprint as 8-Ks: signal gone by 21d (uplift turns negative) —
+  tone belongs at short horizons, beside the filing-occurrence flag, never as a slow
+  regime feature. Unlocked, each behind its own pre-registered race before touching
+  allocation: per-name negative-tone intensity as a short-horizon risk feature, and
+  market tone as a break-glass/monitoring input. Caveats pre-registered: FNSPID
+  publisher timestamps (next-close availability convention), overlapping windows make
+  p optimistic, 2019-era FinBERT scoring older text; the corpus ends 2023-12 — live
+  continuation must come from the feeds archive scored by the same versioned scorer.
 
 ---
 

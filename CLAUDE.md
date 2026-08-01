@@ -135,10 +135,16 @@ uv run python -m quality_race run
 # turnover bands don't move VIX sizing off 0.41 vs null 0.49; VIX branch closed)
 uv run python -m vrp_race run
 
-# Deep-history 8-K occurrence race (pre-registered 2026-08-01; full per-CIK SEC
-# histories, 15-name panel, OOS 2004+ — the high-power second look at the held
-# occurrence gate; frozen mechanics, never retune)
+# Deep-history 8-K occurrence race (pre-registered; FAILED 2026-08-01 at high
+# power — OOS 2004+, 15 names, 1242 active days: brake loses, Sharpe 0.633 vs
+# 0.666, signal spearman 0.011. The original held race's monthly re-race stands)
 uv run python -m deep_eightk fetch && uv run python -m deep_eightk run
+
+# Tone study (pre-registered; PASSED 2026-08-01 — FinBERT negative-tone days beat
+# a matched news-active control +6.5% p=0.008; market tone spearman 0.128 on SPY
+# 5d residual vol. Content, not volume; short-horizon only, gone by 21d. Unlocks
+# tone features via their own future races — criteria frozen, don't retune)
+uv run python -m tone_study run
 
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered race
