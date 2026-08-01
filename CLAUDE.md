@@ -182,6 +182,23 @@ uv run python -m compound_race run
 # of any candidate → held, new leading candidate, in rerace + shadow)
 uv run python -m nstate_race run
 
+# Four-state race (pre-registered; FAILED 2026-08-01 decisively — 0.438 vs
+# null 0.491, maxdd 31%. Granularity curve peaks at 3 states (0.528/0.595/
+# 0.438); n-scanning closed, learned regime challengers are the next axis)
+uv run python -m nstate4_race run
+
+# Deep filing-tone study (pre-registered; fetch SEC accession index, FinBERT-
+# score 8-K text on the RTX 3090 into the standing sentiment cache, then run.
+# Content-at-high-power: the untested cell after severity FAIL + occurrence
+# FAIL + headline-content PASS)
+#   uv run python -m filing_tone fetch && uv run python -m filing_tone status
+#   uv run --with torch --with transformers python -m filing_tone score
+uv run python -m filing_tone run
+
+# Topic-salience race (pre-registered; first slow news-derived regime feature:
+# inflation/rates anchor cosine over 1.13M cached embeddings, 21d mean, z)
+uv run python -m salience_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered race
 uv run python -m episodic run                     # analogs for the latest close
