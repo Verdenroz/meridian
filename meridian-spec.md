@@ -309,6 +309,19 @@ not decided here.
   publisher timestamps (next-close availability convention), overlapping windows make
   p optimistic, 2019-era FinBERT scoring older text; the corpus ends 2023-12 — live
   continuation must come from the feeds archive scored by the same versioned scorer.
+  **Status (2026-08-01, later): the tone-brake race FAILED** (`python/tone_race/`,
+  pre-registered). Market-wide negative-tone burst brake (frozen brake family: z ≥ 2,
+  scale 0.5, 5 sessions) on the null vol-target, OOS 2010-04-30 → 2023-12-18 after
+  costs: Sharpe 0.786 vs null 0.803, and max drawdown *worse* (0.206 vs 0.189), so
+  route (b) dies at the tail bound; the tone∪credit compound brake is worse still
+  (0.760). The signal itself is the strongest diagnostic of any race — spearman
+  +0.144 (p≈0) of the negative-tone z on SPY 5d residual vol — which sharpens the
+  cross-race lesson: every binary brake on the null has now failed (8-K, credit,
+  tone) because EWMA sizing already de-levers through the same episodes; braking the
+  rebound days makes tails worse, not better. Orthogonal channels have only ever
+  added value through the regime model (credit 4f→5f). Tone's market-level defense
+  deployment is closed; remaining unlocked paths are per-name sleeve sizing (blocked
+  on the sleeve engine) and break-glass/monitoring enrichment (advisory, no race).
 
 ---
 

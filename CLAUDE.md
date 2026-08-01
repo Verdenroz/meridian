@@ -146,6 +146,13 @@ uv run python -m deep_eightk fetch && uv run python -m deep_eightk run
 # tone features via their own future races — criteria frozen, don't retune)
 uv run python -m tone_study run
 
+# Tone-brake race (pre-registered; FAILED 2026-08-01 — the market-tone burst
+# brake loses to the null (0.786 vs 0.803) with a *worse* tail, despite the
+# strongest signal diagnostic yet (spearman 0.144). Third brake failure in a
+# row: brakes on the null are a dead deployment family; orthogonal channels
+# only add value as regime features. Tone market-defense closed)
+uv run python -m tone_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered race
 uv run python -m episodic run                     # analogs for the latest close
