@@ -37,6 +37,11 @@ def make_store(tmp_path, dates):
     for name, value in (("VIXCLS", 20.0), ("T10Y3M", 1.5), ("BAA10Y", 2.0)):
         rows = [{"date": d, "value": value} for d in dates]
         write_snapshot(tmp_path, "macro", name, {"rows": rows})
+    # DGS10 must wiggle: a constant yield gives zero rate vol → log(-inf).
+    write_snapshot(
+        tmp_path, "macro", "DGS10",
+        {"rows": [{"date": d, "value": 4.0 + 0.05 * (i % 7)} for i, d in enumerate(dates)]},
+    )
     write_snapshot(
         tmp_path, "macro", "treasury_yields",
         {"rows": [{"date": d, "y3M": 3.0} for d in dates]},

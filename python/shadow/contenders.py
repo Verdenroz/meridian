@@ -31,9 +31,9 @@ from spine.strategy import TunedSpineStrategy
 
 def build_contenders(panel: Panel, store_dir: Path) -> dict[str, object]:
     features5 = build_features5(panel, store_dir)
-    features6 = np.column_stack(
-        [features5, rate_vol_feature(store_dir, panel.dates)]
-    )
+    ratevol = rate_vol_feature(store_dir, panel.dates)
+    features5r = np.column_stack([features5[:, :4], ratevol])
+    features6 = np.column_stack([features5, ratevol])
     active = widening_brake(credit_spread_series(store_dir, panel.dates))
     veto = {"TLT": rate_veto_series(store_dir, panel.dates)}
     return {
@@ -41,8 +41,14 @@ def build_contenders(panel: Panel, store_dir: Path) -> dict[str, object]:
         "credit_brake": BrakeVolTarget("SPY", active, CREDIT_GATE["brake_scale"]),
         "spine5f_credit": TunedSpineStrategy(panel, features5),
         # Added 2026-08-01 with the rate/hedge race passes (held candidates).
+        # spine5f_rate logs the parsimonious book: credit's marginal next to
+        # rate vol bootstraps to nothing, so its seat is adjudicated live.
         "spine6f_rate": TunedSpineStrategy(panel, features6),
+        "spine5f_rate": TunedSpineStrategy(panel, features5r),
         "spine5fc_veto": TunedSpineStrategy(panel, features5, safe_veto=veto),
+        # Added 2026-08-01 with the regime-granularity pass (largest margin
+        # yet; held). Three states separate stress kinds — see nstate_race.
+        "spine6f_3state": TunedSpineStrategy(panel, features6, n_states=3),
     }
 
 

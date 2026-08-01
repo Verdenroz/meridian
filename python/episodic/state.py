@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 from harness.panel import Panel
+from rate_race.race import rate_vol_feature
 from spine.correlation import rolling_correlation
 from spine.features import _ffill_series, _macro_by_date, build_features
 
@@ -26,6 +27,9 @@ STATE_FEATURES = (
     "drawdown",
     "credit_spread",
     "mean_pairwise_corr",
+    # Added 2026-08-01 with the rate-vol race pass: bond-led stress (2022)
+    # is invisible to the six above; analogs should distinguish it.
+    "log_rate_vol",
 )
 CORR_WINDOW = 60
 
@@ -47,8 +51,9 @@ def _mean_pairwise_corr(panel: Panel) -> np.ndarray:
 
 
 def build_state_matrix(panel: Panel, store_dir: Path) -> np.ndarray:
-    """n_days × 6 matrix aligned to panel.dates; NaN rows until warm-up."""
+    """n_days × 7 matrix aligned to panel.dates; NaN rows until warm-up."""
     base = build_features(panel, store_dir)
     spread = _ffill_series(panel.dates, _macro_by_date(store_dir, "BAA10Y", "value"))
     corr = _mean_pairwise_corr(panel)
-    return np.column_stack([base, spread, corr])
+    ratevol = rate_vol_feature(store_dir, panel.dates)
+    return np.column_stack([base, spread, corr, ratevol])

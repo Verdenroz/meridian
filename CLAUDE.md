@@ -175,6 +175,13 @@ uv run python -m corr_race run
 # 6f alone leads; don't stack the veto on rate-aware regime models)
 uv run python -m compound_race run
 
+# Regime-granularity race (pre-registered; PASSED 2026-08-01 route (a) — the
+# largest margin yet: 3-state HMM on 6f, Sharpe 0.595 vs null 0.491 (2-state
+# 0.528) at half the null's drawdown. Derived from the disjoint-episode
+# diagnostic: stress comes in kinds. Bootstrap P(≤0)=0.15, strongest evidence
+# of any candidate → held, new leading candidate, in rerace + shadow)
+uv run python -m nstate_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered race
 uv run python -m episodic run                     # analogs for the latest close

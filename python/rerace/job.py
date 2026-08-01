@@ -20,6 +20,7 @@ from eightk_race.race import run_race as run_eightk_race
 from event_study.events import fetch_filings
 from harness.racing import plain as _plain
 from hedge_race.race import run_race as run_hedge_race
+from nstate_race.race import run_race as run_nstate_race
 from rate_race.race import run_race as run_rate_race
 from shadow.job import refresh
 from shadow.log import append_decision, load_decisions
@@ -32,6 +33,7 @@ RACES = {
     "rate_race": run_rate_race,
     "hedge_race": run_hedge_race,
     "compound_race": run_compound_race,
+    "nstate_race": run_nstate_race,
 }
 
 
