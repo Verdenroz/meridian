@@ -16,6 +16,8 @@ data/*
 !data/shadow/
 # Monthly re-race verdicts on the held gates — the fluke-or-signal trail
 !data/races/
+# Break-glass alerts are point-in-time evidence — not rebuildable, ever
+!data/breakglass/
 checkpoints/
 logs/
 reports/

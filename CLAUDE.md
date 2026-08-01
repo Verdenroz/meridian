@@ -57,12 +57,17 @@ The repo has been rebuilt around the charter. Current inventory:
   long-only/unlevered guardrails in the engine, lookahead-proof `HistoryView`) and the null
   baselines (SPY buy-hold, SPY 15% vol-target). Every component ships only by beating the
   null in this engine.
-- **Being repurposed:** Rust `src/` (DataBus) becomes the live market/event poller for
-  daily decisions and break-glass monitoring — no longer a training-corpus builder.
+- **Live, new core:** Rust `src/` — `meridian-bus`, the live market-hours poller and
+  break-glass monitor (§3.5/§4.5): quote + intraday-bar sweeps, calibrated price/volume
+  severity rules (LLM-free triggers), SEC 8-K feed as context. Heartbeat journal in
+  `logs/bus/`; alerts append to git-tracked, append-only `data/breakglass/alerts.jsonl` —
+  advisory only until execution (step 10) exists. Trigger thresholds are calibrated to the
+  §4.5 base rate (~2 break-glass episodes/yr on 1993–2026 SPY); don't nudge them casually.
 - **Legacy — do not extend:** the prior v4 training stack is archived under `legacy/`
   (old `python/` packages, `c/`, FDA/TCP/pretraining pipelines, the training Makefile,
-  colab notebooks, the v4 README). It is reference-only. Don't build on it, don't "fix"
-  it, don't assume its Makefile targets are the way to run new work.
+  colab notebooks, the v4 README, and the old 12k-line Rust training-corpus DataBus in
+  `legacy/databus-v4/`). It is reference-only. Don't build on it, don't "fix" it, don't
+  assume its Makefile targets are the way to run new work.
 
 New work goes in fresh packages under `python/` (small focused modules), driven by direct
 module invocation — `PYTHONPATH=python python -m <package> ...` from the repo root.
@@ -142,6 +147,12 @@ uv run python -m rerace status            # verdict history
 # it is not a performance gate)
 uv run python -m behavior_match criteria  # print the frozen pre-registration
 uv run python -m behavior_match run       # evaluate the closed shadow window
+
+# Live poller + break-glass monitor (Rust; runs on the appliance during market hours)
+cargo run --release --bin meridian-bus -- live     # persistent poll loop
+cargo run --bin meridian-bus -- once               # one cycle, print snapshot
+cargo run --bin meridian-bus -- status             # alert + journal summary
+cargo test                                         # severity/profile unit tests
 ```
 
 Testing philosophy: correctness is validated primarily through the walk-forward harness,

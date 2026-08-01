@@ -1,58 +1,27 @@
 [package]
 name = "meridian"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
-# DataBus dependencies (Section 6.1 of meridian-spec.md)
-#
-# All finance-query feature flags enabled:
-#   dataframe   — polars integration for batch data processing
-#   indicators  — full 42-indicator suite used in Block 2 (Section 6.2)
-#   backtesting — rayon-parallel backtesting engine (Section 12)
-#   fred        — treasury_yields() + series() for yield curve and macro (Section 6.3)
-#   crypto      — crypto::coin() / coins() for BTC, ETH, market cap (Section 6.3)
-#   rss         — feeds::fetch_all() across 31 RSS sources (Section 6.5)
-#   risk        — ticker.risk() for Block 5 risk analytics (Section 6.2)
+# Live poller only (spec §3.5): quotes, intraday bars, and feed polling during
+# market hours for daily decision inputs and break-glass monitoring (§4.5).
+# The former training-corpus builder lives, reference-only, in legacy/databus-v4/.
 
-# Dual crate: `lib` for PyO3 extension module, `bin` for the DataBus CLI.
 [lib]
 name = "meridian"
-crate-type = ["cdylib", "lib"]
 
 [[bin]]
 name = "meridian-bus"
 path = "src/main.rs"
 
 [dependencies]
-finance-query = { version = "=2.6.1", features = [
-    "dataframe",
-    "indicators",
-    "backtesting",
-    "fred",
-    "crypto",
-    "rss",
-    "risk",
-] }
-pyo3          = { version = "0.24", features = ["extension-module"], optional = true }
-numpy         = { version = "0.24", optional = true }
-tokio         = { version = "1",    features = ["full"] }
-serde         = { version = "1",    features = ["derive"] }
+finance-query = { version = "=2.6.1" }
+tokio         = { version = "1", features = ["rt-multi-thread", "macros", "signal", "time"] }
+reqwest       = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+serde         = { version = "1", features = ["derive"] }
 serde_json    = "1.0"
 anyhow        = "1.0"
-chrono        = { version = "0.4",  features = ["serde"] }
-clap          = { version = "4",    features = ["derive"] }
+chrono        = { version = "0.4", features = ["serde"] }
+clap          = { version = "4", features = ["derive"] }
 tracing       = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-dashmap       = "6"
-bincode       = "1"
-parking_lot   = "0.12"
-tokio-stream  = "0.1"
-reqwest       = { version = "0.13", default-features = false, features = ["rustls", "gzip", "json"] }
-sha2          = "0.10"
-
-[features]
-default = ["python"]
-python  = ["dep:pyo3", "dep:numpy"]
-
-[dev-dependencies]
-dotenvy = "0.15"

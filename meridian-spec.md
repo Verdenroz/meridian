@@ -230,6 +230,19 @@ The Rust DataBus (`src/`) is repurposed as the live feed: quotes, intraday bars,
 polling during market hours for the daily decision inputs and break-glass monitoring. Its
 former role as training-corpus builder is retired.
 
+**Status (2026-08-01): implemented.** `meridian-bus` (`src/`, ~1k lines replacing the 12k-line
+training stack, which is archived reference-only in `legacy/databus-v4/`) sweeps quotes +
+today's 5m bars each minute in-session, evaluates the §4.5 severity rules against daily
+baselines (EWMA(0.94) vol, 20-day volume, monthly intraday volume profile), and journals
+every cycle (heartbeat-style, `logs/bus/`) plus a `data/bus/latest.json` snapshot. Alerts
+append to git-tracked `data/breakglass/alerts.jsonl` — advisory records until §10 step 10
+exists. Trigger thresholds were calibrated 2026-08-01 on SPY 1993–2026 EOD history to the
+§4.5 base rate: watch union ≈4 episodes/yr, break-glass union
+(ret_z≥3.5 | gap_z≥2.5 | ret_z≥3 & vol_ratio≥2.5) ≈1.9 episodes/yr. Triggers are
+price/volume-only (LLM-free per §4.5); the SEC 8-K feed is polled as context recorded on
+alerts, never a trigger (consistent with the held occurrence-flag race and the failed score
+study). One alert per (session, level), escalation allowed, restart-safe via the journal.
+
 ---
 
 ## 4. Risk engine (classical spine)
