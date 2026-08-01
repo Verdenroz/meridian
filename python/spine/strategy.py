@@ -83,6 +83,7 @@ class SpineStrategy:
         n_states: int = 2,
         target_vol: float = TARGET_VOL,
         band: float = REBALANCE_BAND,
+        safe_veto: dict[str, np.ndarray] | None = None,
     ) -> None:
         self.panel = panel
         self.features = features
@@ -90,6 +91,9 @@ class SpineStrategy:
         self.n_states = n_states
         self.target_vol = target_vol
         self.band = band
+        # Per-symbol boolean series: True bars the symbol from the defensive
+        # sleeve that day even if its trailing correlation qualifies it.
+        self.safe_veto = safe_veto or {}
         self._fitted = fitted
 
         returns = {
@@ -151,7 +155,11 @@ class SpineStrategy:
         vol_weight = min(1.0, self.target_vol / float(vol))
         equity = self.config.equity_weight(p_stress, vol_weight)
         safe = {
-            s: bool(np.isfinite(c[t]) and c[t] < 0.0)
+            s: bool(
+                np.isfinite(c[t])
+                and c[t] < 0.0
+                and not (s in self.safe_veto and self.safe_veto[s][t])
+            )
             for s, c in self._safe_corr.items()
         }
         target = allocate(equity, safe)
@@ -177,11 +185,13 @@ class TunedSpineStrategy:
         features: np.ndarray,
         candidates: tuple[AllocatorConfig, ...] = TUNER_CANDIDATES,
         n_states: int = 2,
+        safe_veto: dict[str, np.ndarray] | None = None,
     ) -> None:
         self.panel = panel
         self.features = features
         self.candidates = candidates
         self.n_states = n_states
+        self.safe_veto = safe_veto
         self.chosen: AllocatorConfig | None = None
         self._inner: SpineStrategy | None = None
 
@@ -201,7 +211,11 @@ class TunedSpineStrategy:
         best_score = -np.inf
         for config in self.candidates:
             candidate = SpineStrategy(
-                self.panel, self.features, config=config, fitted=fitted
+                self.panel,
+                self.features,
+                config=config,
+                fitted=fitted,
+                safe_veto=self.safe_veto,
             )
             result = run_backtest(self.panel, candidate, start=eval_start, end=t)
             score = self._train_sharpe(result)
@@ -209,7 +223,11 @@ class TunedSpineStrategy:
                 best_score, self.chosen = score, config
         assert self.chosen is not None
         self._inner = SpineStrategy(
-            self.panel, self.features, config=self.chosen, fitted=fitted
+            self.panel,
+            self.features,
+            config=self.chosen,
+            fitted=fitted,
+            safe_veto=self.safe_veto,
         )
         self._inner.fit(view)
 

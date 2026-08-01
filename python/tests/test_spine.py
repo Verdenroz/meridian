@@ -192,6 +192,49 @@ class TestStrategyInEngine:
         assert strategy.chosen in strategy.candidates
         assert len(result["returns"]) == panel.n_days - 1 - 450
 
+    def make_hedged_panel(self, seed=3):
+        """Regime panel plus a hedge asset negatively correlated with SPY."""
+        rng = np.random.default_rng(seed)
+        n = 700
+        vols = np.concatenate([np.full(400, 0.006), np.full(300, 0.03)])
+        spy = rng.normal(0.0003, vols)
+        tlt = -0.8 * spy + rng.normal(0.0, 0.002, n)
+        dates = [f"2020-{1 + i // 28:02d}-{1 + i % 28:02d}" for i in range(n)]
+        panel = Panel(
+            dates,
+            {
+                "SPY": list(100.0 * np.cumprod(1.0 + spy)),
+                "TLT": list(100.0 * np.cumprod(1.0 + tlt)),
+            },
+            [2.52] * n,
+        )
+        returns = np.array([np.nan if r is None else r for r in panel.returns["SPY"]])
+        vol = ewma_vol_series(returns)
+        with np.errstate(invalid="ignore"):
+            features = np.column_stack(
+                [np.log(vol), np.log(vol * 100), np.full(n, 1.0), np.zeros(n)]
+            )
+        return panel, features
+
+    def test_safe_veto_bars_hedge_from_defense(self):
+        panel, features = self.make_hedged_panel()
+        vetoed = SpineStrategy(
+            panel, features, safe_veto={"TLT": np.ones(panel.n_days, dtype=bool)}
+        )
+        result = run_backtest(
+            panel, vetoed, start=450, cost_bps={"SPY": 1.0, "TLT": 1.0}
+        )
+        # Without the veto the stressed book holds the qualifying hedge...
+        base_result = run_backtest(
+            panel,
+            SpineStrategy(panel, features),
+            start=450,
+            cost_bps={"SPY": 1.0, "TLT": 1.0},
+        )
+        assert base_result["final_weights"].get("TLT", 0.0) > 0.0
+        # ...and the veto removes it while leaving the rule otherwise intact.
+        assert result["final_weights"].get("TLT", 0.0) == 0.0
+
     def test_tuner_is_deterministic(self):
         panel, features = self.make_regime_panel()
         a = TunedSpineStrategy(panel, features)
