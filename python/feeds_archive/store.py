@@ -42,9 +42,9 @@ def _day_files(jsonl_dir: Path, limit_days: int | None = None) -> list[Path]:
     return files[-limit_days:] if limit_days else files
 
 
-def load_seen_ids(jsonl_dir: Path) -> set[str]:
+def load_seen_ids(jsonl_dir: Path, lookback_days: int = DEDUPE_LOOKBACK_DAYS) -> set[str]:
     seen: set[str] = set()
-    for path in _day_files(jsonl_dir, DEDUPE_LOOKBACK_DAYS):
+    for path in _day_files(jsonl_dir, lookback_days):
         with path.open() as fh:
             for line in fh:
                 try:

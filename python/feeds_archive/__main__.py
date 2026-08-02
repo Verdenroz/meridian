@@ -10,11 +10,27 @@ import time
 from pathlib import Path
 
 from . import DEFAULT_BASE_URL, DEFAULT_SOURCES
-from .fetch import fetch_all
+from .fetch import fetch_all, fetch_symbols
 from .store import append_heartbeat, append_rows, build_db, load_seen_ids
 
 DEFAULT_JSONL_DIR = Path("archive/feeds")
 DEFAULT_DB = Path("data/feeds_archive.db")
+DEFAULT_PERNAME_DIR = Path("archive/pername")
+DEFAULT_PERNAME_UNIVERSE = Path("deploy/pername-universe.txt")
+# Per-symbol feeds return the ~25 newest items regardless of age, so sleepy
+# names span weeks; the dedupe window must be far longer than the market
+# sweep's hours-scale rollover.
+PERNAME_DEDUPE_LOOKBACK_DAYS = 60
+# Upstream admits ~150 requests per multi-minute window, then 404s until a
+# ~90s cooldown (request spacing alone does not help): sweep in chunks under
+# the budget with a cooldown between them, then re-sweep any leftovers so
+# late-alphabet names are never systematically under-covered.
+PERNAME_REQUEST_PAUSE = 1.0
+PERNAME_CHUNK_SIZE = 120
+# Recovery is ~90s in isolation but marginal right after a full chunk;
+# 180s keeps retry rounds out of the still-hot window.
+PERNAME_COOLDOWN = 180
+PERNAME_RETRY_ROUNDS = 3
 
 
 def _read_symbols(path: str | None) -> tuple[str, ...]:
@@ -24,12 +40,7 @@ def _read_symbols(path: str | None) -> tuple[str, ...]:
     return tuple(s.strip().upper() for s in lines if s.strip() and not s.startswith("#"))
 
 
-def run_fetch(args: argparse.Namespace) -> int:
-    jsonl_dir = Path(args.jsonl_dir)
-    seen = load_seen_ids(jsonl_dir)
-    rows, stats = fetch_all(
-        args.base_url, tuple(args.sources.split(",")), _read_symbols(args.symbols_file)
-    )
+def _archive_new(jsonl_dir: Path, seen: set[str], rows: list[dict], stats: dict) -> int:
     fresh_by_id = {r["id"]: r for r in rows if r["id"] not in seen}
     fresh = sorted(fresh_by_id.values(), key=lambda r: r["id"])
     if fresh:
@@ -43,6 +54,50 @@ def run_fetch(args: argparse.Namespace) -> int:
         print(json.dumps(stats["errors"], indent=2), file=sys.stderr)
     # Errors are non-fatal by design; a partial sweep is still worth committing.
     return 0
+
+
+def run_fetch(args: argparse.Namespace) -> int:
+    jsonl_dir = Path(args.jsonl_dir)
+    seen = load_seen_ids(jsonl_dir)
+    rows, stats = fetch_all(
+        args.base_url, tuple(args.sources.split(",")), _read_symbols(args.symbols_file)
+    )
+    return _archive_new(jsonl_dir, seen, rows, stats)
+
+
+def _chunked_sweep(base_url: str, symbols: tuple[str, ...]) -> tuple[list[dict], dict]:
+    rows: list[dict] = []
+    stats: dict = {"fetched": {}, "errors": {}}
+    for start in range(0, len(symbols), PERNAME_CHUNK_SIZE):
+        if start:
+            time.sleep(PERNAME_COOLDOWN)
+        chunk_rows, chunk_stats = fetch_symbols(
+            base_url, symbols[start : start + PERNAME_CHUNK_SIZE], PERNAME_REQUEST_PAUSE
+        )
+        rows.extend(chunk_rows)
+        stats["fetched"].update(chunk_stats["fetched"])
+        stats["errors"].update(chunk_stats["errors"])
+    return rows, stats
+
+
+def run_fetch_pername(args: argparse.Namespace) -> int:
+    symbols = _read_symbols(args.symbols_file)
+    if not symbols:
+        print(f"no symbols in {args.symbols_file}", file=sys.stderr)
+        return 1
+    jsonl_dir = Path(args.dir)
+    seen = load_seen_ids(jsonl_dir, PERNAME_DEDUPE_LOOKBACK_DAYS)
+    rows, stats = _chunked_sweep(args.base_url, symbols)
+    for _ in range(PERNAME_RETRY_ROUNDS):
+        failed = tuple(k.split(":", 1)[1] for k in stats["errors"])
+        if not failed:
+            break
+        time.sleep(PERNAME_COOLDOWN)
+        retry_rows, retry_stats = _chunked_sweep(args.base_url, failed)
+        rows.extend(retry_rows)
+        stats["fetched"].update(retry_stats["fetched"])
+        stats["errors"] = retry_stats["errors"]
+    return _archive_new(jsonl_dir, seen, rows, stats)
 
 
 def run_loop(args: argparse.Namespace) -> int:
@@ -86,6 +141,13 @@ def main() -> int:
     p_loop.add_argument("--db", default=str(DEFAULT_DB))
     p_fetch.set_defaults(func=run_fetch)
     p_loop.set_defaults(func=run_loop)
+
+    p_pn = sub.add_parser(
+        "fetch-pername", help="daily per-name news sweep into its own archive dir"
+    )
+    p_pn.add_argument("--dir", default=str(DEFAULT_PERNAME_DIR))
+    p_pn.add_argument("--symbols-file", default=str(DEFAULT_PERNAME_UNIVERSE))
+    p_pn.set_defaults(func=run_fetch_pername)
 
     p_db = sub.add_parser("build-db", help="compile JSONL into the SQLite index")
     p_db.add_argument("--db", default=str(DEFAULT_DB))

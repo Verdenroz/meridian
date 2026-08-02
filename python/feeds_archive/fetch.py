@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -50,7 +51,10 @@ def _item_row(kind: str, source: str, symbol: str | None, payload: dict) -> dict
     # image churn upstream does not create phantom "revisions".
     content = f"{payload.get('title', '')}\x1f{payload.get('summary', '')}"
     content_hash = hashlib.sha256(content.encode()).hexdigest()[:16]
-    row_id = hashlib.sha256(f"{source}|{url}|{content_hash}".encode()).hexdigest()[:32]
+    # Symbol folds into the id so one article attributed to two names stays
+    # two rows; symbol-less kinds keep their pre-2026-08-02 ids unchanged.
+    key = f"{source}|{url}|{content_hash}" + (f"|{symbol}" if symbol else "")
+    row_id = hashlib.sha256(key.encode()).hexdigest()[:32]
     return {
         "id": row_id,
         "fetched_at": datetime.now(UTC).isoformat(timespec="seconds"),
@@ -86,7 +90,25 @@ def fetch_all(
     except (urllib.error.URLError, ValueError, TimeoutError) as exc:
         stats["errors"]["news"] = str(exc)[:200]
 
-    for sym in symbols:
+    sym_rows, sym_stats = fetch_symbols(base_url, symbols)
+    rows.extend(sym_rows)
+    stats["fetched"].update(sym_stats["fetched"])
+    stats["errors"].update(sym_stats["errors"])
+    return rows, stats
+
+
+def fetch_symbols(
+    base_url: str, symbols: tuple[str, ...], pause: float = 0.0
+) -> tuple[list[dict], dict]:
+    """Per-symbol news sweep only. Per-symbol failures are recorded in the
+    stats dict, never raised — a partial sweep still archives. `pause`
+    throttles between requests: bursts trip upstream's rate limit (~140
+    unthrottled requests before every response 404s for ~90s)."""
+    rows: list[dict] = []
+    stats: dict = {"fetched": {}, "errors": {}}
+    for i, sym in enumerate(symbols):
+        if pause and i:
+            time.sleep(pause)
         try:
             articles = _get_json(base_url, f"/v2/news/{urllib.parse.quote(sym)}?count=25")
             stats["fetched"][f"news:{sym}"] = len(articles)
@@ -95,5 +117,4 @@ def fetch_all(
             )
         except (urllib.error.URLError, ValueError, TimeoutError) as exc:
             stats["errors"][f"news:{sym}"] = str(exc)[:200]
-
     return rows, stats

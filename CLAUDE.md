@@ -50,6 +50,10 @@ The repo has been rebuilt around the charter. Current inventory:
   (`fetch` / `loop` / `build-db` / `status`), stdlib-only. Runs via
   `.github/workflows/archive-feeds.yml` (10-min cron) committing JSONL to `archive/feeds/`.
   The SQLite index (`data/feeds_archive.db`) is derived and rebuildable; JSONL is truth.
+  A daily `fetch-pername` sweep (`archive-pername-news.yml`) archives symbol-attributed
+  per-name news for the frozen 482-name FNSPID universe (`deploy/pername-universe.txt`)
+  into `archive/pername/` — same append-only contract, separate store; collection only,
+  no scoring, no features (those need their own pre-registrations).
 - **Live, new core:** `python/market_data/` — historical loaders (charts/dividends/splits,
   FRED, treasury curve) with a loud-failure adjClose cross-check; snapshots under
   `data/market/` (derived, rebuildable, `fetched_at`-stamped).
@@ -265,6 +269,15 @@ uv run --with torch python -m learned_race run
 uv run --with torch --with transformers python -m tone_live score
 uv run python -m tone_live status
 
+# Per-name news collection (shipped 2026-08-02; no gate — record-keeping
+# only, the point-in-time archive future per-name text work will need:
+# upstream has no historical news, so attribution must be collected live.
+# Daily CI cron (archive-pername-news.yml) sweeps the frozen 482-name
+# FNSPID universe into append-only archive/pername/ (60-day dedupe
+# window; symbol folds into row ids). Never edit rows or the universe
+uv run python -m feeds_archive fetch-pername
+uv run python -m feeds_archive status --jsonl-dir archive/pername
+
 # Representation-learning race (pre-registered; FAILED 2026-08-01 — second
 # neural challenger, unsupervised next-step GRU representation under the
 # unchanged 3-state HMM: 0.445 vs null 0.491 vs incumbent 0.630. Two
@@ -307,6 +320,14 @@ uv run python -m fxvol_race run
 # 0.466 vs 6f 0.528, leader 8f 0.450 < null with the most negative resolved
 # seat ever (−0.18, P(≤0)=0.999). Closed as a regime feature; in CI re-race)
 uv run python -m claims_race run
+
+# Per-name text race (pre-registered; PASSED 2026-08-02 on the letter via
+# the 9f rung only — negative-tone breadth is worse than empty: resolved
+# harmful alone (−0.27 vs null, P(≤0)=0.986), worst dilution ever on 6f
+# (−0.38), noise vs null stacked, negative seat on the 8f-turn-tone parent.
+# Per-name text closed in the regime-feature shape; LOCAL-ONLY (sentiment
+# + FNSPID caches), excluded from CI re-race)
+uv run python -m tonebreadth_race run
 
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered

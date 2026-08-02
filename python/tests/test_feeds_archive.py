@@ -1,6 +1,8 @@
 """Invariant tests for the feeds archive: dedupe, append-only storage,
 and index idempotency — the places where bugs silently poison data."""
 
+import hashlib
+import json
 from pathlib import Path
 
 from feeds_archive.fetch import _item_row, canonical_url
@@ -42,6 +44,41 @@ def test_append_is_append_only(tmp_path: Path) -> None:
     before = day_file.read_text()
     append_rows(tmp_path, second)
     assert day_file.read_text().startswith(before)
+
+
+def test_symbol_folds_into_row_id() -> None:
+    payload = {"title": "Apple event", "url": "https://a.b/apple"}
+    ids = {
+        _item_row("news_symbol", "cnbc", sym, payload)["id"]
+        for sym in ("AAPL", "MSFT", None)
+    }
+    assert len(ids) == 3
+
+
+def test_symbolless_row_id_matches_pre_pername_scheme() -> None:
+    # The live archive's ids must not churn: symbol-less rows keep the
+    # original source|url|content formula exactly.
+    payload = {"title": "Fed holds rates", "summary": "s", "url": "https://a.b/c"}
+    content_hash = hashlib.sha256(b"Fed holds rates\x1fs").hexdigest()[:16]
+    legacy = hashlib.sha256(f"cnbc|https://a.b/c|{content_hash}".encode()).hexdigest()[:32]
+    assert _item_row("news", "cnbc", None, payload)["id"] == legacy
+
+
+def test_load_seen_ids_lookback_window(tmp_path: Path) -> None:
+    old = tmp_path / "2020-01-01.jsonl"
+    old.write_text(json.dumps({"id": "old-id"}) + "\n")
+    new = tmp_path / "2026-01-01.jsonl"
+    new.write_text(json.dumps({"id": "new-id"}) + "\n")
+    assert load_seen_ids(tmp_path, 1) == {"new-id"}
+    assert load_seen_ids(tmp_path, 60) == {"old-id", "new-id"}
+
+
+def test_pername_universe_file_is_clean() -> None:
+    from feeds_archive.__main__ import DEFAULT_PERNAME_UNIVERSE, _read_symbols
+
+    symbols = _read_symbols(str(DEFAULT_PERNAME_UNIVERSE))
+    assert len(symbols) == len(set(symbols)) > 400
+    assert all(s == s.strip().upper() for s in symbols)
 
 
 def test_build_db_is_idempotent(tmp_path: Path) -> None:

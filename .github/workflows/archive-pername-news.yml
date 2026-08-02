@@ -1,0 +1,40 @@
+name: Archive per-name news
+
+on:
+  schedule:
+    # Daily; the sweep returns each name's ~25 newest items, so cadence
+    # only bounds attribution lag, never coverage.
+    - cron: "50 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: archive-pername-news
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Sweep per-name news and append new items
+        env:
+          PYTHONPATH: python
+        run: python3 -m feeds_archive fetch-pername
+
+      - name: Commit and push
+        run: |
+          git config user.name "pername-news-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add archive/pername
+          if git diff --cached --quiet; then
+            echo "no new items"
+            exit 0
+          fi
+          git commit -m "chore: archive per-name news $(date -u +%Y-%m-%dT%H:%MZ)"
+          # Retry once on race with a concurrent push
+          git push || (git pull --rebase && git push)
