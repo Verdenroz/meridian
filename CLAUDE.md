@@ -234,6 +234,20 @@ uv run python -m turnover_race run
 # alternatives. LOCAL-ONLY (embed cache), excluded from CI rerace)
 uv run python -m octet_race run
 
+# Overnight-gap race (pre-registered; PASSED 2026-08-01 on the letter but
+# NOT adopted — gap turbulence is redundant: 5f-gap ≈ 6f, 7f-gap dilutes,
+# and the 8f stack drags the leader (0.618 vs 0.630). Channel closed)
+uv run python -m gap_race run
+
+# Tone-feature race (pre-registered; PASSED 2026-08-01 — tone lands in the
+# regime-model shape the brake postmortem predicted: 8f-turn-tone 3-state
+# 0.851 vs null 0.803 AND above the 7f-turn leader 0.830 on the clipped
+# span; vs-null P(≤0)=0.0565 is the best-resolved margin yet. Held as the
+# clipped-span leader; 7f-turn 3-state keeps the full-span lead. LOCAL-ONLY
+# (sentiment cache; no CI rerace/shadow); tone is zero after 2024-01 until
+# feeds-archive headlines get FinBERT-scored)
+uv run python -m tonefeat_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
 # race. News analogs added 2026-08-01: per-day headline-embedding centroids;
