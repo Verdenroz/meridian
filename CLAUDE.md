@@ -273,6 +273,13 @@ uv run python -m tone_live status
 # architecture. Needs torch)
 uv run --with torch python -m replearn_race run
 
+# Range-vol race (pre-registered; PASSED 2026-08-01 on the letter, split
+# verdict, NOT adopted — Parkinson feature 0 lifts the feature-poor base
+# (4f-park 0.498 beats the null where 4f never did) but subtracts on the
+# leader (0.590 vs 0.630): estimator upgrades wash out once the context
+# channels are in. Feature 0 stays close-close EWMA)
+uv run python -m rangevol_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
 # race. News analogs added 2026-08-01: per-day headline-embedding centroids;
