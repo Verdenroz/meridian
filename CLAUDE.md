@@ -255,6 +255,14 @@ uv run python -m tonefeat_race run
 # learned axis stays open but needs a different objective shape. Needs torch)
 uv run --with torch python -m learned_race run
 
+# Live headline-tone scores (shipped 2026-08-01; no gate — the tone
+# channel's OOS clock). Daily CI cron (score-tone.yml) FinBERT-scores new
+# whitelisted financial-outlet archive headlines (~1,000/day) into
+# git-tracked, append-only data/tone_live/scores.jsonl — frozen contract:
+# never rescore, never edit rows; live z warms ~120 covered sessions
+uv run --with torch --with transformers python -m tone_live score
+uv run python -m tone_live status
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
 # race. News analogs added 2026-08-01: per-day headline-embedding centroids;
