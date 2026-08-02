@@ -248,6 +248,13 @@ uv run python -m gap_race run
 # feeds-archive headlines get FinBERT-scored)
 uv run python -m tonefeat_race run
 
+# Learned-regime race (pre-registered; FAILED 2026-08-01 decisively — the
+# first neural challenger (seeded deterministic GRU, forward-vol exceedance
+# objective, eGPU) posts 0.448 vs null 0.491 while the classical 3-state
+# incumbent scores 0.630 on identical features. §1.7's bar is real; the
+# learned axis stays open but needs a different objective shape. Needs torch)
+uv run --with torch python -m learned_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
 # race. News analogs added 2026-08-01: per-day headline-embedding centroids;
