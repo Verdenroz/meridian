@@ -227,6 +227,13 @@ uv run python -m temission_race run
 # shadow (spine7f_turn_3state) + monthly rerace)
 uv run python -m turnover_race run
 
+# Octet consolidation race (pre-registered; PASSED 2026-08-01 vs null on the
+# letter but the stack does NOT consolidate — 8f 3-state 0.880 sits below
+# both 7f parents (turn 0.893, sal 0.901) on the clipped span: turnover and
+# salience interfere, don't stack. 8f rejected; the two 7f books stay
+# alternatives. LOCAL-ONLY (embed cache), excluded from CI rerace)
+uv run python -m octet_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
 # race. News analogs added 2026-08-01: per-day headline-embedding centroids;
