@@ -280,6 +280,14 @@ uv run --with torch python -m replearn_race run
 # channels are in. Feature 0 stays close-close EWMA)
 uv run python -m rangevol_race run
 
+# Cross-asset race (pre-registered; PASSED 2026-08-01 route (a) on all
+# three challengers — first race on non-US data (5 country ETFs, 1996+):
+# cross-border stress z. Real information (7f-xa 0.585 is the best 2-state
+# book ever; vs-null P(≤0)=0.099) but it substitutes for the 3rd state —
+# on the leader it subtracts (8f 0.594 vs 0.630). Leader unchanged; in
+# monthly CI re-race to adjudicate the substitution on accruing OOS)
+uv run python -m xasset_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
 # race. News analogs added 2026-08-01: per-day headline-embedding centroids;

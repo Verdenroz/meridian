@@ -20,6 +20,7 @@ from eightk_race.race import run_race as run_eightk_race
 from event_study.events import fetch_filings
 from harness.racing import plain as _plain
 from hedge_race.race import run_race as run_hedge_race
+from market_data.pipeline import fetch_symbol
 from nstate_race.race import run_race as run_nstate_race
 from rate_race.race import run_race as run_rate_race
 from shadow.job import refresh
@@ -27,6 +28,8 @@ from shadow.log import append_decision, load_decisions
 from temission_race.race import run_race as run_temission_race
 from tonefeat_race.race import run_race as run_tonefeat_race
 from turnover_race.race import run_race as run_turnover_race
+from xasset_race.race import COUNTRY_ETFS
+from xasset_race.race import run_race as run_xasset_race
 
 DEFAULT_LOG_PATH = Path("data/races/reraces.jsonl")
 
@@ -42,6 +45,9 @@ RACES = {
     # CI-safe since 2026-08-01: the FNSPID market-tone aggregate is committed
     # (data/tone_race/), so the frozen clipped-span race re-runs monthly.
     "tonefeat_race": run_tonefeat_race,
+    # Adjudicates the substitution question: does the cross-border channel's
+    # 2-state value survive as OOS accrues, and does its leader seat stay negative?
+    "xasset_race": run_xasset_race,
 }
 
 
@@ -80,6 +86,8 @@ def run_reraces(
         refresh(base_url, store_dir)
         for symbol in INTENSITY_PANEL:
             fetch_filings(base_url, store_dir, symbol)
+        for symbol in COUNTRY_ETFS:
+            fetch_symbol(base_url, store_dir, symbol)
     fetched_at = datetime.now(UTC).isoformat(timespec="seconds")
     month = fetched_at[:7]
     already = logged_months(log_path)
