@@ -259,9 +259,19 @@ uv run --with torch python -m learned_race run
 # channel's OOS clock). Daily CI cron (score-tone.yml) FinBERT-scores new
 # whitelisted financial-outlet archive headlines (~1,000/day) into
 # git-tracked, append-only data/tone_live/scores.jsonl — frozen contract:
-# never rescore, never edit rows; live z warms ~120 covered sessions
+# never rescore, never edit rows; live z warms ~120 covered sessions.
+# Merged FNSPID+live series (frozen 2026-07-31 boundary) feeds the
+# spine8f_turn_tone_3state shadow contender; tonefeat_race is in CI rerace
 uv run --with torch --with transformers python -m tone_live score
 uv run python -m tone_live status
+
+# Representation-learning race (pre-registered; FAILED 2026-08-01 — second
+# neural challenger, unsupervised next-step GRU representation under the
+# unchanged 3-state HMM: 0.445 vs null 0.491 vs incumbent 0.630. Two
+# learned failures in opposite objective shapes: engineered channels are
+# not the bottleneck. Next learned registration needs new *data*, not new
+# architecture. Needs torch)
+uv run --with torch python -m replearn_race run
 
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
