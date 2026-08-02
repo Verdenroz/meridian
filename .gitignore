@@ -18,6 +18,9 @@ data/*
 !data/races/
 # Live headline-tone scores — append-only enrichment, the tone channel's OOS clock
 !data/tone_live/
+# FNSPID-era market-tone aggregate — derived from the 4.3GB local sentiment
+# cache, irreplaceable in CI; committing it un-locals the tone feature
+!data/tone_race/
 # Break-glass alerts are point-in-time evidence — not rebuildable, ever
 !data/breakglass/
 checkpoints/

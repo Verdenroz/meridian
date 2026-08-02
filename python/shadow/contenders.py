@@ -27,6 +27,7 @@ from harness.view import HistoryView
 from hedge_race.race import rate_veto_series
 from rate_race.race import rate_vol_feature
 from spine.strategy import TunedSpineStrategy
+from tone_live.live import merged_tone_feature
 from turnover_race.race import turnover_feature
 
 
@@ -56,6 +57,15 @@ def build_contenders(panel: Panel, store_dir: Path) -> dict[str, object]:
         # Added 2026-08-01 with the turnover-race pass: dollar-volume
         # intensity compounds on every parent; seat adjudicated vs 6f_3state.
         "spine7f_turn_3state": TunedSpineStrategy(panel, features7t, n_states=3),
+        # Added 2026-08-01 with the tone-feature pass (clipped-span leader).
+        # Live tone is zero until its causal z warms (~120 covered sessions),
+        # so early decisions track the 7f parent — logged anyway so the
+        # record starts now, on the merged FNSPID+archive series.
+        "spine8f_turn_tone_3state": TunedSpineStrategy(
+            panel,
+            np.column_stack([features7t, merged_tone_feature(panel.dates)]),
+            n_states=3,
+        ),
     }
 
 

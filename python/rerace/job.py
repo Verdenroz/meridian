@@ -25,6 +25,7 @@ from rate_race.race import run_race as run_rate_race
 from shadow.job import refresh
 from shadow.log import append_decision, load_decisions
 from temission_race.race import run_race as run_temission_race
+from tonefeat_race.race import run_race as run_tonefeat_race
 from turnover_race.race import run_race as run_turnover_race
 
 DEFAULT_LOG_PATH = Path("data/races/reraces.jsonl")
@@ -38,6 +39,9 @@ RACES = {
     "nstate_race": run_nstate_race,
     "turnover_race": run_turnover_race,
     "temission_race": run_temission_race,
+    # CI-safe since 2026-08-01: the FNSPID market-tone aggregate is committed
+    # (data/tone_race/), so the frozen clipped-span race re-runs monthly.
+    "tonefeat_race": run_tonefeat_race,
 }
 
 

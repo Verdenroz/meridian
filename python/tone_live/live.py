@@ -34,13 +34,23 @@ normal pre-registration discipline; this module only keeps the record.
 from __future__ import annotations
 
 import json
+from bisect import bisect_left
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 
+import numpy as np
 from filing_tone.score import MAX_CHARS, read_cached_tone, score_missing
 
-__all__ = ["SOURCE_WHITELIST", "STORE_PATH", "daily_tone", "score_new", "status"]
+__all__ = [
+    "SOURCE_WHITELIST",
+    "STORE_PATH",
+    "daily_tone",
+    "merged_daily_tone",
+    "merged_tone_feature",
+    "score_new",
+    "status",
+]
 
 ARCHIVE_DIR = Path("archive/feeds")
 STORE_PATH = Path("data/tone_live/scores.jsonl")
@@ -156,6 +166,46 @@ def daily_tone(store_path: Path = STORE_PATH) -> dict[str, tuple[int, float]]:
             box[0] += 1
             box[1] += float(row["tone"])
     return {d: (int(n), s / n) for d, (n, s) in totals.items() if n > 0}
+
+
+# Frozen corpus boundary: FNSPID aggregate strictly before this date, live
+# archive scores from it onward (the archive's first day). The corpora are
+# different headline populations; the causal z's trailing window absorbs the
+# level shift, and by the time the live z warms its baseline is purely live.
+LIVE_START = "2026-07-31"
+MIN_HEADLINES = 30  # inherited frozen from the tone race registration
+
+
+def merged_daily_tone(store_path: Path = STORE_PATH) -> dict[str, tuple[int, float]]:
+    """UTC date -> (count, mean tone): FNSPID era + live era, one series."""
+    from tone_race.race import market_daily_tone
+
+    merged = {d: v for d, v in market_daily_tone().items() if d < LIVE_START}
+    merged.update(
+        {d: v for d, v in daily_tone(store_path).items() if d >= LIVE_START}
+    )
+    return merged
+
+
+def merged_tone_feature(
+    dates: list[str], store_path: Path = STORE_PATH
+) -> np.ndarray:
+    """The tonefeat_race feature over the merged series: session-aligned
+    negative-tone causal z (constants inherited frozen), 0.0 where undefined."""
+    from tone_race.race import negative_tone_z
+
+    count = np.zeros(len(dates))
+    total = np.zeros(len(dates))
+    for date, (n, mean) in merged_daily_tone(store_path).items():
+        i = bisect_left(dates, date)
+        if i < len(dates):
+            count[i] += n
+            total[i] += n * mean
+    tone = np.full(len(dates), np.nan)
+    mask = count >= MIN_HEADLINES
+    tone[mask] = total[mask] / count[mask]
+    z = negative_tone_z(tone)
+    return np.where(np.isfinite(z), z, 0.0)
 
 
 def status(store_path: Path = STORE_PATH) -> dict:
