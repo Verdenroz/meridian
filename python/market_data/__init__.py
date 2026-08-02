@@ -19,7 +19,18 @@ DEFAULT_SYMBOLS = ("SPY", "TLT", "GLD", "BIL", "SH")
 # Baa-10Y credit spread — ICE BofA OAS series are truncated to ~3y upstream.
 # AAA10Y: Moody's Aaa-10Y, the low leg of the quality spread (quality_race).
 # DGS10: 10Y constant-maturity yield (1962+) — rate-vol channel (rate_race).
-DEFAULT_FRED_SERIES = ("VIXCLS", "T10Y3M", "BAA10Y", "AAA10Y", "DGS10")
+# DCOILWTICO: WTI spot (1986+) — oil-vol channel (oilvol_race). DEXJPUS (1971+)
+# and DEXUSEU (1999+): USD/JPY and USD/EUR — FX-vol channel (fxvol_race).
+DEFAULT_FRED_SERIES = (
+    "VIXCLS",
+    "T10Y3M",
+    "BAA10Y",
+    "AAA10Y",
+    "DGS10",
+    "DCOILWTICO",
+    "DEXJPUS",
+    "DEXUSEU",
+)
 
 __all__ = [
     "DEFAULT_BASE_URL",

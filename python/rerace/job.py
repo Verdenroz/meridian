@@ -18,10 +18,12 @@ from credit_race.race import run_race as run_credit_race
 from eightk_race.race import INTENSITY_PANEL
 from eightk_race.race import run_race as run_eightk_race
 from event_study.events import fetch_filings
+from fxvol_race.race import run_race as run_fxvol_race
 from harness.racing import plain as _plain
 from hedge_race.race import run_race as run_hedge_race
 from market_data.pipeline import fetch_symbol
 from nstate_race.race import run_race as run_nstate_race
+from oilvol_race.race import run_race as run_oilvol_race
 from rate_race.race import run_race as run_rate_race
 from shadow.job import refresh
 from shadow.log import append_decision, load_decisions
@@ -48,6 +50,10 @@ RACES = {
     # Adjudicates the substitution question: does the cross-border channel's
     # 2-state value survive as OOS accrues, and does its leader seat stay negative?
     "xasset_race": run_xasset_race,
+    # Same substitution question for the two 2026-08-02 channels (their FRED
+    # series are inside the default fetch, so both are CI-safe).
+    "oilvol_race": run_oilvol_race,
+    "fxvol_race": run_fxvol_race,
 }
 
 

@@ -288,6 +288,19 @@ uv run python -m rangevol_race run
 # monthly CI re-race to adjudicate the substitution on accruing OOS)
 uv run python -m xasset_race run
 
+# Oil-vol race (pre-registered; PASSED 2026-08-02 route (a) on all three
+# challengers but NOT adopted — strongest standalone channel yet (5f-oil
+# 0.526 ≈ 6f 0.528) yet zero seat on 6f and the first resolved-negative
+# leader seat (8f 0.561 vs 0.630, CI90 [−0.14,−0.002], P(≤0)=0.956).
+# Leader unchanged; in monthly CI re-race)
+uv run python -m oilvol_race run
+
+# FX-vol race (pre-registered; PASSED 2026-08-02 on the letter, channel
+# empty — 5f-fx placebo-killed, 7f-fx dilutes 6f, leader seat negative.
+# The isolated FX leg adds nothing beyond the country-ETF mixture.
+# Closed as a regime feature; in monthly CI re-race)
+uv run python -m fxvol_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
 # race. News analogs added 2026-08-01: per-day headline-embedding centroids;
