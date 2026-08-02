@@ -21,6 +21,8 @@ DEFAULT_SYMBOLS = ("SPY", "TLT", "GLD", "BIL", "SH")
 # DGS10: 10Y constant-maturity yield (1962+) — rate-vol channel (rate_race).
 # DCOILWTICO: WTI spot (1986+) — oil-vol channel (oilvol_race). DEXJPUS (1971+)
 # and DEXUSEU (1999+): USD/JPY and USD/EUR — FX-vol channel (fxvol_race).
+# ICNSA: weekly initial claims, NSA (1967+) — real-economy channel
+# (claims_race); NSA so retrospective seasonal-factor rewrites never leak in.
 DEFAULT_FRED_SERIES = (
     "VIXCLS",
     "T10Y3M",
@@ -30,6 +32,7 @@ DEFAULT_FRED_SERIES = (
     "DCOILWTICO",
     "DEXJPUS",
     "DEXUSEU",
+    "ICNSA",
 )
 
 __all__ = [

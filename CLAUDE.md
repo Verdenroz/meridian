@@ -301,6 +301,13 @@ uv run python -m oilvol_race run
 # Closed as a regime feature; in monthly CI re-race)
 uv run python -m fxvol_race run
 
+# Initial-claims race (pre-registered; PASSED 2026-08-02 on the letter via
+# the standalone rung only, +0.013 vs null = noise — first non-market data
+# kind (ICNSA yoy, NSA, Thursday-release lag). Stacked it dilutes: 7f-clm
+# 0.466 vs 6f 0.528, leader 8f 0.450 < null with the most negative resolved
+# seat ever (−0.18, P(≤0)=0.999). Closed as a regime feature; in CI re-race)
+uv run python -m claims_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
 # race. News analogs added 2026-08-01: per-day headline-embedding centroids;

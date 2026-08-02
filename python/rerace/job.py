@@ -13,6 +13,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
+from claims_race.race import run_race as run_claims_race
 from compound_race.race import run_race as run_compound_race
 from credit_race.race import run_race as run_credit_race
 from eightk_race.race import INTENSITY_PANEL
@@ -54,6 +55,9 @@ RACES = {
     # series are inside the default fetch, so both are CI-safe).
     "oilvol_race": run_oilvol_race,
     "fxvol_race": run_fxvol_race,
+    # Real-economy channel: only the standalone rung passed; the re-race
+    # adjudicates whether that thin margin is real as OOS accrues.
+    "claims_race": run_claims_race,
 }
 
 
