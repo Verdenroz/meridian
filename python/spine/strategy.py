@@ -84,11 +84,13 @@ class SpineStrategy:
         target_vol: float = TARGET_VOL,
         band: float = REBALANCE_BAND,
         safe_veto: dict[str, np.ndarray] | None = None,
+        hmm_cls: type[GaussianHMM] = GaussianHMM,
     ) -> None:
         self.panel = panel
         self.features = features
         self.config = config or AllocatorConfig()
         self.n_states = n_states
+        self.hmm_cls = hmm_cls
         self.target_vol = target_vol
         self.band = band
         # Per-symbol boolean series: True bars the symbol from the defensive
@@ -122,7 +124,7 @@ class SpineStrategy:
             raise ValueError("not enough finite feature rows to fit regime model")
         mu = train.mean(axis=0)
         sigma = np.maximum(train.std(axis=0), 1e-12)
-        hmm = GaussianHMM(self.n_states).fit((train - mu) / sigma)
+        hmm = self.hmm_cls(self.n_states).fit((train - mu) / sigma)
         return FittedRegime(hmm, mu, sigma)
 
     def fit(self, view: HistoryView) -> None:
@@ -186,11 +188,13 @@ class TunedSpineStrategy:
         candidates: tuple[AllocatorConfig, ...] = TUNER_CANDIDATES,
         n_states: int = 2,
         safe_veto: dict[str, np.ndarray] | None = None,
+        hmm_cls: type[GaussianHMM] = GaussianHMM,
     ) -> None:
         self.panel = panel
         self.features = features
         self.candidates = candidates
         self.n_states = n_states
+        self.hmm_cls = hmm_cls
         self.safe_veto = safe_veto
         self.chosen: AllocatorConfig | None = None
         self._inner: SpineStrategy | None = None
@@ -205,7 +209,7 @@ class TunedSpineStrategy:
     def fit(self, view: HistoryView) -> None:
         t = view.t
         fitted = SpineStrategy(
-            self.panel, self.features, n_states=self.n_states
+            self.panel, self.features, n_states=self.n_states, hmm_cls=self.hmm_cls
         ).fit_regime(t)
         eval_start = int(np.argmax(np.isfinite(self.features[: t + 1]).all(axis=1)))
         best_score = -np.inf

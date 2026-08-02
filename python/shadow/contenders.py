@@ -27,6 +27,7 @@ from harness.view import HistoryView
 from hedge_race.race import rate_veto_series
 from rate_race.race import rate_vol_feature
 from spine.strategy import TunedSpineStrategy
+from turnover_race.race import turnover_feature
 
 
 def build_contenders(panel: Panel, store_dir: Path) -> dict[str, object]:
@@ -34,6 +35,9 @@ def build_contenders(panel: Panel, store_dir: Path) -> dict[str, object]:
     ratevol = rate_vol_feature(store_dir, panel.dates)
     features5r = np.column_stack([features5[:, :4], ratevol])
     features6 = np.column_stack([features5, ratevol])
+    features7t = np.column_stack(
+        [features6, turnover_feature(store_dir, panel.dates)]
+    )
     active = widening_brake(credit_spread_series(store_dir, panel.dates))
     veto = {"TLT": rate_veto_series(store_dir, panel.dates)}
     return {
@@ -49,6 +53,9 @@ def build_contenders(panel: Panel, store_dir: Path) -> dict[str, object]:
         # Added 2026-08-01 with the regime-granularity pass (largest margin
         # yet; held). Three states separate stress kinds — see nstate_race.
         "spine6f_3state": TunedSpineStrategy(panel, features6, n_states=3),
+        # Added 2026-08-01 with the turnover-race pass: dollar-volume
+        # intensity compounds on every parent; seat adjudicated vs 6f_3state.
+        "spine7f_turn_3state": TunedSpineStrategy(panel, features7t, n_states=3),
     }
 
 

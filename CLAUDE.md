@@ -208,6 +208,25 @@ uv run python -m salience_race run
 # full-span leader; 7f 3-state is the salience-era variant, local-only)
 uv run python -m champion_race run
 
+# Sector-dispersion race (pre-registered; PASSED 2026-08-01 on the letter but
+# NOT adopted — alone it is placebo-killed, and it dilutes the 3-state leader
+# (0.503 vs 0.595, maxdd 41%): the 3rd state already extracts localization.
+# Channel closed; needs local sector charts, so excluded from CI rerace)
+uv run python -m dispersion_race run
+
+# Student-t emission race (pre-registered; PASSED 2026-08-01 vs null but the
+# emission family does not displace Gaussian — t5 3-state 0.547 < leader
+# 0.595: robust emissions down-weight the tail days the 3rd state feeds on.
+# First learned-regime challenger; Gaussian stands; in monthly rerace)
+uv run python -m temission_race run
+
+# Turnover race (pre-registered; PASSED 2026-08-01 route (a) across the board
+# — the NEW LEADING CANDIDATE: 7f-turn 3-state Sharpe 0.630 vs null 0.491 at
+# half the drawdown; dollar-volume z improves every parent it stacks on, and
+# the bootstrap is the best-resolved yet (vs null P(≤0)=0.088). Held; in
+# shadow (spine7f_turn_3state) + monthly rerace)
+uv run python -m turnover_race run
+
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
 # race. News analogs added 2026-08-01: per-day headline-embedding centroids;

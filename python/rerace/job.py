@@ -24,6 +24,8 @@ from nstate_race.race import run_race as run_nstate_race
 from rate_race.race import run_race as run_rate_race
 from shadow.job import refresh
 from shadow.log import append_decision, load_decisions
+from temission_race.race import run_race as run_temission_race
+from turnover_race.race import run_race as run_turnover_race
 
 DEFAULT_LOG_PATH = Path("data/races/reraces.jsonl")
 
@@ -34,6 +36,8 @@ RACES = {
     "hedge_race": run_hedge_race,
     "compound_race": run_compound_race,
     "nstate_race": run_nstate_race,
+    "turnover_race": run_turnover_race,
+    "temission_race": run_temission_race,
 }
 
 
