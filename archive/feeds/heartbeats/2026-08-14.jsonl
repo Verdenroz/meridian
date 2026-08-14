@@ -18,3 +18,4 @@
 {"new_items":28,"stats":{"errors":{},"fetched":{"feeds":596,"news":50}},"ts":"2026-08-14T20:15:25+00:00"}
 {"new_items":33,"stats":{"errors":{},"fetched":{"feeds":591,"news":50}},"ts":"2026-08-14T20:46:31+00:00"}
 {"new_items":25,"stats":{"errors":{},"fetched":{"feeds":592,"news":50}},"ts":"2026-08-14T21:03:52+00:00"}
+{"new_items":4,"stats":{"errors":{"feeds":"The read operation timed out"},"fetched":{"news":50}},"ts":"2026-08-14T21:35:17+00:00"}
