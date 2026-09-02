@@ -16,6 +16,7 @@ from execution.notify import alert
 from execution.orders import Account, OrderRequest, Position, Quote
 from execution.quotes import quote_from_payload
 from execution.targets import live_targets, plan_orders
+from execution.watchdog import paper_findings, shadow_findings
 from shadow.log import append_decision
 
 NOW = "2026-09-02T13:40:00+00:00"
@@ -374,3 +375,24 @@ class TestNotify:
     def test_failed_delivery_is_reported_not_raised(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("MERIDIAN_ALERT_WEBHOOK", "http://127.0.0.1:9/")
         assert alert("t", {}) is False
+
+
+class TestWatchdog:
+    def test_shadow_missing_last_session_is_a_finding(self, tmp_path: Path) -> None:
+        log = tmp_path / "decisions.jsonl"
+        append_decision(log, {"decision_date": "2026-08-31", "strategy": "null_voltarget"})
+        assert shadow_findings(log, "2026-08-31", ("null_voltarget",)) == []
+        findings = shadow_findings(log, "2026-09-01", ("null_voltarget", "other"))
+        assert len(findings) == 2 and "2026-09-01" in findings[0]
+
+    def test_paper_findings_follow_the_journal(self, tmp_path: Path) -> None:
+        store = PaperStore(tmp_path / "paper")
+        assert paper_findings(store, "2026-09-01") == []
+        store.save(PaperState.initial(1.0))
+        assert paper_findings(store, "2026-09-01") == ["paper: account open but no cycle ever logged"]
+        store.journal({"kind": "cycle", "decision_date": "2026-08-31"})
+        assert "not acted on" in paper_findings(store, "2026-09-01")[0]
+        store.journal({"kind": "rejection", "decision_date": "2026-09-01", "reason": "collar"})
+        assert paper_findings(store, "2026-09-01") == ["paper: rejection on 2026-09-01: collar"]
+        store.journal({"kind": "cycle", "decision_date": "2026-09-01"})
+        assert paper_findings(store, "2026-09-01") == []

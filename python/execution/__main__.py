@@ -3,6 +3,7 @@
     uv run python -m execution init --cash 10000   # open the paper account once
     uv run python -m execution cycle               # trade the latest shadow decision
     uv run python -m execution status
+    uv run python -m execution watchdog          # exit 1 if a clock missed last session
 """
 
 from __future__ import annotations
@@ -15,6 +16,8 @@ from shadow.log import DEFAULT_LOG_PATH
 
 from execution.broker.paper_state import DEFAULT_PAPER_DIR, PaperState, PaperStore
 from execution.cycle import STRATEGY, run_cycle
+from execution.notify import alert
+from execution.watchdog import last_session, paper_findings, shadow_findings
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -52,8 +55,24 @@ def cmd_status(args: argparse.Namespace) -> int:
     cycles = [r for r in store.journal_rows() if r["kind"] == "cycle"]
     if cycles:
         last = cycles[-1]
-        print(f"{len(cycles)} cycles, last decision {last['decision_date']} equity {last['equity']:.2f}")
+        print(
+            f"{len(cycles)} cycles, last decision {last['decision_date']} "
+            f"equity {last['equity']:.2f} drift {last['drift']:.3f} cost {last['cost_bps']:.1f}bps"
+        )
     return 0
+
+
+def cmd_watchdog(args: argparse.Namespace) -> int:
+    session = last_session(args.base_url)
+    strategies = tuple(args.strategy)
+    findings = shadow_findings(args.log_path, session, strategies)
+    if not findings:
+        findings = paper_findings(PaperStore(args.paper_dir), session)
+    print(f"last session {session}: {'ok' if not findings else 'MISSED'}")
+    for finding in findings:
+        print(f"  {finding}")
+        alert(f"watchdog: {finding[:80]}", {"kind": "watchdog", "session": session, "finding": finding})
+    return 1 if findings else 0
 
 
 def main() -> int:
@@ -70,6 +89,11 @@ def main() -> int:
     cycle.set_defaults(func=cmd_cycle)
     status = sub.add_parser("status", help="paper account summary")
     status.set_defaults(func=cmd_status)
+    watchdog = sub.add_parser("watchdog", help="alert if last session was not logged")
+    watchdog.add_argument("--log-path", type=Path, default=DEFAULT_LOG_PATH)
+    watchdog.add_argument("--base-url", default=DEFAULT_BASE_URL)
+    watchdog.add_argument("--strategy", action="append", default=[STRATEGY])
+    watchdog.set_defaults(func=cmd_watchdog)
     args = parser.parse_args()
     return int(args.func(args))
 

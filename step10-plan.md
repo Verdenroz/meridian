@@ -140,7 +140,11 @@ Model-external by construction (§1.11). The allocator cannot import, configure,
 ### W4 — Kill switch + notifications
 - [x] Halt flag `data/execution/HALT` checked before the cycle plans anything; set = hold, never new risk
 - [x] Every cycle, rejection, and halt posts to `MERIDIAN_ALERT_WEBHOOK` (`execution/notify.py`)
-- [ ] Documented manual broker-side liquidation procedure (needs the IBKR account)
+- [ ] Manual broker-side liquidation procedure, to verify against the real account once open:
+      1. `touch data/execution/HALT`, commit, push (the cycle holds from the next run);
+      2. IBKR Client Portal → Portfolio → select all → Close Positions → market, confirm;
+      3. confirm the account shows only cash, then note the time and reason in the progress log;
+      4. re-arming is a deliberate commit removing HALT, never automatic
 - **Accepts when:** setting the flag stops trading within one decision cycle, verified live.
 
 ### W5 — Decision → order path
@@ -162,7 +166,7 @@ Today the Rust bus is advisory only.
 ### W7 — Observability
 - [x] Per-cycle journal row: targets, positions, drift, realized cost
 - [x] Realized cost in bps vs previous close per cycle (meaningful once fills are real)
-- [ ] CI watchdog alerting on a missed appliance decision
+- [x] CI watchdog (`watchdog.yml`, 15:15 UTC): last upstream session vs shadow log and paper journal; alerts and fails
 
 ### W8 — Evidence clocks (background, already running)
 | Clock | State 2026-08-30 | Target |
