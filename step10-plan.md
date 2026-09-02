@@ -115,7 +115,8 @@ Acceptance criteria are what "done" means. Unchecked boxes are the live TODO lis
 - [x] Adapter interface: `account()`, `submit(order)`, `cancel(id)`, `open_orders()` (`execution/broker/`)
 - [x] Local cash-account paper broker behind that interface, git-tracked journal (`data/execution/paper/`)
 - [x] Paper-mode smoke: whole-share fills, rejects, settlement, idempotent resubmit (18 tests)
-- [ ] IBKR adapter behind the same interface; broker names appear nowhere else in the tree
+- [x] IBKR adapter behind the same interface (`broker/ibkr.py`, ib_async, orderRef = client id); broker names appear nowhere else
+- [ ] Verify the IBKR adapter against the paper account: permId timing, SettledCash tag on a Lite cash account, PendingCancel
 - [ ] Symbol allowlist `{SPLG, SGOV}` and the SPY → SPLG weight mapping live in execution config, not in the adapter
 - **Accepts when:** a target-weight dict round-trips to fills on paper, and swapping the
   adapter would touch exactly one module.
@@ -273,3 +274,6 @@ Newest last. One line per material change; note what moved and why.
   nine de-risk days). Halt file, ntfy notifier mirroring the Rust bus contract, drift and
   realized-cost fields on every cycle row. Planner rounds limits toward the quote after a
   test caught cent rounding breaching the collar.
+- **2026-09-01** — IBKR adapter written against ib_async behind the same `Broker` protocol,
+  exercised only by a fake client (12 tests); optional dependency group `broker`. Evidence-clock
+  watchdog on CI. Everything left in W1–W7 now needs the account, the appliance, or a decision.

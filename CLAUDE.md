@@ -356,6 +356,7 @@ uv run python -m execution init --cash 10000  # open the local paper account
 uv run python -m execution cycle              # trade the latest shadow decision on paper
 uv run python -m execution status
 uv run python -m execution watchdog     # CI cron watchdog.yml: exit 1 + alert if a clock missed last session
+# IBKR adapter (broker/ibkr.py) needs `uv sync --group broker`; unverified against a live gateway
 
 # Monthly re-race of the held gates (CI cron, 1st of month; verdicts append to
 # git-tracked data/races/reraces.jsonl — one row per (month, race), idempotent)

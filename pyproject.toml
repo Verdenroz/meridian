@@ -19,6 +19,9 @@ dev = [
   "ruff>=0.6",
   "mypy>=1.10",
 ]
+broker = [
+  "ib_async>=1.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["python"]
@@ -30,3 +33,7 @@ pythonpath = ["python"]
 
 [tool.mypy]
 mypy_path = "python"
+
+[[tool.mypy.overrides]]
+module = "ib_async"
+ignore_missing_imports = true
