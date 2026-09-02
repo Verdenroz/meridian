@@ -344,6 +344,15 @@ uv run python -m episodic news --date 2020-03-16  # news-similar days
 uv run python -m shadow run               # fetch latest, log today's decisions
 uv run python -m shadow status            # log summary
 
+# Paper book (step 10, W1). A local cash-account simulation behind the Broker
+# protocol trades the previous close's null_voltarget shadow row as whole shares of
+# SPLG (index) and SGOV (cash). The CI cron is held until the IBKR paper adapter is
+# behind the same interface, so the first journal rows are real broker fills.
+# data/execution/ is git-tracked, append-only, point-in-time once it exists
+uv run python -m execution init --cash 10000  # open the local paper account
+uv run python -m execution cycle              # trade the latest shadow decision on paper
+uv run python -m execution status
+
 # Monthly re-race of the held gates (CI cron, 1st of month; verdicts append to
 # git-tracked data/races/reraces.jsonl — one row per (month, race), idempotent)
 uv run python -m rerace run               # fetch, re-run eightk_race + credit_race, log

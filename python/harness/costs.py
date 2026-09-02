@@ -11,6 +11,8 @@ from __future__ import annotations
 # One-way bps: half-spread + slippage for liquid ETFs at daily-close scale.
 DEFAULT_COST_BPS: dict[str, float] = {
     "SPY": 1.0,
+    "SPLG": 1.5,
+    "SGOV": 1.0,
     "TLT": 1.5,
     "GLD": 1.5,
     "BIL": 1.0,

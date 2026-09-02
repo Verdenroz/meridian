@@ -23,6 +23,8 @@ data/*
 !data/tone_race/
 # Break-glass alerts are point-in-time evidence — not rebuildable, ever
 !data/breakglass/
+# Paper-book journal is point-in-time evidence — not rebuildable, ever
+!data/execution/
 checkpoints/
 logs/
 reports/
