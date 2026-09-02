@@ -1,6 +1,9 @@
 """Invariant tests for the paper broker: cash-account rules, fills,
 settlement, idempotent submission, and the target-weight planner."""
 
+import http.server
+import random
+import threading
 from datetime import date
 from pathlib import Path
 
@@ -8,6 +11,8 @@ import pytest
 from execution.broker.paper import PaperBroker, settlement_date
 from execution.broker.paper_state import PaperState, PaperStore
 from execution.cycle import run_cycle
+from execution.guardrails import LIMITS, Rejection, validate
+from execution.notify import alert
 from execution.orders import Account, OrderRequest, Position, Quote
 from execution.quotes import quote_from_payload
 from execution.targets import live_targets, plan_orders
@@ -123,7 +128,18 @@ class TestPlanner:
         sell, buy = orders
         assert (sell.symbol, sell.qty, sell.limit) == ("SGOV", 70, 99.89)
         assert buy.symbol == "SPLG" and buy.limit == 80.41
-        assert buy.qty == int(10_240 * 0.7 // 80.41)
+        assert buy.qty == int(0.25 * 10_240 // 80.41)
+
+    def test_entry_from_cash_ramps_at_the_risk_cap(self) -> None:
+        account = Account(10_000.0, 10_000.0, 10_000.0, ())
+        (buy,) = plan_orders(account, {"SPLG": 1.0, "SGOV": 0.0}, QUOTES, "k")
+        assert buy.qty * buy.limit <= 2_500
+        assert buy.qty == 31
+
+    def test_cash_leg_buys_are_not_ramped(self) -> None:
+        account = Account(10_000.0, 10_000.0, 10_000.0, ())
+        (buy,) = plan_orders(account, {"SGOV": 1.0}, QUOTES, "k")
+        assert buy.qty * buy.limit > 9_000
 
     def test_holdings_inside_the_rounding_zone_are_left_alone(self) -> None:
         account = Account(0.0, 0.0, 8_000.0, (Position("SPLG", 100, 80.0),))
@@ -173,11 +189,39 @@ class TestCycle:
         log = self._log(tmp_path, 0.6)
         first = run_cycle(store, log, "http://x", today=TODAY)
         assert first["status"] == "done"
-        assert first["positions"] == {"SGOV": 39, "SPLG": 74}
+        assert first["positions"] == {"SGOV": 39, "SPLG": 31}
         assert all(o["status"] == "filled" for o in first["orders"])
+        assert first["drift"] == pytest.approx(0.6 - 31 * 80.0 / first["equity"], abs=1e-4)
         second = run_cycle(store, log, "http://x", today=TODAY)
         assert second["status"] == "skipped"
-        assert store.load().position("SPLG").qty == 74
+        assert store.load().position("SPLG").qty == 31
+
+    def test_halt_flag_holds_and_journals(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("execution.cycle.fetch_quotes", lambda *_: QUOTES)
+        store = PaperStore(tmp_path / "paper")
+        store.save(PaperState.initial(10_000.0))
+        halt = tmp_path / "HALT"
+        halt.touch()
+        report = run_cycle(store, self._log(tmp_path, 1.0), "http://x", today=TODAY, halt_path=halt)
+        assert report["status"] == "halted"
+        assert [r["kind"] for r in store.journal_rows()] == ["halt"]
+        assert store.load().orders == ()
+
+    def test_guardrail_rejection_places_nothing_and_journals(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setattr("execution.cycle.fetch_quotes", lambda *_: QUOTES)
+        hostile = (OrderRequest("k:SPLG:buy", "SPLG", "buy", 120, 80.41),)
+        monkeypatch.setattr("execution.cycle.plan_orders", lambda *_: hostile)
+        store = PaperStore(tmp_path / "paper")
+        store.save(PaperState.initial(10_000.0))
+        report = run_cycle(store, self._log(tmp_path, 1.0), "http://x", today=TODAY)
+        assert report["status"] == "rejected"
+        assert "exceeds 0.25" in report["reason"]
+        assert store.load().orders == ()
+        assert [r["kind"] for r in store.journal_rows()] == ["rejection"]
 
     def test_closed_market_holds_without_orders(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -190,3 +234,143 @@ class TestCycle:
         assert report["status"] == "market_closed"
         assert store.load().orders == ()
         assert [r["kind"] for r in store.journal_rows()] == []
+
+
+class TestGuardrails:
+    account = Account(2_000.0, 2_000.0, 10_000.0, (Position("SPLG", 100, 80.0),))
+
+    def _ok(self, *requests: OrderRequest) -> tuple[OrderRequest, ...]:
+        result = validate(self.account, requests, QUOTES)
+        assert not isinstance(result, Rejection), result
+        return result
+
+    def _reject(self, *requests: OrderRequest, account: Account | None = None) -> str:
+        result = validate(account or self.account, requests, QUOTES)
+        assert isinstance(result, Rejection)
+        return result.reason
+
+    def test_valid_batch_passes_unchanged(self) -> None:
+        batch = (
+            OrderRequest("a", "SPLG", "sell", 20, 79.6),
+            OrderRequest("b", "SGOV", "buy", 15, 100.91),
+        )
+        assert self._ok(*batch) == batch
+
+    def test_unlisted_symbol(self) -> None:
+        assert "not an allowed" in self._reject(OrderRequest("a", "SPY", "buy", 1, 600.0))
+
+    def test_collar_breach(self) -> None:
+        assert "collar" in self._reject(OrderRequest("a", "SPLG", "buy", 1, 81.0))
+
+    def test_sell_over_holding_and_shorts(self) -> None:
+        assert "exceeds holding" in self._reject(OrderRequest("a", "SPLG", "sell", 101, 79.6))
+        assert "exceeds holding" in self._reject(OrderRequest("a", "SGOV", "sell", 1, 100.0))
+
+    def test_unsettled_funded_position_cannot_be_sold(self) -> None:
+        account = Account(0.0, -500.0, 10_000.0, (Position("SPLG", 100, 80.0, True),))
+        assert "unsettled" in self._reject(OrderRequest("a", "SPLG", "sell", 1, 79.6), account=account)
+
+    def test_risk_adding_cap_per_order_and_per_batch(self) -> None:
+        assert "exceeds 0.25" in self._reject(OrderRequest("a", "SPLG", "buy", 32, 80.41))
+        assert "exceeds 0.25" in self._reject(
+            OrderRequest("a", "SPLG", "buy", 20, 80.41), OrderRequest("b", "SPLG", "buy", 20, 80.41)
+        )
+
+    def test_risk_adding_disabled_mode(self) -> None:
+        result = validate(self.account, (OrderRequest("a", "SPLG", "buy", 1, 80.41),), QUOTES, allow_risk_adding=False)
+        assert isinstance(result, Rejection) and "disabled" in result.reason
+        sells = (OrderRequest("a", "SPLG", "sell", 50, 79.6),)
+        assert validate(self.account, sells, QUOTES, allow_risk_adding=False) == sells
+
+    def test_batch_cannot_overdraw_cash(self) -> None:
+        assert "cash" in self._reject(OrderRequest("a", "SGOV", "buy", 20, 100.91))
+
+    def test_too_many_orders(self) -> None:
+        batch = tuple(OrderRequest(str(i), "SGOV", "buy", 1, 100.91) for i in range(11))
+        assert "exceeds 10" in self._reject(*batch)
+
+    def test_hostile_batches_never_produce_a_violating_approval(self) -> None:
+        rng = random.Random(20260901)
+        symbols = ["SPLG", "SGOV", "SPY", "TQQQ"]
+        approvals = 0
+        for _ in range(3000):
+            held = tuple(
+                Position(s, rng.randint(0, 120), 50.0, rng.random() < 0.1)
+                for s in ("SPLG", "SGOV")
+                if rng.random() < 0.8
+            )
+            cash = rng.uniform(0, 5_000)
+            equity = cash + sum(p.qty * QUOTES[p.symbol].last for p in held)
+            account = Account(cash, cash, equity, held)
+            quotes = {**QUOTES, "SPY": _quote("SPY", 600.0), "TQQQ": _quote("TQQQ", 60.0)}
+            batch = tuple(
+                OrderRequest(
+                    str(i),
+                    rng.choice(symbols),
+                    rng.choice(["buy", "sell"]),
+                    rng.choice([-3, 0, 1, 5, 30, 200]),
+                    round(rng.uniform(40, 700), 2),
+                )
+                for i in range(rng.randint(0, 12))
+            )
+            result = validate(account, batch, quotes)
+            if isinstance(result, Rejection):
+                continue
+            approvals += 1
+            _assert_invariants(account, result, quotes)
+        assert approvals > 0
+
+
+def _assert_invariants(account: Account, batch: tuple[OrderRequest, ...], quotes: dict[str, Quote]) -> None:
+    held = {p.symbol: p.qty for p in account.positions}
+    cash = account.cash
+    risk_add = 0.0
+    for r in batch:
+        assert r.symbol in LIMITS["allowed_symbols"]
+        assert r.qty > 0
+        ref = quotes[r.symbol].ask if r.side == "buy" else quotes[r.symbol].bid
+        assert abs(r.limit - ref) / ref <= LIMITS["max_collar"]
+        if r.side == "buy":
+            held[r.symbol] = held.get(r.symbol, 0) + r.qty
+            cash -= r.qty * r.limit
+            if r.symbol != LIMITS["cash_symbol"]:
+                risk_add += r.qty * r.limit
+        else:
+            held[r.symbol] = held.get(r.symbol, 0) - r.qty
+            cash += r.qty * r.limit
+        assert held[r.symbol] >= 0
+    assert cash >= 0
+    assert risk_add <= LIMITS["max_risk_add"] * account.equity + 1e-9
+    gross = sum(q * quotes[s].last for s, q in held.items())
+    assert gross <= account.equity * (LIMITS["max_gross"] + LIMITS["gross_tolerance"]) + 1e-9
+
+
+class TestNotify:
+    def test_unset_webhook_is_a_noop(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("MERIDIAN_ALERT_WEBHOOK", raising=False)
+        assert alert("t", {"a": 1}) is False
+
+    def test_posts_row_with_title_header(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        received: list[tuple[str, bytes]] = []
+
+        class Handler(http.server.BaseHTTPRequestHandler):
+            def do_POST(self) -> None:
+                body = self.rfile.read(int(self.headers["Content-Length"]))
+                received.append((self.headers["X-Title"], body))
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, *_: object) -> None:
+                pass
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.handle_request)
+        thread.start()
+        monkeypatch.setenv("MERIDIAN_ALERT_WEBHOOK", f"http://127.0.0.1:{server.server_port}/")
+        assert alert("hello", {"kind": "cycle"}) is True
+        thread.join()
+        assert received == [("hello", b'{"kind": "cycle"}')]
+
+    def test_failed_delivery_is_reported_not_raised(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("MERIDIAN_ALERT_WEBHOOK", "http://127.0.0.1:9/")
+        assert alert("t", {}) is False

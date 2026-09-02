@@ -349,6 +349,9 @@ uv run python -m shadow status            # log summary
 # SPLG (index) and SGOV (cash). The CI cron is held until the IBKR paper adapter is
 # behind the same interface, so the first journal rows are real broker fills.
 # data/execution/ is git-tracked, append-only, point-in-time once it exists
+# Guardrails (execution/guardrails.py) reject, never clamp; risk-reducing trades are
+# uncapped, risk-adding capped at 25%/session. data/execution/HALT present = hold.
+# MERIDIAN_ALERT_WEBHOOK (same contract as the Rust bus) receives every cycle/rejection
 uv run python -m execution init --cash 10000  # open the local paper account
 uv run python -m execution cycle              # trade the latest shadow decision on paper
 uv run python -m execution status

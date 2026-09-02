@@ -120,7 +120,7 @@ class PaperBroker:
             qty = held.qty + order.qty
             avg = (held.qty * held.avg_cost + notional) / qty
             return replace(state, cash=state.cash - notional).with_position(
-                Position(order.symbol, qty, avg)
+                Position(order.symbol, qty, avg, unsettled_funded=bool(state.unsettled))
             )
         settle = Settlement(settlement_date(today).isoformat(), notional)
         return replace(
@@ -131,8 +131,14 @@ class PaperBroker:
         remaining = tuple(
             s for s in self.state.unsettled if date.fromisoformat(s.settle_date) > today
         )
-        if remaining != self.state.unsettled:
-            self._commit(replace(self.state, unsettled=remaining), "settle")
+        if remaining == self.state.unsettled:
+            return
+        positions = self.state.positions
+        if not remaining:
+            positions = tuple(replace(p, unsettled_funded=False) for p in positions)
+        self._commit(
+            replace(self.state, unsettled=remaining, positions=positions), "settle"
+        )
 
 
 def _marketable_price(order: Order, quote: Quote) -> float | None:

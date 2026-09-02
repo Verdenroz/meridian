@@ -123,45 +123,45 @@ Acceptance criteria are what "done" means. Unchecked boxes are the live TODO lis
 ### W2 — Guardrail layer · `python/execution/guardrails.py`
 Model-external by construction (§1.11). The allocator cannot import, configure, or bypass it.
 - [ ] Freeze initial values (§4 below) before the first live order
-- [ ] Pure validator: `(current, target, account) -> approved_orders | Rejection`
-- [ ] Reject, never silently clamp — a rejection is an alert, not a shrug
-- [ ] Property tests: no output ever exceeds gross, per-position, turnover, or order-size caps
-- [ ] Charter exclusions enforced here too: no leverage, no shorts, no crypto
+- [x] Pure validator: `validate(account, orders, quotes) -> approved | Rejection` (`execution/guardrails.py`)
+- [x] Reject, never silently clamp — a rejection journals and alerts, places nothing
+- [x] Property tests: 3,000 hostile random batches, no approval violates allowlist, cash, gross, risk-add, or collar
+- [x] Charter exclusions enforced here too: no leverage (cash ≥ 0), no shorts (sell ≤ held), allowlist
 - **Accepts when:** a deliberately hostile target-weight vector cannot produce a violating
   order in tests, and the guardrail module has no dependency on `spine` or any race package.
 
 ### W3 — Order lifecycle + reconciliation
 - [x] Idempotent submission keyed by (decision_date, strategy, symbol, side) — a retry never double-trades (paper)
-- [ ] Fill polling, partial-fill handling, end-of-day position reconciliation
-- [ ] Divergence alarm: broker positions vs intended weights beyond tolerance
-- [ ] Append-only execution journal, git-tracked, same contract as `data/shadow/`
+- [ ] Fill polling, partial-fill handling (IBKR adapter)
+- [x] Divergence alarm: max weight drift vs target journaled per cycle, alert above 2%
+- [x] Append-only execution journal, git-tracked, same contract as `data/shadow/`
 - **Accepts when:** killing the process mid-cycle and restarting produces no duplicate order.
 
 ### W4 — Kill switch + notifications
-- [ ] Halt flag checked before every submission; set = flatten-or-hold, never new risk
-- [ ] Every action notifies (§1.11): submissions, fills, rejections, halts
-- [ ] Documented manual broker-side liquidation procedure
+- [x] Halt flag `data/execution/HALT` checked before the cycle plans anything; set = hold, never new risk
+- [x] Every cycle, rejection, and halt posts to `MERIDIAN_ALERT_WEBHOOK` (`execution/notify.py`)
+- [ ] Documented manual broker-side liquidation procedure (needs the IBKR account)
 - **Accepts when:** setting the flag stops trading within one decision cycle, verified live.
 
 ### W5 — Decision → order path
 - [x] `shadow` target weights feed execution unchanged; SPY → SPLG and cash → SGOV mapping in `execution/targets.py`
-- [ ] Degrade-safe: stale data, upstream failure, or missing decision holds current positions
-      and alerts — never liquidates, never rebalances on bad input
-- [ ] Trading-hours and market-calendar checks
+- [x] Degrade-safe: stale decision raises, closed market holds, quote failure raises, halt holds,
+      rejection holds — nothing liquidates, nothing trades on bad input
+- [x] Trading-hours check: every symbol's quote must carry `marketState == REGULAR`
 - **Accepts when:** a full simulated outage produces a hold plus an alert, and no orders.
 
 ### W6 — Break-glass execution path
 Today the Rust bus is advisory only.
 - [ ] Restart the bus on the appliance (dormant since 2026-07-31)
-- [ ] Define what an alert is *permitted* to do — proposal: de-risk toward cash only, never
-      add exposure, subject to the same guardrails
+- [x] Guardrail mode `allow_risk_adding=False` exists for the break-glass path: sells of the
+      index leg and buys of the cash leg only, same caps; wiring the bus to it is open
 - [ ] Rate-limit: at most one break-glass action per day, then require manual re-arm
 - **Accepts when:** a replayed historical trigger produces a bounded, guardrailed de-risk in
   paper and nothing else.
 
 ### W7 — Observability
-- [ ] Daily reconciliation report: intended vs actual weights, drift, costs, turnover
-- [ ] Realized-vs-backtest cost tracking (validates the harness cost model against reality)
+- [x] Per-cycle journal row: targets, positions, drift, realized cost
+- [x] Realized cost in bps vs previous close per cycle (meaningful once fills are real)
 - [ ] CI watchdog alerting on a missed appliance decision
 
 ### W8 — Evidence clocks (background, already running)
@@ -181,16 +181,20 @@ editing this table with a dated entry in the progress log.
 
 | Guardrail | Proposed | Basis |
 |---|---|---|
-| Gross exposure | ≤ 100% | Charter: no leverage |
+| Gross exposure | ≤ 100% (+1% quote tolerance) | Charter: no leverage; cash after the batch must be ≥ 0 |
 | Allowed symbols | SPLG, SGOV only | Null holds the index and T-bills; any other symbol is rejected until a promotion decision lists it |
 | Per-position weight | ≤ 100% SPLG, ≤ 100% SGOV | Either leg may be the whole book |
-| Daily one-way turnover | ≤ 20% | Null measures 3.0 one-way/yr; 20%/day is ~17x headroom and still bounds a runaway |
-| Single order size | ≤ 25% of book | Sanity, not strategy |
-| Orders per day | ≤ 10 | Bounds any loop bug |
-| Price collar | ≤ 0.5% from last quote | Rejects stale-price trades; matches the D12 limit |
-| Settlement (cash account) | never sell a lot bought with unsettled funds; one order batch per session | T+1 good-faith-violation rule; break-glass may only sell settled lots |
-| Trading window | 09:35–15:55 ET; daily batch submitted at window open | Avoids open/close dislocation |
-| Shorts / leverage / crypto | prohibited | Charter §1.5 |
+| Risk-adding turnover | ≤ 25% of equity per session, per order and per batch | Null's largest re-risk day is 5%; entry from all-cash ramps over 4 sessions in the planner |
+| Risk-reducing turnover | uncapped | Null's largest de-risk day is 38% (1997-10-27), nine days exceed 20%; a cap here blocks the defense |
+| Orders per session | ≤ 10 | Bounds any loop bug |
+| Price collar | ≤ 0.5% from the touch | Rejects stale-price trades; planner rounds limits toward the quote |
+| Settlement (cash account) | never sell a position bought with unsettled funds; one batch per session | T+1 good-faith-violation rule; flag clears when all proceeds settle |
+| Trading window | every quote `REGULAR`; cron lands 09:40 ET | Avoids open/close dislocation |
+| Shorts / leverage / crypto | prohibited | sell ≤ held, cash ≥ 0, allowlist |
+
+Measured 2026-09-01 on the null over 1993–2026 (8,431 sessions, 1,734 rebalances):
+one-way p50 2.8%, p95 9.8%, p99 17.9%, max 38%. The 20%/day flat cap from the first
+draft would have rejected nine of the null's own de-risk days.
 
 Not yet frozen. Freeze before the first live order and record the freeze here.
 
@@ -260,3 +264,8 @@ Newest last. One line per material change; note what moved and why.
   plumbing only. Code, tests, and interface committed; `paper-trade.yml` and the opened
   account stay out of history until the IBKR paper adapter produces real fills. The
   local broker's job until then is test double for the W2 guardrail property tests.
+- **2026-09-01** — W2, W4, W5, W7 landed on paper. Guardrail validator with the risk-adding /
+  risk-reducing split after measuring the null's turnover (flat 20% cap would have blocked
+  nine de-risk days). Halt file, ntfy notifier mirroring the Rust bus contract, drift and
+  realized-cost fields on every cycle row. Planner rounds limits toward the quote after a
+  test caught cent rounding breaching the collar.

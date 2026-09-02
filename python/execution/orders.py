@@ -17,6 +17,7 @@ class Quote:
     last: float
     market_state: str
     fetched_at: str
+    prev_close: float | None = None
 
 
 @dataclass(frozen=True)
@@ -51,6 +52,7 @@ class Position:
     symbol: str
     qty: int
     avg_cost: float
+    unsettled_funded: bool = False
 
 
 @dataclass(frozen=True)

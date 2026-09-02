@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import math
 
+from execution.guardrails import LIMITS
 from execution.orders import Account, OrderRequest, Quote
 
 SYMBOL_MAP = {"SPY": "SPLG"}
@@ -29,7 +30,9 @@ def plan_orders(
     key: str,
     collar: float = COLLAR,
 ) -> tuple[OrderRequest, ...]:
-    """Sells first so a cash account has the proceeds before its buys."""
+    """Sells first so a cash account has the proceeds before its buys.
+    Risk-adding buys are ramped at the guardrail cap per session, so an entry
+    from all-cash takes four sessions instead of one rejected order."""
     symbols = sorted(set(targets) | {p.symbol for p in account.positions})
     requests = [
         _order_for(symbol, account, targets.get(symbol, 0.0), quotes[symbol], key, collar)
@@ -44,12 +47,16 @@ def _order_for(
 ) -> OrderRequest | None:
     held = account.qty(symbol)
     notional = account.equity * weight
-    buy_limit = round(quote.ask * (1 + collar), 2)
-    sell_limit = round(quote.bid * (1 - collar), 2)
+    buy_limit = math.floor(quote.ask * (1 + collar) * 100) / 100
+    sell_limit = math.ceil(quote.bid * (1 - collar) * 100) / 100
     sell_floor = math.floor(notional / quote.last)
     buy_ceiling = math.floor(notional / buy_limit)
     if held > sell_floor:
         return OrderRequest(f"{key}:{symbol}:sell", symbol, "sell", held - sell_floor, sell_limit)
     if held < buy_ceiling:
-        return OrderRequest(f"{key}:{symbol}:buy", symbol, "buy", buy_ceiling - held, buy_limit)
+        qty = buy_ceiling - held
+        if symbol != LIMITS["cash_symbol"]:
+            ramp = math.floor(LIMITS["max_risk_add"] * account.equity / buy_limit)
+            qty = min(qty, ramp)
+        return OrderRequest(f"{key}:{symbol}:buy", symbol, "buy", qty, buy_limit)
     return None

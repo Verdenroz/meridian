@@ -42,4 +42,5 @@ def quote_from_payload(payload: dict, fetched_at: str) -> Quote:
         last=last,
         market_state=str(payload.get("marketState") or "UNKNOWN"),
         fetched_at=fetched_at,
+        prev_close=payload.get("regularMarketPreviousClose"),
     )
