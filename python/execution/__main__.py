@@ -4,6 +4,7 @@
     uv run python -m execution cycle               # trade the latest shadow decision
     uv run python -m execution status
     uv run python -m execution watchdog          # exit 1 if a clock missed last session
+    uv run python -m execution verify-broker     # read-only checks against a running IB Gateway
 """
 
 from __future__ import annotations
@@ -75,6 +76,27 @@ def cmd_watchdog(args: argparse.Namespace) -> int:
     return 1 if findings else 0
 
 
+def cmd_verify_broker(args: argparse.Namespace) -> int:
+    from execution.broker.ibkr import connect
+    from execution.broker.verify import verify
+
+    try:
+        client = connect(args.host, args.port, args.client_id)
+    except OSError as exc:
+        print(f"no IB Gateway at {args.host}:{args.port} ({exc})")
+        return 1
+    try:
+        account_id = args.account or client.managedAccounts()[0]
+        checks = verify(client, account_id)
+    finally:
+        client.disconnect()
+    for check in checks:
+        print(f"  {'ok  ' if check.ok else 'FAIL'} {check.name:<18} {check.detail}")
+    failed = [c for c in checks if not c.ok]
+    print(f"{account_id}: {len(checks) - len(failed)}/{len(checks)} checks passed")
+    return 1 if failed else 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="execution")
     parser.add_argument("--paper-dir", type=Path, default=DEFAULT_PAPER_DIR)
@@ -94,6 +116,12 @@ def main() -> int:
     watchdog.add_argument("--base-url", default=DEFAULT_BASE_URL)
     watchdog.add_argument("--strategy", action="append", default=[STRATEGY])
     watchdog.set_defaults(func=cmd_watchdog)
+    verify = sub.add_parser("verify-broker", help="read-only checks against a running IB Gateway")
+    verify.add_argument("--host", default="127.0.0.1")
+    verify.add_argument("--port", type=int, default=4002, help="4002 paper gateway, 4001 live")
+    verify.add_argument("--client-id", type=int, default=9)
+    verify.add_argument("--account", default=None, help="defaults to the first managed account")
+    verify.set_defaults(func=cmd_verify_broker)
     args = parser.parse_args()
     return int(args.func(args))
 

@@ -7,6 +7,7 @@ import json
 import random
 import sys
 import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 from . import DEFAULT_BASE_URL, DEFAULT_SOURCES
@@ -31,6 +32,10 @@ PERNAME_CHUNK_SIZE = 120
 # 180s keeps retry rounds out of the still-hot window.
 PERNAME_COOLDOWN = 180
 PERNAME_RETRY_ROUNDS = 3
+# The CI job times out at 45 min and a cancelled run commits nothing, so the
+# sweep stops itself with margin to spare; the start point rotates daily so
+# names skipped at the budget are not always the same ones.
+PERNAME_TIME_BUDGET = 36 * 60
 
 
 def _read_symbols(path: str | None) -> tuple[str, ...]:
@@ -65,12 +70,24 @@ def run_fetch(args: argparse.Namespace) -> int:
     return _archive_new(jsonl_dir, seen, rows, stats)
 
 
-def _chunked_sweep(base_url: str, symbols: tuple[str, ...]) -> tuple[list[dict], dict]:
+def _rotated(symbols: tuple[str, ...], offset: int) -> tuple[str, ...]:
+    if not symbols:
+        return symbols
+    k = offset % len(symbols)
+    return symbols[k:] + symbols[:k]
+
+
+def _chunked_sweep(
+    base_url: str, symbols: tuple[str, ...], deadline: float
+) -> tuple[list[dict], dict]:
     rows: list[dict] = []
     stats: dict = {"fetched": {}, "errors": {}}
     for start in range(0, len(symbols), PERNAME_CHUNK_SIZE):
-        if start:
-            time.sleep(PERNAME_COOLDOWN)
+        wait = PERNAME_COOLDOWN if start else 0
+        if time.monotonic() + wait > deadline:
+            stats["errors"].update({f"news:{s}": "skipped: time budget" for s in symbols[start:]})
+            break
+        time.sleep(wait)
         chunk_rows, chunk_stats = fetch_symbols(
             base_url, symbols[start : start + PERNAME_CHUNK_SIZE], PERNAME_REQUEST_PAUSE
         )
@@ -87,13 +104,15 @@ def run_fetch_pername(args: argparse.Namespace) -> int:
         return 1
     jsonl_dir = Path(args.dir)
     seen = load_seen_ids(jsonl_dir, PERNAME_DEDUPE_LOOKBACK_DAYS)
-    rows, stats = _chunked_sweep(args.base_url, symbols)
+    deadline = time.monotonic() + PERNAME_TIME_BUDGET
+    rotated = _rotated(symbols, datetime.now(UTC).toordinal())
+    rows, stats = _chunked_sweep(args.base_url, rotated, deadline)
     for _ in range(PERNAME_RETRY_ROUNDS):
         failed = tuple(k.split(":", 1)[1] for k in stats["errors"])
-        if not failed:
+        if not failed or time.monotonic() + PERNAME_COOLDOWN > deadline:
             break
         time.sleep(PERNAME_COOLDOWN)
-        retry_rows, retry_stats = _chunked_sweep(args.base_url, failed)
+        retry_rows, retry_stats = _chunked_sweep(args.base_url, failed, deadline)
         rows.extend(retry_rows)
         stats["fetched"].update(retry_stats["fetched"])
         stats["errors"] = retry_stats["errors"]

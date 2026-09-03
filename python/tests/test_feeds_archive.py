@@ -89,3 +89,33 @@ def test_build_db_is_idempotent(tmp_path: Path) -> None:
     second = build_db(tmp_path, db)
     assert first == {"inserted": 5, "total_items": 5, "heartbeats": 0}
     assert second == {"inserted": 0, "total_items": 5, "heartbeats": 0}
+
+
+def test_pername_sweep_stops_at_time_budget(monkeypatch) -> None:
+    import time
+
+    import feeds_archive.__main__ as m
+
+    calls: list[tuple[str, ...]] = []
+
+    def fake_fetch(base_url: str, symbols: tuple[str, ...], pause: float) -> tuple[list, dict]:
+        calls.append(symbols)
+        return [], {"fetched": {f"news:{s}": 1 for s in symbols}, "errors": {}}
+
+    monkeypatch.setattr(m, "fetch_symbols", fake_fetch)
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+    symbols = tuple(f"S{i}" for i in range(m.PERNAME_CHUNK_SIZE + 3))
+    _, stats = m._chunked_sweep("http://x", symbols, time.monotonic() + 1)
+    assert calls == [symbols[: m.PERNAME_CHUNK_SIZE]]
+    assert set(stats["errors"]) == {f"news:{s}" for s in symbols[m.PERNAME_CHUNK_SIZE :]}
+    assert all(v == "skipped: time budget" for v in stats["errors"].values())
+
+
+def test_pername_rotation_shifts_without_loss() -> None:
+    from feeds_archive.__main__ import _rotated
+
+    symbols = ("A", "B", "C", "D")
+    assert _rotated(symbols, 1) == ("B", "C", "D", "A")
+    assert _rotated(symbols, 6) == ("C", "D", "A", "B")
+    assert set(_rotated(symbols, 99)) == set(symbols)
+    assert _rotated((), 3) == ()
