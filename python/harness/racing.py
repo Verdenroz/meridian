@@ -24,10 +24,13 @@ def run_contender(
     factory: Callable[[], Strategy],
     first: int,
     oos_start: str | None = None,
+    cost_bps: dict[str, float] | None = None,
 ) -> dict:
     """Walk-forward run + metrics; `oos_start` restricts the scored span
-    (races whose panel opens long before their pre-registered OOS window)."""
-    result = run_walk_forward(panel, factory, first)
+    (races whose panel opens long before their pre-registered OOS window).
+    `cost_bps` overrides the shared cost table for races on instruments it
+    does not list."""
+    result = run_walk_forward(panel, factory, first, cost_bps=cost_bps)
     cash_by_date = dict(zip(panel.dates, panel.cash_returns))
     kept = [
         (d, r)
@@ -54,10 +57,11 @@ def race_contenders(
     contenders: Mapping[str, Callable[[], Strategy]],
     first: int,
     oos_start: str | None = None,
+    cost_bps: dict[str, float] | None = None,
 ) -> dict[str, dict]:
     """Run every labeled contender through the same engine and span."""
     return {
-        label: run_contender(panel, factory, first, oos_start)
+        label: run_contender(panel, factory, first, oos_start, cost_bps)
         for label, factory in contenders.items()
     }
 

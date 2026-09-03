@@ -61,6 +61,11 @@ The repo has been rebuilt around the charter. Current inventory:
   long-only/unlevered guardrails in the engine, lookahead-proof `HistoryView`) and the null
   baselines (SPY buy-hold, SPY 15% vol-target). Every component ships only by beating the
   null in this engine.
+- **Built, not adopted:** `python/sleeve/` — the stock-sleeve engine (charter §1.5's second
+  half): frozen 25-name universe, causal eligibility, per-name forecasters (EWMA incumbent,
+  pooled cross-sectional ridge challenger), forecast-vol × Ledoit–Wolf basket sizing behind
+  the harness `Strategy` protocol. Raced 2026-09-01; survivorship makes the vs-null margin
+  uninterpretable, so nothing ships until a point-in-time universe exists.
 - **Live, new core:** Rust `src/` — `meridian-bus`, the live market-hours poller and
   break-glass monitor (§3.5/§4.5): quote + intraday-bar sweeps, calibrated price/volume
   severity rules (LLM-free triggers), SEC 8-K feed as context. Heartbeat journal in
@@ -328,6 +333,14 @@ uv run python -m claims_race run
 # Per-name text closed in the regime-feature shape; LOCAL-ONLY (sentiment
 # + FNSPID caches), excluded from CI re-race)
 uv run python -m tonebreadth_race run
+
+# Stock-sleeve race (pre-registered; PASSED 2026-09-01 on the letter, NOT
+# adoptable — the 25 frozen large caps are today's survivors: 1/N ref 0.844 >
+# inverse-EWMA 0.794 > inverse-ridge 0.782 vs null 0.494. First learned
+# per-name forecaster (pooled cross-sectional ridge) graduates stage 1
+# (0.641 vs EWMA 0.630) but doesn't convert to sizing. Sleeve engine built;
+# next registration needs a point-in-time universe. Not in CI re-race)
+uv run python -m sleeve fetch && uv run python -m sleeve run
 
 # Episodic analog memory (roadmap step 8) — nearest historical analogs + briefing.
 # Explanation only: analogs never touch allocation without a new pre-registered
