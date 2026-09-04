@@ -31,3 +31,6 @@ Environment=LOG_PATH=/home/harvey/ibc/logs
 ExecStart=/home/harvey/ibc/gatewaystart.sh -inline
 Restart=on-failure
 RestartSec=60
+
+[Install]
+WantedBy=default.target
