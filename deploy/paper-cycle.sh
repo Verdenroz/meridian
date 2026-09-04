@@ -8,7 +8,7 @@ if ! nc -z 127.0.0.1 4002 2>/dev/null; then
   echo "IB Gateway is not listening on 4002" >&2
   exit 1
 fi
-git pull --rebase --quiet
+git pull --rebase --autostash --quiet
 uv run python -m execution cycle --broker ibkr
 git add data/execution/ibkr
 if git diff --cached --quiet; then

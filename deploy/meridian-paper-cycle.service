@@ -19,5 +19,6 @@ Description=Meridian paper cycle on the IBKR paper gateway
 Type=oneshot
 WorkingDirectory=/home/harvey/projects/meridian
 ExecStart=/home/harvey/projects/meridian/deploy/paper-cycle.sh
+Environment=PATH=/home/harvey/.local/bin:/usr/local/bin:/usr/bin:/bin
 # Optional alerts (same contract as the bus). Absent = journal only.
 #Environment=MERIDIAN_ALERT_WEBHOOK=https://ntfy.sh/<private-topic>
