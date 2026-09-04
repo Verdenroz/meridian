@@ -1,9 +1,9 @@
 """Target weights to whole-share orders. Pure: no broker, no strategy.
 
 The shadow log speaks in research symbols (SPY, cash). The live book trades
-their executable counterparts: SPLG for the index at a share price that
-keeps whole-share rounding inside the null's rebalance band, SGOV for cash
-so the book earns the T-bill accrual the harness assumes.
+their executable counterparts: SPYM (formerly SPLG) for the index at a share
+price that keeps whole-share rounding inside the null's rebalance band, SGOV
+for cash so the book earns the T-bill accrual the harness assumes.
 """
 
 from __future__ import annotations
@@ -13,7 +13,7 @@ import math
 from execution.guardrails import LIMITS
 from execution.orders import Account, OrderRequest, Quote
 
-SYMBOL_MAP = {"SPY": "SPLG"}
+SYMBOL_MAP = {"SPY": "SPYM"}
 CASH_SYMBOL = "SGOV"
 COLLAR = 0.005
 

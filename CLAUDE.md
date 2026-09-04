@@ -359,7 +359,7 @@ uv run python -m shadow status            # log summary
 
 # Paper book (step 10, W1). A local cash-account simulation behind the Broker
 # protocol trades the previous close's null_voltarget shadow row as whole shares of
-# SPLG (index) and SGOV (cash). The CI cron is held until the IBKR paper adapter is
+# SPYM (index) and SGOV (cash). The CI cron is held until the IBKR paper adapter is
 # behind the same interface, so the first journal rows are real broker fills.
 # data/execution/ is git-tracked, append-only, point-in-time once it exists
 # Guardrails (execution/guardrails.py) reject, never clamp; risk-reducing trades are
@@ -370,7 +370,7 @@ uv run python -m execution cycle              # trade the latest shadow decision
 uv run python -m execution status
 uv run python -m execution watchdog     # CI cron watchdog.yml: exit 1 + alert if a clock missed last session
 # IBKR adapter (broker/ibkr.py) needs `uv sync --group broker`. verify-broker runs read-only
-# checks (account tags, SPLG/SGOV qualify, order parsing, 1-share what-if) against a running
+# checks (account tags, SPYM/SGOV qualify, order parsing, 1-share what-if) against a running
 # IB Gateway; nothing is placed. Unverified until it passes on the paper gateway
 uv run python -m execution verify-broker      # --port 4002 paper (default), 4001 live
 

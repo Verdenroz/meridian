@@ -18,7 +18,7 @@ from execution.broker.ibkr import IbkrBroker
 from execution.targets import CASH_SYMBOL, SYMBOL_MAP
 
 UNSET_DOUBLE = 1.7976931348623157e308
-SUMMARY_TAGS = ("TotalCashValue", "SettledCash", "NetLiquidation")
+SUMMARY_TAGS = ("TotalCashValue", "AvailableFunds", "NetLiquidation")
 VERIFY_SYMBOLS = (*SYMBOL_MAP.values(), CASH_SYMBOL)
 WHAT_IF_LIMIT = 1.0
 
@@ -54,10 +54,11 @@ def _account(broker: IbkrBroker) -> str:
 def _contracts(client: Any, api: Any) -> str:
     contracts = [api.Stock(s, "SMART", "USD") for s in VERIFY_SYMBOLS]
     qualified = client.qualifyContracts(*contracts)
-    unqualified = [c.symbol for c in qualified if not c.conId]
-    if len(qualified) != len(contracts) or unqualified:
-        raise ValueError(f"unqualified {unqualified or 'some contracts'}")
-    return " ".join(f"{c.symbol}={c.conId}" for c in qualified)
+    known = {c.symbol: c.conId for c in qualified if c is not None and c.conId}
+    unknown = [s for s in VERIFY_SYMBOLS if s not in known]
+    if unknown:
+        raise ValueError(f"unknown to the gateway: {unknown}")
+    return " ".join(f"{s}={known[s]}" for s in VERIFY_SYMBOLS)
 
 
 def _orders(broker: IbkrBroker) -> str:
@@ -67,15 +68,19 @@ def _orders(broker: IbkrBroker) -> str:
 
 
 def _what_if(client: Any, api: Any, account_id: str) -> str:
-    contract = api.Stock(VERIFY_SYMBOLS[0], "SMART", "USD")
+    (contract,) = client.qualifyContracts(api.Stock(VERIFY_SYMBOLS[0], "SMART", "USD"))
     order = api.LimitOrder("BUY", 1, WHAT_IF_LIMIT, tif="DAY", account=account_id)
     state = client.whatIfOrder(contract, order)
-    commission = state.commission
     if state.warningText:
         raise ValueError(state.warningText)
-    if not math.isfinite(commission) or commission >= UNSET_DOUBLE:
+    quoted = [c for c in (state.commission, state.minCommission, state.maxCommission) if _set(c)]
+    if not quoted:
         raise ValueError(f"no commission in what-if state {state.status!r}")
-    return f"commission={commission:.4f} margin_change={state.initMarginChange}"
+    return f"commission={min(quoted):.4f}..{max(quoted):.4f} margin_change={state.initMarginChange}"
+
+
+def _set(value: float) -> bool:
+    return math.isfinite(value) and value < UNSET_DOUBLE
 
 
 def _checks(client: Any, account_id: str, api: Any) -> Iterator[tuple[str, Callable[[], str]]]:

@@ -143,7 +143,7 @@ class FakeIB:
         return list(self._portfolio)
 
 
-BUY = OrderRequest("k:SPLG:buy", "SPLG", "buy", 10, 80.5)
+BUY = OrderRequest("k:SPYM:buy", "SPYM", "buy", 10, 80.5)
 
 
 def _broker(fake: FakeIB) -> tuple[IbkrBroker, list[dict]]:
@@ -157,9 +157,9 @@ class TestSubmit:
         broker, rows = _broker(fake)
         order = broker.submit(BUY, NOW)
         ((contract, placed),) = fake.placed
-        assert contract == FakeContract("SPLG", "SMART", "USD")
-        assert placed == FakeOrder("BUY", 10, 80.5, "DAY", "k:SPLG:buy", ACCOUNT)
-        assert (order.id, order.client_id, order.side, order.status) == ("IB1", "k:SPLG:buy", "buy", "open")
+        assert contract == FakeContract("SPYM", "SMART", "USD")
+        assert placed == FakeOrder("BUY", 10, 80.5, "DAY", "k:SPYM:buy", ACCOUNT)
+        assert (order.id, order.client_id, order.side, order.status) == ("IB1", "k:SPYM:buy", "buy", "open")
         assert (order.qty, order.limit, order.submitted_at) == (10, 80.5, NOW)
         assert [r["kind"] for r in rows] == ["submit"]
         assert rows[0]["order"] == order.to_dict()
@@ -176,10 +176,10 @@ class TestSubmit:
         assert rows == []
 
     def test_completed_order_from_a_previous_session_is_found_by_order_ref(self) -> None:
-        done = FakeOrder("BUY", 10, 80.5, "DAY", "k:SPLG:buy", ACCOUNT, permId=777)
+        done = FakeOrder("BUY", 10, 80.5, "DAY", "k:SPYM:buy", ACCOUNT, permId=777)
         fake = FakeIB(
-            completed=(FakeTrade(FakeContract("SPLG", "SMART", "USD"), done, FakeStatus("Filled")),),
-            fills=(FakeFill(FakeExecution("k:SPLG:buy", 80.01), T1),),
+            completed=(FakeTrade(FakeContract("SPYM", "SMART", "USD"), done, FakeStatus("Filled")),),
+            fills=(FakeFill(FakeExecution("k:SPYM:buy", 80.01), T1),),
         )
         broker, rows = _broker(fake)
         order = broker.submit(BUY, NOW)
@@ -216,10 +216,10 @@ class TestStatusMapping:
         ],
     )
     def test_gateway_status_maps_to_order_status(self, ib_status: str, expected: str) -> None:
-        fake = FakeIB(fills=(FakeFill(FakeExecution("k:SPLG:buy", 80.01), T1),))
+        fake = FakeIB(fills=(FakeFill(FakeExecution("k:SPYM:buy", 80.01), T1),))
         broker, _ = _broker(fake)
         broker.submit(BUY, NOW)
-        fake.set_status("k:SPLG:buy", ib_status, "gateway says so")
+        fake.set_status("k:SPYM:buy", ib_status, "gateway says so")
         order = broker.submit(BUY, NOW)
         assert order.status == expected
         assert order.reason == ("gateway says so" if expected in ("cancelled", "rejected") else None)
@@ -234,14 +234,14 @@ class TestStatusMapping:
         fake = FakeIB(trades=(other,))
         broker, _ = _broker(fake)
         broker.submit(BUY, NOW)
-        assert [o.client_id for o in broker.open_orders()] == ["k:SPLG:buy"]
+        assert [o.client_id for o in broker.open_orders()] == ["k:SPYM:buy"]
 
     def test_process_journals_each_fill_once(self) -> None:
-        fake = FakeIB(fills=(FakeFill(FakeExecution("k:SPLG:buy", 80.01), T1),))
+        fake = FakeIB(fills=(FakeFill(FakeExecution("k:SPYM:buy", 80.01), T1),))
         broker, rows = _broker(fake)
         broker.submit(BUY, NOW)
         assert broker.process() == ()
-        fake.set_status("k:SPLG:buy", "Filled")
+        fake.set_status("k:SPYM:buy", "Filled")
         (filled,) = broker.process()
         assert (filled.status, filled.fill_price, filled.filled_at) == ("filled", 80.01, T1.isoformat())
         assert broker.process() == ()
@@ -253,13 +253,13 @@ class TestAccount:
         fake = FakeIB(
             summary=(
                 FakeValue("TotalCashValue", "1234.50"),
-                FakeValue("SettledCash", "1000.00"),
+                FakeValue("AvailableFunds", "1000.00"),
                 FakeValue("NetLiquidation", "9000.25"),
                 FakeValue("AccountType", "CASH"),
             ),
             portfolio=(
                 FakeItem(FakeContract("SGOV", "SMART", "USD"), 50.0, 100.1),
-                FakeItem(FakeContract("SPLG", "SMART", "USD"), 0.0, 80.0),
+                FakeItem(FakeContract("SPYM", "SMART", "USD"), 0.0, 80.0),
                 FakeItem(FakeContract("AAPL", "SMART", "USD"), 3.0, 190.0),
             ),
         )
@@ -270,7 +270,7 @@ class TestAccount:
             ("AAPL", 3, 190.0),
             ("SGOV", 50, 100.1),
         ]
-        assert account.qty("SPLG") == 0
+        assert account.qty("SPYM") == 0
 
 
 def test_adapter_imports_without_ib_async() -> None:

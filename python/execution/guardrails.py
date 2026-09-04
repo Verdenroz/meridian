@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from execution.orders import Account, OrderRequest, Quote
 
 LIMITS: dict = {
-    "allowed_symbols": frozenset({"SPLG", "SGOV"}),
+    "allowed_symbols": frozenset({"SPYM", "SGOV"}),
     "cash_symbol": "SGOV",
     "max_gross": 1.0,
     "max_risk_add": 0.25,

@@ -27,7 +27,7 @@ def _quote(symbol: str, last: float, spread: float = 0.01) -> Quote:
     return Quote(symbol, last - spread, last + spread, last, "REGULAR", NOW)
 
 
-QUOTES = {"SPLG": _quote("SPLG", 80.0), "SGOV": _quote("SGOV", 100.4)}
+QUOTES = {"SPYM": _quote("SPYM", 80.0), "SGOV": _quote("SGOV", 100.4)}
 
 
 def _broker(tmp_path: Path, cash: float = 10_000.0) -> PaperBroker:
@@ -39,17 +39,17 @@ def _broker(tmp_path: Path, cash: float = 10_000.0) -> PaperBroker:
 class TestPaperBroker:
     def test_marketable_buy_fills_at_ask(self, tmp_path: Path) -> None:
         broker = _broker(tmp_path)
-        order = broker.submit(OrderRequest("k:SPLG:buy", "SPLG", "buy", 10, 80.5), NOW)
+        order = broker.submit(OrderRequest("k:SPYM:buy", "SPYM", "buy", 10, 80.5), NOW)
         assert order.status == "open"
         (fill,) = broker.process(QUOTES, NOW, TODAY)
         assert fill.fill_price == pytest.approx(80.01)
         assert broker.state.cash == pytest.approx(10_000 - 800.1)
-        held = broker.state.position("SPLG")
+        held = broker.state.position("SPYM")
         assert (held.qty, held.avg_cost) == (10, pytest.approx(80.01))
 
     def test_non_marketable_order_stays_open_then_cancels(self, tmp_path: Path) -> None:
         broker = _broker(tmp_path)
-        order = broker.submit(OrderRequest("k:SPLG:buy", "SPLG", "buy", 10, 79.0), NOW)
+        order = broker.submit(OrderRequest("k:SPYM:buy", "SPYM", "buy", 10, 79.0), NOW)
         assert broker.process(QUOTES, NOW, TODAY) == ()
         cancelled = broker.cancel(order.id, NOW, "day")
         assert cancelled.status == "cancelled"
@@ -58,27 +58,27 @@ class TestPaperBroker:
 
     def test_buy_beyond_cash_is_rejected(self, tmp_path: Path) -> None:
         broker = _broker(tmp_path, cash=1_000.0)
-        order = broker.submit(OrderRequest("k:SPLG:buy", "SPLG", "buy", 13, 80.5), NOW)
+        order = broker.submit(OrderRequest("k:SPYM:buy", "SPYM", "buy", 13, 80.5), NOW)
         assert order.status == "rejected"
         assert order.reason == "insufficient cash"
 
     def test_open_buys_count_against_cash(self, tmp_path: Path) -> None:
         broker = _broker(tmp_path, cash=1_000.0)
-        broker.submit(OrderRequest("a", "SPLG", "buy", 6, 80.5), NOW)
-        second = broker.submit(OrderRequest("b", "SPLG", "buy", 7, 80.5), NOW)
+        broker.submit(OrderRequest("a", "SPYM", "buy", 6, 80.5), NOW)
+        second = broker.submit(OrderRequest("b", "SPYM", "buy", 7, 80.5), NOW)
         assert second.status == "rejected"
 
     def test_sell_beyond_position_is_rejected(self, tmp_path: Path) -> None:
         broker = _broker(tmp_path)
-        order = broker.submit(OrderRequest("k:SPLG:sell", "SPLG", "sell", 1, 79.0), NOW)
+        order = broker.submit(OrderRequest("k:SPYM:sell", "SPYM", "sell", 1, 79.0), NOW)
         assert order.status == "rejected"
         assert order.reason == "insufficient shares"
 
     def test_sale_proceeds_settle_next_weekday(self, tmp_path: Path) -> None:
         broker = _broker(tmp_path)
-        broker.submit(OrderRequest("buy", "SPLG", "buy", 10, 80.5), NOW)
+        broker.submit(OrderRequest("buy", "SPYM", "buy", 10, 80.5), NOW)
         broker.process(QUOTES, NOW, TODAY)
-        broker.submit(OrderRequest("sell", "SPLG", "sell", 10, 79.5), NOW)
+        broker.submit(OrderRequest("sell", "SPYM", "sell", 10, 79.5), NOW)
         broker.process(QUOTES, NOW, date(2026, 9, 4))
         account = broker.account(QUOTES)
         assert account.settled_cash == pytest.approx(account.cash - 799.9)
@@ -94,23 +94,23 @@ class TestPaperBroker:
 
     def test_resubmitting_a_client_id_returns_the_same_order(self, tmp_path: Path) -> None:
         broker = _broker(tmp_path)
-        first = broker.submit(OrderRequest("k:SPLG:buy", "SPLG", "buy", 10, 80.5), NOW)
+        first = broker.submit(OrderRequest("k:SPYM:buy", "SPYM", "buy", 10, 80.5), NOW)
         broker.process(QUOTES, NOW, TODAY)
         again = PaperBroker(broker.store).submit(
-            OrderRequest("k:SPLG:buy", "SPLG", "buy", 10, 80.5), NOW
+            OrderRequest("k:SPYM:buy", "SPYM", "buy", 10, 80.5), NOW
         )
         assert again.id == first.id
         assert again.status == "filled"
-        assert broker.store.load().position("SPLG").qty == 10
+        assert broker.store.load().position("SPYM").qty == 10
 
     def test_fractional_qty_is_rejected(self, tmp_path: Path) -> None:
         broker = _broker(tmp_path)
-        order = broker.submit(OrderRequest("k", "SPLG", "buy", 0, 80.5), NOW)
+        order = broker.submit(OrderRequest("k", "SPYM", "buy", 0, 80.5), NOW)
         assert order.status == "rejected"
 
     def test_state_round_trips_through_disk(self, tmp_path: Path) -> None:
         broker = _broker(tmp_path)
-        broker.submit(OrderRequest("k", "SPLG", "buy", 10, 80.5), NOW)
+        broker.submit(OrderRequest("k", "SPYM", "buy", 10, 80.5), NOW)
         broker.process(QUOTES, NOW, TODAY)
         assert broker.store.load() == broker.state
         kinds = [r["kind"] for r in broker.store.journal_rows()]
@@ -119,21 +119,21 @@ class TestPaperBroker:
 
 class TestPlanner:
     def test_live_targets_map_research_symbols(self) -> None:
-        assert live_targets({"SPY": 0.6}, 0.4) == {"SPLG": 0.6, "SGOV": 0.4}
+        assert live_targets({"SPY": 0.6}, 0.4) == {"SPYM": 0.6, "SGOV": 0.4}
         assert live_targets({"SPY": 0.0}, 1.0) == {"SGOV": 1.0}
 
     def test_sells_precede_buys_and_use_the_collar(self) -> None:
         account = Account(200.0, 200.0, 10_240.0, (Position("SGOV", 100, 100.0),))
-        orders = plan_orders(account, {"SPLG": 0.7, "SGOV": 0.3}, QUOTES, "k")
+        orders = plan_orders(account, {"SPYM": 0.7, "SGOV": 0.3}, QUOTES, "k")
         assert [o.side for o in orders] == ["sell", "buy"]
         sell, buy = orders
         assert (sell.symbol, sell.qty, sell.limit) == ("SGOV", 70, 99.89)
-        assert buy.symbol == "SPLG" and buy.limit == 80.41
+        assert buy.symbol == "SPYM" and buy.limit == 80.41
         assert buy.qty == int(0.25 * 10_240 // 80.41)
 
     def test_entry_from_cash_ramps_at_the_risk_cap(self) -> None:
         account = Account(10_000.0, 10_000.0, 10_000.0, ())
-        (buy,) = plan_orders(account, {"SPLG": 1.0, "SGOV": 0.0}, QUOTES, "k")
+        (buy,) = plan_orders(account, {"SPYM": 1.0, "SGOV": 0.0}, QUOTES, "k")
         assert buy.qty * buy.limit <= 2_500
         assert buy.qty == 31
 
@@ -143,26 +143,26 @@ class TestPlanner:
         assert buy.qty * buy.limit > 9_000
 
     def test_holdings_inside_the_rounding_zone_are_left_alone(self) -> None:
-        account = Account(0.0, 0.0, 8_000.0, (Position("SPLG", 100, 80.0),))
-        assert plan_orders(account, {"SPLG": 1.0, "SGOV": 0.0}, QUOTES, "k") == ()
+        account = Account(0.0, 0.0, 8_000.0, (Position("SPYM", 100, 80.0),))
+        assert plan_orders(account, {"SPYM": 1.0, "SGOV": 0.0}, QUOTES, "k") == ()
 
     def test_unlisted_holdings_are_sold_down(self) -> None:
-        account = Account(0.0, 0.0, 8_000.0, (Position("SPLG", 100, 80.0),))
+        account = Account(0.0, 0.0, 8_000.0, (Position("SPYM", 100, 80.0),))
         (sell,) = plan_orders(account, {"SGOV": 1.0}, QUOTES, "k")[:1]
-        assert (sell.symbol, sell.qty) == ("SPLG", 100)
+        assert (sell.symbol, sell.qty) == ("SPYM", 100)
 
 
 class TestQuotes:
     def test_touch_is_synthesized_from_cost_table_when_absent(self) -> None:
         q = quote_from_payload(
-            {"symbol": "SPLG", "regularMarketPrice": 80.0, "marketState": "POST"}, NOW
+            {"symbol": "SPYM", "regularMarketPrice": 80.0, "marketState": "POST"}, NOW
         )
         assert q.bid == pytest.approx(80 * (1 - 1.5e-4))
         assert q.ask == pytest.approx(80 * (1 + 1.5e-4))
 
     def test_feed_bid_ask_win_when_present(self) -> None:
         q = quote_from_payload(
-            {"symbol": "SPLG", "regularMarketPrice": 80.0, "bid": 79.9, "ask": 80.1}, NOW
+            {"symbol": "SPYM", "regularMarketPrice": 80.0, "bid": 79.9, "ask": 80.1}, NOW
         )
         assert (q.bid, q.ask, q.market_state) == (79.9, 80.1, "UNKNOWN")
 
@@ -190,12 +190,12 @@ class TestCycle:
         log = self._log(tmp_path, 0.6)
         first = run_cycle(store, log, "http://x", today=TODAY)
         assert first["status"] == "done"
-        assert first["positions"] == {"SGOV": 39, "SPLG": 31}
+        assert first["positions"] == {"SGOV": 39, "SPYM": 31}
         assert all(o["status"] == "filled" for o in first["orders"])
         assert first["drift"] == pytest.approx(0.6 - 31 * 80.0 / first["equity"], abs=1e-4)
         second = run_cycle(store, log, "http://x", today=TODAY)
         assert second["status"] == "skipped"
-        assert store.load().position("SPLG").qty == 31
+        assert store.load().position("SPYM").qty == 31
 
     def test_halt_flag_holds_and_journals(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -214,7 +214,7 @@ class TestCycle:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setattr("execution.cycle.fetch_quotes", lambda *_: QUOTES)
-        hostile = (OrderRequest("k:SPLG:buy", "SPLG", "buy", 120, 80.41),)
+        hostile = (OrderRequest("k:SPYM:buy", "SPYM", "buy", 120, 80.41),)
         monkeypatch.setattr("execution.cycle.plan_orders", lambda *_: hostile)
         store = PaperStore(tmp_path / "paper")
         store.save(PaperState.initial(10_000.0))
@@ -238,7 +238,7 @@ class TestCycle:
 
 
 class TestGuardrails:
-    account = Account(2_000.0, 2_000.0, 10_000.0, (Position("SPLG", 100, 80.0),))
+    account = Account(2_000.0, 2_000.0, 10_000.0, (Position("SPYM", 100, 80.0),))
 
     def _ok(self, *requests: OrderRequest) -> tuple[OrderRequest, ...]:
         result = validate(self.account, requests, QUOTES)
@@ -252,7 +252,7 @@ class TestGuardrails:
 
     def test_valid_batch_passes_unchanged(self) -> None:
         batch = (
-            OrderRequest("a", "SPLG", "sell", 20, 79.6),
+            OrderRequest("a", "SPYM", "sell", 20, 79.6),
             OrderRequest("b", "SGOV", "buy", 15, 100.91),
         )
         assert self._ok(*batch) == batch
@@ -261,26 +261,26 @@ class TestGuardrails:
         assert "not an allowed" in self._reject(OrderRequest("a", "SPY", "buy", 1, 600.0))
 
     def test_collar_breach(self) -> None:
-        assert "collar" in self._reject(OrderRequest("a", "SPLG", "buy", 1, 81.0))
+        assert "collar" in self._reject(OrderRequest("a", "SPYM", "buy", 1, 81.0))
 
     def test_sell_over_holding_and_shorts(self) -> None:
-        assert "exceeds holding" in self._reject(OrderRequest("a", "SPLG", "sell", 101, 79.6))
+        assert "exceeds holding" in self._reject(OrderRequest("a", "SPYM", "sell", 101, 79.6))
         assert "exceeds holding" in self._reject(OrderRequest("a", "SGOV", "sell", 1, 100.0))
 
     def test_unsettled_funded_position_cannot_be_sold(self) -> None:
-        account = Account(0.0, -500.0, 10_000.0, (Position("SPLG", 100, 80.0, True),))
-        assert "unsettled" in self._reject(OrderRequest("a", "SPLG", "sell", 1, 79.6), account=account)
+        account = Account(0.0, -500.0, 10_000.0, (Position("SPYM", 100, 80.0, True),))
+        assert "unsettled" in self._reject(OrderRequest("a", "SPYM", "sell", 1, 79.6), account=account)
 
     def test_risk_adding_cap_per_order_and_per_batch(self) -> None:
-        assert "exceeds 0.25" in self._reject(OrderRequest("a", "SPLG", "buy", 32, 80.41))
+        assert "exceeds 0.25" in self._reject(OrderRequest("a", "SPYM", "buy", 32, 80.41))
         assert "exceeds 0.25" in self._reject(
-            OrderRequest("a", "SPLG", "buy", 20, 80.41), OrderRequest("b", "SPLG", "buy", 20, 80.41)
+            OrderRequest("a", "SPYM", "buy", 20, 80.41), OrderRequest("b", "SPYM", "buy", 20, 80.41)
         )
 
     def test_risk_adding_disabled_mode(self) -> None:
-        result = validate(self.account, (OrderRequest("a", "SPLG", "buy", 1, 80.41),), QUOTES, allow_risk_adding=False)
+        result = validate(self.account, (OrderRequest("a", "SPYM", "buy", 1, 80.41),), QUOTES, allow_risk_adding=False)
         assert isinstance(result, Rejection) and "disabled" in result.reason
-        sells = (OrderRequest("a", "SPLG", "sell", 50, 79.6),)
+        sells = (OrderRequest("a", "SPYM", "sell", 50, 79.6),)
         assert validate(self.account, sells, QUOTES, allow_risk_adding=False) == sells
 
     def test_batch_cannot_overdraw_cash(self) -> None:
@@ -292,12 +292,12 @@ class TestGuardrails:
 
     def test_hostile_batches_never_produce_a_violating_approval(self) -> None:
         rng = random.Random(20260901)
-        symbols = ["SPLG", "SGOV", "SPY", "TQQQ"]
+        symbols = ["SPYM", "SGOV", "SPY", "TQQQ"]
         approvals = 0
         for _ in range(3000):
             held = tuple(
                 Position(s, rng.randint(0, 120), 50.0, rng.random() < 0.1)
-                for s in ("SPLG", "SGOV")
+                for s in ("SPYM", "SGOV")
                 if rng.random() < 0.8
             )
             cash = rng.uniform(0, 5_000)

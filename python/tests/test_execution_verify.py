@@ -41,6 +41,8 @@ class FakeItem:
 class FakeState:
     status: str = "PreSubmitted"
     commission: float = 0.35
+    minCommission: float = UNSET_DOUBLE
+    maxCommission: float = UNSET_DOUBLE
     initMarginChange: str = "0.0"
     warningText: str = ""
 
@@ -100,11 +102,11 @@ class FakeIB:
 
 SUMMARY = (
     FakeValue("TotalCashValue", "10000.0"),
-    FakeValue("SettledCash", "9500.0"),
+    FakeValue("AvailableFunds", "9500.0"),
     FakeValue("NetLiquidation", "10000.0"),
     FakeValue("Currency", "USD"),
 )
-HELD = (FakeItem(FakeContract("SPLG", "SMART", "USD"), 12.0, 80.25),)
+HELD = (FakeItem(FakeContract("SPYM", "SMART", "USD"), 12.0, 80.25),)
 
 
 def test_verify_passes_every_check_on_a_conforming_gateway() -> None:
@@ -119,8 +121,8 @@ def test_verify_passes_every_check_on_a_conforming_gateway() -> None:
         "what-if order",
     ]
     assert all(c.ok for c in checks), [c for c in checks if not c.ok]
-    assert "SPLG:12" in checks[3].detail
-    assert "SPLG=100" in checks[4].detail and "SGOV=101" in checks[4].detail
+    assert "SPYM:12" in checks[3].detail
+    assert "SPYM=100" in checks[4].detail and "SGOV=101" in checks[4].detail
 
 
 def test_verify_reports_failures_without_aborting() -> None:

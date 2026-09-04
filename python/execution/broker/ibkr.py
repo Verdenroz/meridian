@@ -63,7 +63,7 @@ class IbkrBroker:
         )
         return Account(
             cash=float(summary["TotalCashValue"]),
-            settled_cash=float(summary["SettledCash"]),
+            settled_cash=float(summary["AvailableFunds"]),
             equity=float(summary["NetLiquidation"]),
             positions=tuple(sorted(held, key=lambda p: p.symbol)),
         )
