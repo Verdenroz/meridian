@@ -10,6 +10,9 @@ if ! nc -z 127.0.0.1 4002 2>/dev/null; then
 fi
 git pull --rebase --autostash --quiet
 uv run python -m execution cycle --broker ibkr
+if [ ! -d data/execution/ibkr ]; then
+  exit 0
+fi
 git add data/execution/ibkr
 if git diff --cached --quiet; then
   exit 0
