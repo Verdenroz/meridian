@@ -25,7 +25,7 @@ After=graphical-session.target
 [Service]
 Type=simple
 ExecStart=/home/harvey/ibc/gatewaystart.sh -inline
-Restart=on-failure
+Restart=always
 RestartSec=60
 
 [Install]
