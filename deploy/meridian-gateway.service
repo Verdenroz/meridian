@@ -1,15 +1,17 @@
 # IB Gateway kept logged in by IBC (https://github.com/IbcAlpha/IBC), so the
 # paper cycle finds port 4002 open every morning. A user unit: the gateway is
-# a desktop program and needs the session's display.
+# a desktop program and inherits the session's DISPLAY from the user manager,
+# so it only starts once a desktop session exists.
 #
 # One-time setup (as harvey):
-#   1. Install IB Gateway (already under ~/Jts/ibgateway/<version>).
-#   2. Download the IBC Linux release and unzip it to ~/ibc; chmod +x ~/ibc/*.sh
-#   3. Edit ~/ibc/config.ini: IbLoginId / IbPassword = the PAPER credentials,
-#      TradingMode=paper, AcceptIncomingConnectionAction=accept,
-#      ReadOnlyApi=no, OverrideTwsApiPort=4002, ExistingSessionDetectedAction=primary.
-#      chmod 600 ~/ibc/config.ini   (it holds the password)
-#   4. Set TWS_MAJOR_VRSN below to the installed version folder name.
+#   1. Install IB Gateway (under ~/Jts/ibgateway/<version>).
+#   2. Unzip the IBC Linux release to ~/ibc; chmod +x ~/ibc/*.sh ~/ibc/scripts/*.sh
+#   3. In ~/ibc/gatewaystart.sh set IBC_PATH=/home/harvey/ibc and TWS_MAJOR_VRSN
+#      to the installed version folder (the script ignores the environment).
+#   4. Edit ~/ibc/config.ini: IbLoginId / IbPassword = the PAPER credentials,
+#      TradingMode=paper, AcceptIncomingConnectionAction=accept, ReadOnlyApi=no,
+#      OverrideTwsApiPort=4002, ExistingSessionDetectedAction=primary,
+#      IbDir=/home/harvey/Jts.  chmod 600 ~/ibc/config.ini (it holds the password)
 #   5. cp deploy/meridian-gateway.service ~/.config/systemd/user/
 #      systemctl --user daemon-reload && systemctl --user enable --now meridian-gateway
 #
@@ -22,12 +24,6 @@ After=graphical-session.target
 
 [Service]
 Type=simple
-Environment=DISPLAY=:0
-Environment=TWS_MAJOR_VRSN=1045
-Environment=IBC_INI=/home/harvey/ibc/config.ini
-Environment=IBC_PATH=/home/harvey/ibc
-Environment=TWS_PATH=/home/harvey/Jts
-Environment=LOG_PATH=/home/harvey/ibc/logs
 ExecStart=/home/harvey/ibc/gatewaystart.sh -inline
 Restart=on-failure
 RestartSec=60
