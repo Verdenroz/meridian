@@ -1,12 +1,14 @@
 """Freshness checks for the evidence clocks: did last session get logged?
 
-The last session is the newest daily SPY candle upstream, so holidays never
-raise a false alarm. Each finding alerts and the command exits nonzero, so
+The last session is the newest completed daily SPY candle upstream, so
+holidays never raise a false alarm; the current day's bar is in progress
+until the UTC date rolls, so it is excluded. Each finding alerts and the command exits nonzero, so
 a CI run of it is itself the alarm.
 """
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from market_data.client import fetch_chart
@@ -16,9 +18,11 @@ from shadow.log import load_decisions
 from execution.broker.paper_state import PaperStore
 
 
-def last_session(base_url: str) -> str:
+def last_session(base_url: str, today: str | None = None) -> str:
+    today = today or datetime.now(UTC).strftime("%Y-%m-%d")
     candles = fetch_chart(base_url, "SPY", range_="5d")["candles"]
-    return max(utc_date(c["timestamp"]) for c in candles if c.get("close"))
+    days = (utc_date(c["timestamp"]) for c in candles if c.get("close"))
+    return max(d for d in days if d < today)
 
 
 def shadow_findings(log_path: Path, session: str, strategies: tuple[str, ...]) -> list[str]:

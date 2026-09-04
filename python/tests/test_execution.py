@@ -4,7 +4,7 @@ settlement, idempotent submission, and the target-weight planner."""
 import http.server
 import random
 import threading
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 import pytest
@@ -16,7 +16,7 @@ from execution.notify import alert
 from execution.orders import Account, OrderRequest, Position, Quote
 from execution.quotes import quote_from_payload
 from execution.targets import live_targets, plan_orders
-from execution.watchdog import paper_findings, shadow_findings
+from execution.watchdog import last_session, paper_findings, shadow_findings
 from shadow.log import append_decision
 
 NOW = "2026-09-02T13:40:00+00:00"
@@ -378,6 +378,17 @@ class TestNotify:
 
 
 class TestWatchdog:
+    def test_last_session_skips_the_in_progress_bar(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        def bar(day: str) -> dict:
+            ts = int(datetime.fromisoformat(f"{day}T14:30:00+00:00").timestamp())
+            return {"timestamp": ts, "close": 100.0}
+
+        candles = {"candles": [bar("2026-09-02"), bar("2026-09-03"), bar("2026-09-04")]}
+        monkeypatch.setattr("execution.watchdog.fetch_chart", lambda *_, **__: candles)
+        assert last_session("http://x", today="2026-09-04") == "2026-09-03"
+        assert last_session("http://x", today="2026-09-05") == "2026-09-04"
+        assert last_session("http://x", today="2026-09-07") == "2026-09-04"
+
     def test_shadow_missing_last_session_is_a_finding(self, tmp_path: Path) -> None:
         log = tmp_path / "decisions.jsonl"
         append_decision(log, {"decision_date": "2026-08-31", "strategy": "null_voltarget"})
