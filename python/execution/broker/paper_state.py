@@ -14,6 +14,7 @@ from pathlib import Path
 from execution.orders import Order, Position
 
 DEFAULT_PAPER_DIR = Path("data/execution/paper")
+DEFAULT_IBKR_DIR = Path("data/execution/ibkr")
 
 
 @dataclass(frozen=True)

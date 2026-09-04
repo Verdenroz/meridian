@@ -1,0 +1,23 @@
+# Meridian paper cycle: trades the previous close's shadow decision on the
+# IBKR paper gateway. A user unit, since IB Gateway needs the desktop session.
+#
+# Install (as harvey, on the appliance):
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/meridian-paper-cycle.service deploy/meridian-paper-cycle.timer ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now meridian-paper-cycle.timer
+#   loginctl enable-linger harvey          # timers fire without an open login
+#   systemctl --user list-timers            # next firing
+#   journalctl --user -u meridian-paper-cycle -f
+#
+# IB Gateway must already be logged in (see meridian-gateway.service).
+
+[Unit]
+Description=Meridian paper cycle on the IBKR paper gateway
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/harvey/projects/meridian
+ExecStart=/home/harvey/projects/meridian/deploy/paper-cycle.sh
+# Optional alerts (same contract as the bus). Absent = journal only.
+#Environment=MERIDIAN_ALERT_WEBHOOK=https://ntfy.sh/<private-topic>

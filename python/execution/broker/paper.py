@@ -13,6 +13,7 @@ from dataclasses import replace
 from datetime import date, timedelta
 
 from execution.broker.paper_state import PaperState, PaperStore, Settlement
+from execution.commissions import tiered_commission
 from execution.orders import Account, Order, OrderRequest, Position, Quote
 
 
@@ -107,7 +108,13 @@ class PaperBroker:
             price = _marketable_price(order, quotes[order.symbol])
             if price is None:
                 continue
-            filled = replace(order, status="filled", fill_price=price, filled_at=now)
+            filled = replace(
+                order,
+                status="filled",
+                fill_price=price,
+                filled_at=now,
+                commission=tiered_commission(order.qty, price),
+            )
             self._commit(self._apply_fill(filled, price, today), "fill", filled)
             fills.append(filled)
         return tuple(fills)
@@ -119,12 +126,13 @@ class PaperBroker:
         if order.side == "buy":
             qty = held.qty + order.qty
             avg = (held.qty * held.avg_cost + notional) / qty
-            return replace(state, cash=state.cash - notional).with_position(
+            return replace(state, cash=state.cash - notional - order.commission).with_position(
                 Position(order.symbol, qty, avg, unsettled_funded=bool(state.unsettled))
             )
-        settle = Settlement(settlement_date(today).isoformat(), notional)
+        proceeds = notional - order.commission
+        settle = Settlement(settlement_date(today).isoformat(), proceeds)
         return replace(
-            state, cash=state.cash + notional, unsettled=state.unsettled + (settle,)
+            state, cash=state.cash + proceeds, unsettled=state.unsettled + (settle,)
         ).with_position(Position(order.symbol, held.qty - order.qty, held.avg_cost))
 
     def settle(self, today: date) -> None:

@@ -4,6 +4,7 @@ order construction, orderRef idempotency, cancel, status and account mapping."""
 import sys
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -64,9 +65,15 @@ class FakeExecution:
 
 
 @dataclass(frozen=True)
+class FakeCommission:
+    commission: float = 0.35
+
+
+@dataclass(frozen=True)
 class FakeFill:
     execution: FakeExecution
     time: datetime
+    commissionReport: FakeCommission = field(default_factory=FakeCommission)
 
 
 @dataclass(frozen=True)
@@ -123,6 +130,9 @@ class FakeIB:
         updated = replace(trade, orderStatus=FakeStatus(status), log=trade.log + [FakeLogEntry(T1, status, message)])
         self._trades = [updated if t is trade else t for t in self._trades]
         return updated
+
+    def sleep(self, seconds: float) -> None:
+        return None
 
     def trades(self) -> list[FakeTrade]:
         return list(self._trades)
@@ -240,11 +250,12 @@ class TestStatusMapping:
         fake = FakeIB(fills=(FakeFill(FakeExecution("k:SPYM:buy", 80.01), T1),))
         broker, rows = _broker(fake)
         broker.submit(BUY, NOW)
-        assert broker.process() == ()
+        assert broker.process({}, NOW, T0.date()) == ()
         fake.set_status("k:SPYM:buy", "Filled")
-        (filled,) = broker.process()
+        (filled,) = broker.process({}, NOW, T0.date())
         assert (filled.status, filled.fill_price, filled.filled_at) == ("filled", 80.01, T1.isoformat())
-        assert broker.process() == ()
+        assert filled.commission == 0.35
+        assert broker.process({}, NOW, T0.date()) == ()
         assert [r["kind"] for r in rows] == ["submit", "fill"]
 
 
@@ -275,3 +286,45 @@ class TestAccount:
 
 def test_adapter_imports_without_ib_async() -> None:
     assert "ib_async" not in sys.modules
+
+
+class TestCycleThroughAdapter:
+    def test_unfilled_orders_are_cancelled_and_journaled(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from execution.broker.paper_state import PaperStore
+        from execution.cycle import run_cycle
+        from execution.orders import Quote
+        from shadow.log import append_decision
+
+        quotes = {
+            "SPYM": Quote("SPYM", 79.9, 80.1, 80.0, "REGULAR", NOW, 80.0),
+            "SGOV": Quote("SGOV", 100.3, 100.5, 100.4, "REGULAR", NOW, 100.4),
+        }
+        monkeypatch.setattr("execution.cycle.fetch_quotes", lambda *_: quotes)
+        log = tmp_path / "decisions.jsonl"
+        append_decision(
+            log,
+            {
+                "decision_date": "2026-09-02",
+                "strategy": "null_voltarget",
+                "weights": {"SPY": 0.5},
+                "cash_weight": 0.5,
+            },
+        )
+        store = PaperStore(tmp_path / "ibkr")
+        fake = FakeIB(
+            summary=(
+                FakeValue("TotalCashValue", "1000000.00"),
+                FakeValue("AvailableFunds", "1000000.00"),
+                FakeValue("NetLiquidation", "1000000.00"),
+            )
+        )
+        broker = IbkrBroker(fake, ACCOUNT, store.journal, FakeApi)
+        report = run_cycle(store, log, "http://x", today=T0.date(), broker=broker, book=10_000.0)
+        assert report["status"] == "done"
+        assert {o["symbol"]: o["qty"] for o in report["orders"]} == {"SPYM": 31, "SGOV": 49}
+        assert all(o["status"] == "cancelled" for o in report["orders"])
+        assert report["equity"] == 10_000.0 and report["commission"] == 0.0
+        assert [r["kind"] for r in store.journal_rows()] == ["submit", "submit", "cancel", "cancel", "cycle"]
+        assert [o.account for _, o in fake.placed] == [ACCOUNT, ACCOUNT]

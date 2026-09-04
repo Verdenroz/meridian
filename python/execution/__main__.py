@@ -1,7 +1,8 @@
 """CLI: the paper book behind the execution layer.
 
     uv run python -m execution init --cash 10000   # open the paper account once
-    uv run python -m execution cycle               # trade the latest shadow decision
+    uv run python -m execution cycle               # trade the latest shadow decision (local sim)
+    uv run python -m execution cycle --broker ibkr # same decision on the IBKR paper gateway
     uv run python -m execution status
     uv run python -m execution watchdog          # exit 1 if a clock missed last session
     uv run python -m execution verify-broker     # read-only checks against a running IB Gateway
@@ -15,7 +16,13 @@ from pathlib import Path
 from market_data.client import DEFAULT_BASE_URL
 from shadow.log import DEFAULT_LOG_PATH
 
-from execution.broker.paper_state import DEFAULT_PAPER_DIR, PaperState, PaperStore
+from execution.book import BOOK_NOTIONAL
+from execution.broker.paper_state import (
+    DEFAULT_IBKR_DIR,
+    DEFAULT_PAPER_DIR,
+    PaperState,
+    PaperStore,
+)
 from execution.cycle import STRATEGY, run_cycle
 from execution.notify import alert
 from execution.watchdog import last_session, paper_findings, shadow_findings
@@ -33,14 +40,37 @@ def cmd_init(args: argparse.Namespace) -> int:
 
 
 def cmd_cycle(args: argparse.Namespace) -> int:
-    report = run_cycle(PaperStore(args.paper_dir), args.log_path, args.base_url, args.strategy)
+    book = args.book or None
+    if args.broker == "ibkr":
+        report = _ibkr_cycle(args, book)
+    else:
+        store = PaperStore(args.paper_dir)
+        report = run_cycle(store, args.log_path, args.base_url, args.strategy, book=book)
     print(f"{report['status']}: decision {report['decision_date']}")
     for order in report.get("orders", []):
         fill = f"@ {order['fill_price']:.2f}" if order["fill_price"] else order["reason"]
         print(f"  {order['side']:<4} {order['qty']:>5} {order['symbol']:<5} {order['status']:<9} {fill}")
     if report["status"] == "done":
-        print(f"  equity {report['equity']:.2f}  cash {report['cash']:.2f}  {report['positions']}")
+        print(
+            f"  equity {report['equity']:.2f}  cash {report['cash']:.2f}  {report['positions']}"
+            f"  commission {report['commission']:.2f}"
+        )
     return 0
+
+
+def _ibkr_cycle(args: argparse.Namespace, book: float | None) -> dict:
+    from execution.broker.ibkr import IbkrBroker, connect
+
+    store = PaperStore(args.journal_dir)
+    client = connect(args.host, args.port, args.client_id)
+    try:
+        account_id = args.account or client.managedAccounts()[0]
+        broker = IbkrBroker(client, account_id, store.journal)
+        return run_cycle(
+            store, args.log_path, args.base_url, args.strategy, broker=broker, book=book
+        )
+    finally:
+        client.disconnect()
 
 
 def cmd_status(args: argparse.Namespace) -> int:
@@ -68,7 +98,9 @@ def cmd_watchdog(args: argparse.Namespace) -> int:
     strategies = tuple(args.strategy)
     findings = shadow_findings(args.log_path, session, strategies)
     if not findings:
-        findings = paper_findings(PaperStore(args.paper_dir), session)
+        findings = paper_findings(PaperStore(args.paper_dir), session) + paper_findings(
+            PaperStore(DEFAULT_IBKR_DIR), session
+        )
     print(f"last session {session}: {'ok' if not findings else 'MISSED'}")
     for finding in findings:
         print(f"  {finding}")
@@ -97,6 +129,13 @@ def cmd_verify_broker(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def _gateway_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=4002, help="4002 paper gateway, 4001 live")
+    parser.add_argument("--client-id", type=int, default=9)
+    parser.add_argument("--account", default=None, help="defaults to the first managed account")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(prog="execution")
     parser.add_argument("--paper-dir", type=Path, default=DEFAULT_PAPER_DIR)
@@ -108,6 +147,10 @@ def main() -> int:
     cycle.add_argument("--log-path", type=Path, default=DEFAULT_LOG_PATH)
     cycle.add_argument("--base-url", default=DEFAULT_BASE_URL)
     cycle.add_argument("--strategy", default=STRATEGY)
+    cycle.add_argument("--broker", choices=("paper", "ibkr"), default="paper")
+    cycle.add_argument("--book", type=float, default=BOOK_NOTIONAL, help="0 = whole account")
+    cycle.add_argument("--journal-dir", type=Path, default=DEFAULT_IBKR_DIR)
+    _gateway_args(cycle)
     cycle.set_defaults(func=cmd_cycle)
     status = sub.add_parser("status", help="paper account summary")
     status.set_defaults(func=cmd_status)
@@ -117,10 +160,7 @@ def main() -> int:
     watchdog.add_argument("--strategy", action="append", default=[STRATEGY])
     watchdog.set_defaults(func=cmd_watchdog)
     verify = sub.add_parser("verify-broker", help="read-only checks against a running IB Gateway")
-    verify.add_argument("--host", default="127.0.0.1")
-    verify.add_argument("--port", type=int, default=4002, help="4002 paper gateway, 4001 live")
-    verify.add_argument("--client-id", type=int, default=9)
-    verify.add_argument("--account", default=None, help="defaults to the first managed account")
+    _gateway_args(verify)
     verify.set_defaults(func=cmd_verify_broker)
     args = parser.parse_args()
     return int(args.func(args))

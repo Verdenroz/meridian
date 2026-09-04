@@ -357,21 +357,28 @@ uv run python -m episodic news --date 2020-03-16  # news-similar days
 uv run python -m shadow run               # fetch latest, log today's decisions
 uv run python -m shadow status            # log summary
 
-# Paper book (step 10, W1). A local cash-account simulation behind the Broker
-# protocol trades the previous close's null_voltarget shadow row as whole shares of
-# SPYM (index) and SGOV (cash). The CI cron is held until the IBKR paper adapter is
-# behind the same interface, so the first journal rows are real broker fills.
-# data/execution/ is git-tracked, append-only, point-in-time once it exists
-# Guardrails (execution/guardrails.py) reject, never clamp; risk-reducing trades are
-# uncapped, risk-adding capped at 25%/session. data/execution/HALT present = hold.
-# MERIDIAN_ALERT_WEBHOOK (same contract as the Rust bus) receives every cycle/rejection
+# Paper book (step 10). Two journals behind one Broker protocol, both under
+# git-tracked, append-only data/execution/: a local cash-account simulation
+# (paper/) and the IBKR paper gateway (ibkr/, account DUT079377, verified
+# 2026-09-03). Each trades the previous close's null_voltarget shadow row as
+# whole shares of SPYM (index; the ETF formerly SPLG) and SGOV (cash), sized
+# against a fixed $10k book (execution/book.py) so the paper million is ignored.
+# Guardrails (execution/guardrails.py) reject, never clamp; risk-reducing trades
+# are uncapped, risk-adding capped at 25%/session. data/execution/HALT present =
+# hold. Fills carry commissions (Tiered model locally, the broker's report on
+# IBKR); the journal reports slippage and commission bps separately.
+# MERIDIAN_ALERT_WEBHOOK (same contract as the Rust bus) receives every cycle/rejection.
+# The IBKR cycle runs on the appliance (deploy/meridian-paper-cycle.timer, 09:35 NY,
+# with IB Gateway kept logged in by deploy/meridian-gateway.service); CI cannot
+# reach the gateway, so paper-trade.yml stays held
 uv run python -m execution init --cash 10000  # open the local paper account
-uv run python -m execution cycle              # trade the latest shadow decision on paper
+uv run python -m execution cycle              # trade the latest shadow decision locally
+uv run python -m execution cycle --broker ibkr  # same decision on the paper gateway (port 4002)
 uv run python -m execution status
 uv run python -m execution watchdog     # CI cron watchdog.yml: exit 1 + alert if a clock missed last session
 # IBKR adapter (broker/ibkr.py) needs `uv sync --group broker`. verify-broker runs read-only
 # checks (account tags, SPYM/SGOV qualify, order parsing, 1-share what-if) against a running
-# IB Gateway; nothing is placed. Unverified until it passes on the paper gateway
+# IB Gateway; nothing is placed. Passed 7/7 on the paper gateway 2026-09-03
 uv run python -m execution verify-broker      # --port 4002 paper (default), 4001 live
 
 # Monthly re-race of the held gates (CI cron, 1st of month; verdicts append to

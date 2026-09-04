@@ -43,7 +43,7 @@ class TestPaperBroker:
         assert order.status == "open"
         (fill,) = broker.process(QUOTES, NOW, TODAY)
         assert fill.fill_price == pytest.approx(80.01)
-        assert broker.state.cash == pytest.approx(10_000 - 800.1)
+        assert broker.state.cash == pytest.approx(10_000 - 800.1 - 0.35)
         held = broker.state.position("SPYM")
         assert (held.qty, held.avg_cost) == (10, pytest.approx(80.01))
 
@@ -81,7 +81,7 @@ class TestPaperBroker:
         broker.submit(OrderRequest("sell", "SPYM", "sell", 10, 79.5), NOW)
         broker.process(QUOTES, NOW, date(2026, 9, 4))
         account = broker.account(QUOTES)
-        assert account.settled_cash == pytest.approx(account.cash - 799.9)
+        assert account.settled_cash == pytest.approx(account.cash - (799.9 - 0.35))
         broker.settle(date(2026, 9, 4))
         assert broker.state.unsettled
         broker.settle(date(2026, 9, 7))
@@ -396,3 +396,41 @@ class TestWatchdog:
         assert paper_findings(store, "2026-09-01") == ["paper: rejection on 2026-09-01: collar"]
         store.journal({"kind": "cycle", "decision_date": "2026-09-01"})
         assert paper_findings(store, "2026-09-01") == []
+
+
+class TestCommissionModel:
+    def test_floor_binds_on_a_few_shares(self) -> None:
+        from execution.commissions import tiered_commission
+
+        assert tiered_commission(3, 90.0) == 0.35
+        assert tiered_commission(200, 90.0) == pytest.approx(0.70)
+
+    def test_capped_at_one_percent_of_value(self) -> None:
+        from execution.commissions import tiered_commission
+
+        assert tiered_commission(1, 1.0) == 0.01
+
+
+class TestBook:
+    def test_book_cash_follows_its_own_fills_only(self) -> None:
+        from execution.book import book_account
+
+        rows: list[dict] = [
+            {"kind": "fill", "order": {"id": "a", "side": "buy", "qty": 10, "fill_price": 80.0, "commission": 0.35}},
+            {"kind": "fill", "order": {"id": "a", "side": "buy", "qty": 10, "fill_price": 80.0, "commission": 0.35}},
+            {"kind": "fill", "order": {"id": "b", "side": "sell", "qty": 2, "fill_price": 81.0, "commission": 0.35}},
+            {"kind": "cycle", "orders": []},
+        ]
+        account = Account(1_000_000.0, 1_000_000.0, 1_000_640.0, (Position("SPYM", 8, 80.0),))
+        book = book_account(account, rows, 10_000.0)
+        assert book.cash == pytest.approx(10_000 - 800.35 + 161.65)
+        assert book.equity == pytest.approx(book.cash + 640.0)
+        assert book.positions == account.positions
+
+    def test_book_never_exceeds_the_account(self) -> None:
+        from execution.book import book_account
+
+        account = Account(5_000.0, 4_000.0, 5_000.0, ())
+        book = book_account(account, [], 10_000.0)
+        assert (book.cash, book.settled_cash, book.equity) == (5_000.0, 4_000.0, 5_000.0)
+        assert book_account(account, [], None) is account

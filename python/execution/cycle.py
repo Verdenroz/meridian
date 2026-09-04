@@ -15,9 +15,11 @@ from pathlib import Path
 from shadow.job import check_staleness
 from shadow.log import load_decisions
 
+from execution.book import BOOK_NOTIONAL, book_account
+from execution.broker import Broker
 from execution.broker.paper import PaperBroker
 from execution.broker.paper_state import PaperStore
-from execution.guardrails import Rejection, validate
+from execution.guardrails import LIMITS, Rejection, validate
 from execution.halt import HALT_PATH, halted
 from execution.notify import alert
 from execution.orders import Account, Order, Quote
@@ -51,6 +53,8 @@ def run_cycle(
     strategy: str = STRATEGY,
     today: date | None = None,
     halt_path: Path = HALT_PATH,
+    broker: Broker | None = None,
+    book: float | None = BOOK_NOTIONAL,
 ) -> dict:
     today = today or datetime.now(UTC).date()
     now = datetime.now(UTC).isoformat(timespec="seconds")
@@ -64,31 +68,25 @@ def run_cycle(
         return _record(store, "halt", {**base, "status": "halted"})
 
     targets = live_targets(decision["weights"], decision["cash_weight"])
-    broker = PaperBroker(store)
-    symbols = sorted(set(targets) | {p.symbol for p in broker.state.positions})
+    symbols = sorted(set(targets) | set(LIMITS["allowed_symbols"]))
     quotes = fetch_quotes(base_url, symbols)
     closed = [s for s, q in quotes.items() if q.market_state != "REGULAR"]
     if closed:
         return {**base, "status": "market_closed", "symbols": closed}
 
+    broker = broker if broker is not None else PaperBroker(store)
     broker.settle(today)
+    account = book_account(broker.account(quotes), store.journal_rows(), book)
     key = f"{decision_date}:{strategy}"
-    planned = plan_orders(broker.account(quotes), targets, quotes, key)
-    approved = validate(broker.account(quotes), planned, quotes)
+    planned = plan_orders(account, targets, quotes, key)
+    approved = validate(account, planned, quotes)
     if isinstance(approved, Rejection):
         order = None if approved.order is None else approved.order.__dict__
         row = {**base, "status": "rejected", "reason": approved.reason, "order": order}
         return _record(store, "rejection", row)
 
-    for side in ("sell", "buy"):
-        for request in (r for r in approved if r.side == side):
-            broker.submit(request, now)
-        broker.process(quotes, now, today)
-    for open_order in broker.open_orders():
-        broker.cancel(open_order.id, now, "unfilled at cycle end")
-
-    after = broker.account(quotes)
-    orders = tuple(o for o in broker.state.orders if o.client_id.startswith(key))
+    orders = _execute(broker, approved, quotes, now, today)
+    after = book_account(broker.account(quotes), store.journal_rows(), book)
     row = {
         **base,
         "kind": "cycle",
@@ -100,6 +98,8 @@ def run_cycle(
         "positions": {p.symbol: p.qty for p in after.positions},
         "drift": round(max_drift(after, targets, quotes), 4),
         "cost_bps": round(realized_cost_bps(orders, quotes), 2),
+        "commission": round(sum(o.commission for o in orders), 2),
+        "commission_bps": round(commission_bps(orders), 2),
         "status": "done",
     }
     store.journal(row)
@@ -107,6 +107,21 @@ def run_cycle(
     if row["drift"] > DRIFT_TOLERANCE:
         alert(f"paper drift {row['drift']:.3f} exceeds {DRIFT_TOLERANCE}", row)
     return row
+
+
+def _execute(
+    broker: Broker, approved: tuple, quotes: dict[str, Quote], now: str, today: date
+) -> tuple[Order, ...]:
+    """Sells, then buys, each side given its fill window; whatever is still
+    open at the end is cancelled. Returns each order in its final state."""
+    final: dict[str, Order] = {}
+    for side in ("sell", "buy"):
+        submitted = [broker.submit(r, now) for r in approved if r.side == side]
+        filled = broker.process(quotes, now, today)
+        final.update({o.id: o for o in (*submitted, *filled)})
+    cancelled = [broker.cancel(o.id, now, "unfilled at cycle end") for o in broker.open_orders()]
+    final.update({o.id: o for o in cancelled})
+    return tuple(final.values())
 
 
 def _record(store: PaperStore, kind: str, row: dict) -> dict:
@@ -136,3 +151,9 @@ def realized_cost_bps(orders: tuple[Order, ...], quotes: dict[str, Quote]) -> fl
         if ref and o.fill_price
     )
     return cost / notional * 1e4
+
+
+def commission_bps(orders: tuple[Order, ...]) -> float:
+    fills = [o for o in orders if o.status == "filled" and o.fill_price]
+    notional = sum(o.qty * o.fill_price for o in fills if o.fill_price)
+    return sum(o.commission for o in fills) / notional * 1e4 if notional else 0.0

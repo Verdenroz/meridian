@@ -31,19 +31,19 @@ def shadow_findings(log_path: Path, session: str, strategies: tuple[str, ...]) -
 
 
 def paper_findings(store: PaperStore, decision_date: str) -> list[str]:
-    if not store.exists():
-        return []
+    """One journal per broker; a journal that was never started is silent."""
+    label = store.directory.name
     rows = [r for r in store.journal_rows() if r["kind"] in ("cycle", "halt", "rejection")]
     if not rows:
-        return ["paper: account open but no cycle ever logged"]
+        return [f"{label}: account open but no cycle ever logged"] if store.exists() else []
     latest = rows[-1]
     if latest["decision_date"] != decision_date:
         return [
             (
-                f"paper: last {latest['kind']} was for {latest['decision_date']}, "
+                f"{label}: last {latest['kind']} was for {latest['decision_date']}, "
                 f"shadow decision {decision_date} not acted on"
             )
         ]
     if latest["kind"] != "cycle":
-        return [f"paper: {latest['kind']} on {decision_date}: {latest.get('reason', 'held')}"]
+        return [f"{label}: {latest['kind']} on {decision_date}: {latest.get('reason', 'held')}"]
     return []

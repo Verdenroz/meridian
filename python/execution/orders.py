@@ -42,6 +42,7 @@ class Order:
     fill_price: float | None = None
     filled_at: str | None = None
     reason: str | None = None
+    commission: float = 0.0
 
     def to_dict(self) -> dict:
         return asdict(self)

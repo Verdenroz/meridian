@@ -7,9 +7,9 @@ orders in the gateway's open and completed order lists instead of placing
 them twice. Fills are read from executions rather than order status, since
 orders recovered after a restart carry no fills of their own.
 
-UNVERIFIED against a live IB Gateway: every mapping here follows the
-ib_async documentation and is exercised only by a fake client. Verification
-against the IBKR paper account is a pending W1 checkbox.
+Fills arrive asynchronously, so `process` runs the client's event loop for
+a bounded wait before the cycle cancels what is still open. Verified
+against the paper gateway 2026-09-03 (`execution verify-broker`).
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from __future__ import annotations
 import importlib
 from collections.abc import Callable
 from dataclasses import replace
+from datetime import date
 from typing import Any
 
 from execution.orders import Account, Order, OrderRequest, Position, Quote, Status
@@ -27,6 +28,9 @@ STATUS: dict[str, Status] = {
     "ApiCancelled": "cancelled",
     "Inactive": "rejected",
 }
+FILL_WAIT_SECONDS = 45.0
+POLL_SECONDS = 2.0
+CANCEL_WAIT_SECONDS = 2.0
 
 
 def connect(host: str, port: int, client_id: int) -> Any:
@@ -68,6 +72,9 @@ class IbkrBroker:
             positions=tuple(sorted(held, key=lambda p: p.symbol)),
         )
 
+    def settle(self, today: date) -> None:
+        return None
+
     def _mine(self, trades: Any) -> list[Any]:
         return [t for t in trades if t.order.account == self.account_id]
 
@@ -103,12 +110,18 @@ class IbkrBroker:
 
     def cancel(self, order_id: str, now: str, reason: str) -> Order:
         trade = next(t for t in self.client.openTrades() if _order_id(t.order) == order_id)
-        cancelled = replace(self._order(self.client.cancelOrder(trade.order)), reason=reason)
+        trade = self.client.cancelOrder(trade.order)
+        self.client.sleep(CANCEL_WAIT_SECONDS)
+        cancelled = replace(self._order(trade), reason=reason)
         self.pending = self.pending - {order_id}
         self._record("cancel", cancelled)
         return cancelled
 
-    def process(self) -> tuple[Order, ...]:
+    def process(self, quotes: dict[str, Quote], now: str, today: date) -> tuple[Order, ...]:
+        for _ in range(int(FILL_WAIT_SECONDS / POLL_SECONDS)):
+            if not self._unresolved():
+                break
+            self.client.sleep(POLL_SECONDS)
         fills = tuple(
             self._order(t)
             for t in self.client.trades()
@@ -118,6 +131,12 @@ class IbkrBroker:
             self._record("fill", order)
         self.pending = self.pending - {o.id for o in fills}
         return fills
+
+    def _unresolved(self) -> bool:
+        return any(
+            _order_id(t.order) in self.pending and t.orderStatus.status not in STATUS
+            for t in self.client.trades()
+        )
 
     def _fills(self, client_id: str) -> list[Any]:
         return [f for f in self.client.fills() if f.execution.orderRef == client_id]
@@ -138,6 +157,7 @@ class IbkrBroker:
             fill_price=fill.execution.avgPrice if fill is not None else None,
             filled_at=fill.time.isoformat() if fill is not None else _stamp(trade.log[-1:]),
             reason=_message(trade.log) if ended else None,
+            commission=fill.commissionReport.commission if fill is not None else 0.0,
         )
 
 

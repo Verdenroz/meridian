@@ -1,0 +1,10 @@
+[Unit]
+Description=Meridian paper cycle, 09:35 New York on trading weekdays
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:35:00 America/New_York
+# Retry window: a missed firing (machine asleep) runs on the next boot.
+Persistent=true
+
+[Install]
+WantedBy=timers.target
