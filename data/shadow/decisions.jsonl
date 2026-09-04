@@ -217,3 +217,12 @@
 {"cash_weight":0.0,"decision_date":"2026-09-03","fetched_at":"2026-09-03T23:28:48+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.7)"},"strategy":"spine6f_3state","weights":{"SPY":1.0}}
 {"cash_weight":0.0,"decision_date":"2026-09-03","fetched_at":"2026-09-03T23:28:48+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.85)"},"strategy":"spine7f_turn_3state","weights":{"SPY":1.0}}
 {"cash_weight":0.0,"decision_date":"2026-09-03","fetched_at":"2026-09-03T23:28:48+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.95)"},"strategy":"spine8f_turn_tone_3state","weights":{"SPY":1.0}}
+{"cash_weight":0.0,"decision_date":"2026-09-04","fetched_at":"2026-09-04T23:12:43+00:00","job_version":"shadow-v1","meta":{"vol_forecast":0.105579},"strategy":"null_voltarget","weights":{"SPY":1.0}}
+{"cash_weight":0.0,"decision_date":"2026-09-04","fetched_at":"2026-09-04T23:12:43+00:00","job_version":"shadow-v1","meta":{"brake_active":false},"strategy":"credit_brake","weights":{"SPY":1.0}}
+{"cash_weight":0.0,"decision_date":"2026-09-04","fetched_at":"2026-09-04T23:12:43+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.85)"},"strategy":"spine5f_credit","weights":{"SPY":1.0}}
+{"cash_weight":0.0,"decision_date":"2026-09-04","fetched_at":"2026-09-04T23:12:43+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.7)"},"strategy":"spine6f_rate","weights":{"SPY":1.0}}
+{"cash_weight":0.0,"decision_date":"2026-09-04","fetched_at":"2026-09-04T23:12:43+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.95)"},"strategy":"spine5f_rate","weights":{"SPY":1.0}}
+{"cash_weight":0.0,"decision_date":"2026-09-04","fetched_at":"2026-09-04T23:12:43+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.85)"},"strategy":"spine5fc_veto","weights":{"SPY":1.0}}
+{"cash_weight":0.0,"decision_date":"2026-09-04","fetched_at":"2026-09-04T23:12:43+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.7)"},"strategy":"spine6f_3state","weights":{"SPY":1.0}}
+{"cash_weight":0.0,"decision_date":"2026-09-04","fetched_at":"2026-09-04T23:12:43+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.85)"},"strategy":"spine7f_turn_3state","weights":{"SPY":1.0}}
+{"cash_weight":0.0,"decision_date":"2026-09-04","fetched_at":"2026-09-04T23:12:43+00:00","job_version":"shadow-v1","meta":{"chosen_mapping":"threshold(0.95)"},"strategy":"spine8f_turn_tone_3state","weights":{"SPY":1.0}}
