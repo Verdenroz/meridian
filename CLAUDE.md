@@ -402,6 +402,14 @@ uv run python -m execution watchdog     # CI cron watchdog.yml: exit 1 + alert i
 # IB Gateway; nothing is placed. Passed 7/7 on the paper gateway 2026-09-03
 uv run python -m execution verify-broker      # --port 4002 paper (default), 4001 live
 
+# Prospective stress test (pre-registered 2026-09-29; the one open test under the
+# research freeze). First SPY 10% drawdown from its 1y high after 2026-09-30, by
+# 2029-09-28: spine7f_turn_3state vs null_voltarget from live shadow rows; PASS iff
+# drawdown <= 2/3 of the null's AND episode return >= null's - 2pp. Judged once when
+# the window closes; verdict appends once to data/races/stress_test.jsonl. Checked
+# monthly in the re-race workflow; never edit GATE
+uv run python -m stress_test status
+
 # Monthly re-race of the held gates (CI cron, 1st of month; verdicts append to
 # git-tracked data/races/reraces.jsonl — one row per (month, race), idempotent).
 # 2026-08/09 rows priced pre-2026 cash at zero (CI refresh bug, fixed 2026-09-29):
