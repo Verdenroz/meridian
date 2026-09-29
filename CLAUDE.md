@@ -390,8 +390,13 @@ uv run python -m shadow status            # log summary
 # IBKR); the journal reports slippage and commission bps separately.
 # MERIDIAN_ALERT_WEBHOOK (same contract as the Rust bus) receives every cycle/rejection.
 # The IBKR cycle runs on the appliance (deploy/meridian-paper-cycle.timer, 09:35 NY,
-# with IB Gateway kept logged in by deploy/meridian-gateway.service); CI cannot
-# reach the gateway, so paper-trade.yml stays held
+# with IB Gateway kept logged in by deploy/meridian-gateway.service on the
+# meridian-xvfb virtual display); CI cannot reach the gateway, so paper-trade.yml
+# stays held. The appliance must be an always-on box: on the laptop the cycle ran
+# 4 of ~19 sessions in Sept 2026. Install/refresh with deploy/install-appliance.sh
+# (checks prerequisites first, enables linger). Alerts: ntfy topic in the
+# MERIDIAN_ALERT_WEBHOOK GitHub secret and ~/.config/meridian/alert.env (0600);
+# every appliance unit alerts on failure via meridian-alert@.service
 uv run python -m execution init --cash 10000  # open the local paper account
 uv run python -m execution cycle              # trade the latest shadow decision locally
 uv run python -m execution cycle --broker ibkr  # same decision on the paper gateway (port 4002)
