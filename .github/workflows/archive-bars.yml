@@ -1,0 +1,41 @@
+name: Archive intraday bars
+
+on:
+  schedule:
+    # Weekdays after the close (16:40 EST / 17:40 EDT); upstream keeps 29 days
+    # of 1m bars, so missed runs lose nothing until a month passes.
+    - cron: "40 21 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: archive-bars
+  cancel-in-progress: false
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Archive completed sessions
+        env:
+          PYTHONPATH: python
+        run: python3 -m bars_archive fetch
+
+      - name: Commit and push
+        if: always()
+        run: |
+          git config user.name "bars-archive-bot"
+          git config user.email "actions@users.noreply.github.com"
+          git add archive/bars
+          if git diff --cached --quiet; then
+            echo "no new sessions"
+            exit 0
+          fi
+          git commit -m "chore: archive intraday bars $(date -u +%Y-%m-%dT%H:%MZ)"
+          # Retry once on race with a concurrent push
+          git push || (git pull --rebase && git push)

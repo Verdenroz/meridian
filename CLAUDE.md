@@ -54,6 +54,11 @@ The repo has been rebuilt around the charter. Current inventory:
   per-name news for the frozen 482-name FNSPID universe (`deploy/pername-universe.txt`)
   into `archive/pername/` — same append-only contract, separate store; collection only,
   no scoring, no features (those need their own pre-registrations).
+- **Live, new core:** `python/bars_archive/` — append-only intraday bar archive (1m index/
+  inverse ETFs, 5m sectors/TLT/GLD), stdlib-only. Daily cron (`archive-bars.yml`) writes one
+  immutable gzipped JSONL per (interval, session, symbol) into git-tracked `archive/bars/`.
+  Upstream keeps 1m bars only 29 days, so this is the only intraday history there will be.
+  Collection only; intraday strategies need their own pre-registrations.
 - **Live, new core:** `python/market_data/` — historical loaders (charts/dividends/splits,
   FRED, treasury curve) with a loud-failure adjClose cross-check; snapshots under
   `data/market/` (derived, rebuildable, `fetched_at`-stamped).
@@ -98,6 +103,11 @@ uv run pytest python/tests       # tests (deliberately minimal — see below)
 uv run python -m feeds_archive fetch      # one-shot poll (CI uses PYTHONPATH=python instead)
 uv run python -m feeds_archive build-db   # compile JSONL → SQLite index
 uv run python -m feeds_archive status     # archive freshness
+
+# Intraday bar archive (shipped 2026-09-29; no gate — record-keeping for a
+# pre-registered intraday challenger; never edit or rewrite session files)
+uv run python -m bars_archive fetch       # archive every completed session upstream holds
+uv run python -m bars_archive status      # sessions per interval, symbol gaps
 
 # Historical market/macro data (ETF core + VIX + treasury curve)
 uv run python -m market_data fetch        # fetch, cross-check, store

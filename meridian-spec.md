@@ -420,3 +420,5 @@ this table.
 | Live news + sentiment | `/v2/news` | 50 items with sentiment labels |
 | Quotes / hours / intraday | `/v2/quotes`, `/v2/hours`, `/v2/chart` (1m–1h) | working |
 | Known gap | historical news archive | none upstream — closed by §3.4 from day one |
+| Intraday bars, windowed (v3.1, checked 2026-09-29) | `POST /graphql` `ticker{chart(interval, start, end)}` | 1m reaches back 29 days in ≤7-day windows; 5m/15m/30m 58 days; 1h 728 days. Regular session only; no-trade minutes absent. REST `/v2/chart` ignores `interval` when `start`/`end` are given and returns daily bars. 60 requests/min per IP |
+| Known gap | intraday history beyond those lookbacks | none upstream; closed going forward by `bars_archive` (`archive/bars/`, from 2026-09-29, 1m back to 2026-09-01 and 5m to 2026-08-03) |
