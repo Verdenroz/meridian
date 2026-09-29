@@ -16,7 +16,12 @@ from execution.notify import alert
 from execution.orders import Account, OrderRequest, Position, Quote
 from execution.quotes import quote_from_payload
 from execution.targets import live_targets, plan_orders
-from execution.watchdog import last_session, paper_findings, shadow_findings
+from execution.watchdog import (
+    archive_findings,
+    last_session,
+    paper_findings,
+    shadow_findings,
+)
 from shadow.log import append_decision
 
 NOW = "2026-09-02T13:40:00+00:00"
@@ -401,6 +406,20 @@ class TestWatchdog:
         assert shadow_findings(log, "2026-08-31", ("null_voltarget",)) == []
         findings = shadow_findings(log, "2026-09-01", ("null_voltarget", "other"))
         assert len(findings) == 2 and "2026-09-01" in findings[0]
+
+    def test_archive_findings_flag_stale_and_missing_clocks(self, tmp_path: Path) -> None:
+        for rel, day in (
+            ("archive/feeds/heartbeats", "2026-09-29"),
+            ("archive/pername/heartbeats", "2026-09-28"),
+            ("archive/bars/heartbeats", "2026-09-20"),
+        ):
+            (tmp_path / rel).mkdir(parents=True)
+            (tmp_path / rel / f"{day}.jsonl").write_text("{}\n")
+        findings = archive_findings(tmp_path, date(2026, 9, 29))
+        assert [f.split(":")[0] for f in findings] == [
+            "archive/bars/heartbeats",
+            "data/tone_live/scores.jsonl",
+        ]
 
     def test_paper_findings_follow_the_journal(self, tmp_path: Path) -> None:
         store = PaperStore(tmp_path / "paper")

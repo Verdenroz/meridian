@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import UTC, datetime
 from pathlib import Path
 
 from market_data.client import DEFAULT_BASE_URL
@@ -23,9 +24,14 @@ from execution.broker.paper_state import (
     PaperState,
     PaperStore,
 )
-from execution.cycle import STRATEGY, run_cycle
+from execution.cycle import STRATEGY, latest_decision, run_cycle
 from execution.notify import alert
-from execution.watchdog import last_session, paper_findings, shadow_findings
+from execution.watchdog import (
+    archive_findings,
+    last_session,
+    paper_findings,
+    shadow_findings,
+)
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -96,11 +102,13 @@ def cmd_status(args: argparse.Namespace) -> int:
 def cmd_watchdog(args: argparse.Namespace) -> int:
     session = last_session(args.base_url)
     strategies = tuple(args.strategy)
-    findings = shadow_findings(args.log_path, session, strategies)
-    if not findings:
-        findings = paper_findings(PaperStore(args.paper_dir), session) + paper_findings(
-            PaperStore(DEFAULT_IBKR_DIR), session
-        )
+    decided = latest_decision(args.log_path, STRATEGY)["decision_date"]
+    findings = (
+        shadow_findings(args.log_path, session, strategies)
+        + paper_findings(PaperStore(args.paper_dir), decided)
+        + paper_findings(PaperStore(DEFAULT_IBKR_DIR), decided)
+        + archive_findings(Path("."), datetime.now(UTC).date())
+    )
     print(f"last session {session}: {'ok' if not findings else 'MISSED'}")
     for finding in findings:
         print(f"  {finding}")
