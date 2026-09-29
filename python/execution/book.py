@@ -5,13 +5,14 @@ will hold ten thousand. Sized against the whole account, the paper book
 would trade a hundred times the intended size, so the cycle sizes against
 a book instead: its cash is the notional less the net cash its own fills
 consumed, read back from the append-only journal; its positions are the
-account's, since the book is the only trader there. With no notional the
-account is the book.
+account's, since the book is the only trader there, valued at the quote
+because the account's net liquidation also counts items outside the book.
+With no notional the account is the book.
 """
 
 from __future__ import annotations
 
-from execution.orders import Account
+from execution.orders import Account, Quote
 
 BOOK_NOTIONAL = 10_000.0
 
@@ -28,11 +29,13 @@ def _cash_out(order: dict) -> float:
     return -(notional - order["commission"])
 
 
-def book_account(account: Account, rows: list[dict], notional: float | None) -> Account:
+def book_account(
+    account: Account, rows: list[dict], notional: float | None, quotes: dict[str, Quote]
+) -> Account:
     if notional is None:
         return account
     cash = min(notional - net_spent(rows), account.cash)
-    held = account.equity - account.cash
+    held = sum(p.qty * quotes[p.symbol].last for p in account.positions)
     return Account(
         cash=cash,
         settled_cash=min(cash, account.settled_cash),

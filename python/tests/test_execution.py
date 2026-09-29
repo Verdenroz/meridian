@@ -146,6 +146,12 @@ class TestPlanner:
         account = Account(0.0, 0.0, 8_000.0, (Position("SPYM", 100, 80.0),))
         assert plan_orders(account, {"SPYM": 1.0, "SGOV": 0.0}, QUOTES, "k") == ()
 
+    def test_buys_are_trimmed_to_the_batch_cash(self) -> None:
+        account = Account(2_181.38, 2_181.38, 11_950.0, (Position("SPYM", 87, 80.0),))
+        orders = plan_orders(account, {"SPYM": 1.0, "SGOV": 0.0}, QUOTES, "k")
+        assert validate(account, orders, QUOTES) == orders
+        assert sum(o.qty * o.limit for o in orders) <= 2_181.38
+
     def test_unlisted_holdings_are_sold_down(self) -> None:
         account = Account(0.0, 0.0, 8_000.0, (Position("SPYM", 100, 80.0),))
         (sell,) = plan_orders(account, {"SGOV": 1.0}, QUOTES, "k")[:1]
@@ -433,7 +439,7 @@ class TestBook:
             {"kind": "cycle", "orders": []},
         ]
         account = Account(1_000_000.0, 1_000_000.0, 1_000_640.0, (Position("SPYM", 8, 80.0),))
-        book = book_account(account, rows, 10_000.0)
+        book = book_account(account, rows, 10_000.0, QUOTES)
         assert book.cash == pytest.approx(10_000 - 800.35 + 161.65)
         assert book.equity == pytest.approx(book.cash + 640.0)
         assert book.positions == account.positions
@@ -442,6 +448,13 @@ class TestBook:
         from execution.book import book_account
 
         account = Account(5_000.0, 4_000.0, 5_000.0, ())
-        book = book_account(account, [], 10_000.0)
+        book = book_account(account, [], 10_000.0, QUOTES)
         assert (book.cash, book.settled_cash, book.equity) == (5_000.0, 4_000.0, 5_000.0)
-        assert book_account(account, [], None) is account
+        assert book_account(account, [], None, QUOTES) is account
+
+    def test_holdings_are_valued_at_the_quote_not_net_liquidation(self) -> None:
+        from execution.book import book_account
+
+        account = Account(1_000_000.0, 1_000_000.0, 1_002_000.0, (Position("SPYM", 10, 80.0),))
+        book = book_account(account, [], 10_000.0, QUOTES)
+        assert book.equity == pytest.approx(10_800.0)

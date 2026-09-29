@@ -76,7 +76,7 @@ def run_cycle(
 
     broker = broker if broker is not None else PaperBroker(store)
     broker.settle(today)
-    account = book_account(broker.account(quotes), store.journal_rows(), book)
+    account = book_account(broker.account(quotes), store.journal_rows(), book, quotes)
     key = f"{decision_date}:{strategy}"
     planned = plan_orders(account, targets, quotes, key)
     approved = validate(account, planned, quotes)
@@ -86,7 +86,7 @@ def run_cycle(
         return _record(store, "rejection", row)
 
     orders = _execute(broker, approved, quotes, now, today)
-    after = book_account(broker.account(quotes), store.journal_rows(), book)
+    after = book_account(broker.account(quotes), store.journal_rows(), book, quotes)
     row = {
         **base,
         "kind": "cycle",
