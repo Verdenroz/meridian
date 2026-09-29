@@ -7,12 +7,17 @@ honest about the opportunity cost of de-risking.
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
+from market_data.macro import TREASURY_FIRST_YEAR
 from market_data.panel import load_total_return_panel
 from market_data.store import read_snapshot
 
 TRADING_DAYS_PER_YEAR = 252
+# Holiday gaps in the curve are a few days; anything longer means the store is
+# missing treasury history, which would otherwise price cash at zero.
+MAX_CASH_GAP_DAYS = 10
 
 
 class Panel:
@@ -61,9 +66,18 @@ def _cash_rate_by_date(store_dir: Path, dates: list[str]) -> list[float]:
             if rate is not None:
                 by_date[row["date"]] = float(rate)
     out: list[float] = []
-    last = 0.0
-    for date in dates:
-        last = by_date.get(date, last)
+    last, seen = 0.0, None
+    for day in dates:
+        if day in by_date:
+            last, seen = by_date[day], day
+        if day < str(TREASURY_FIRST_YEAR):
+            out.append(0.0)
+            continue
+        if seen is None or (date.fromisoformat(day) - date.fromisoformat(seen)).days > MAX_CASH_GAP_DAYS:
+            raise ValueError(
+                f"no T-bill rate within {MAX_CASH_GAP_DAYS} days of {day}; "
+                "the store is missing treasury history"
+            )
         out.append(last)
     return out
 

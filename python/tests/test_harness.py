@@ -171,3 +171,30 @@ class TestWalkForward:
         assert wf["dates"] == full["dates"]
         # zero costs + refit-free strategy → identical stitched daily returns
         assert wf["returns"] == pytest.approx(full["returns"])
+
+
+class TestCashRate:
+    def _store(self, tmp_path, rows: list[dict]):
+        from market_data.store import write_snapshot
+
+        write_snapshot(tmp_path, "macro", "treasury_yields", {"rows": rows})
+        return tmp_path
+
+    def test_holiday_gaps_forward_fill(self, tmp_path) -> None:
+        from harness.panel import _cash_rate_by_date
+
+        store = self._store(tmp_path, [{"date": "2026-01-02", "y3M": 4.0}])
+        assert _cash_rate_by_date(store, ["2026-01-02", "2026-01-05"]) == [4.0, 4.0]
+
+    def test_missing_treasury_history_is_loud_not_zero(self, tmp_path) -> None:
+        from harness.panel import _cash_rate_by_date
+
+        store = self._store(tmp_path, [{"date": "2026-01-02", "y3M": 4.0}])
+        with pytest.raises(ValueError, match="treasury history"):
+            _cash_rate_by_date(store, ["2025-06-02", "2026-01-02"])
+
+    def test_dates_before_the_curve_exists_earn_nothing(self, tmp_path) -> None:
+        from harness.panel import _cash_rate_by_date
+
+        store = self._store(tmp_path, [{"date": "1990-01-02", "y3M": 7.9}])
+        assert _cash_rate_by_date(store, ["1985-03-01", "1990-01-02"]) == [0.0, 7.9]
