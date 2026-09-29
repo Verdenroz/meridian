@@ -1,0 +1,15 @@
+# Virtual display for IB Gateway, so the gateway runs on a headless box with
+# no desktop session. Installed by deploy/install-appliance.sh.
+
+[Unit]
+Description=Virtual X display :99 for IB Gateway
+OnFailure=meridian-alert@%n.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,10 @@
+# Posts a unit's failure and its last journal lines to MERIDIAN_ALERT_WEBHOOK.
+# Wired in with OnFailure=meridian-alert@%n.service on every appliance unit.
+
+[Unit]
+Description=Meridian alert for failed unit %i
+
+[Service]
+Type=oneshot
+EnvironmentFile=-%h/.config/meridian/alert.env
+ExecStart=%h/projects/meridian/deploy/unit-alert.sh %i

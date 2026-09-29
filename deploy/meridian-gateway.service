@@ -1,30 +1,32 @@
 # IB Gateway kept logged in by IBC (https://github.com/IbcAlpha/IBC), so the
-# paper cycle finds port 4002 open every morning. A user unit: the gateway is
-# a desktop program and inherits the session's DISPLAY from the user manager,
-# so it only starts once a desktop session exists.
+# paper cycle finds port 4002 open every morning. The gateway draws on the
+# meridian-xvfb virtual display, so it needs no desktop session and runs on a
+# headless box; linger (set by deploy/install-appliance.sh) starts it at boot.
 #
-# One-time setup (as harvey):
+# One-time setup (as the appliance user):
 #   1. Install IB Gateway (under ~/Jts/ibgateway/<version>).
 #   2. Unzip the IBC Linux release to ~/ibc; chmod +x ~/ibc/*.sh ~/ibc/scripts/*.sh
-#   3. In ~/ibc/gatewaystart.sh set IBC_PATH=/home/harvey/ibc and TWS_MAJOR_VRSN
+#   3. In ~/ibc/gatewaystart.sh set IBC_PATH=$HOME/ibc and TWS_MAJOR_VRSN
 #      to the installed version folder (the script ignores the environment).
 #   4. Edit ~/ibc/config.ini: IbLoginId / IbPassword = the PAPER credentials,
 #      TradingMode=paper, AcceptIncomingConnectionAction=accept, ReadOnlyApi=no,
 #      OverrideTwsApiPort=4002, ExistingSessionDetectedAction=primary,
-#      IbDir=/home/harvey/Jts.  chmod 600 ~/ibc/config.ini (it holds the password)
-#   5. cp deploy/meridian-gateway.service ~/.config/systemd/user/
-#      systemctl --user daemon-reload && systemctl --user enable --now meridian-gateway
+#      IbDir=$HOME/Jts.  chmod 600 ~/ibc/config.ini (it holds the password)
+#   5. deploy/install-appliance.sh
 #
 # IBC restarts the gateway through its daily logout; two-factor still needs the
 # phone prompt on the first login after each full restart.
 
 [Unit]
 Description=IB Gateway (paper) kept logged in by IBC
-After=graphical-session.target
+Requires=meridian-xvfb.service
+After=meridian-xvfb.service network-online.target
+OnFailure=meridian-alert@%n.service
 
 [Service]
 Type=simple
-ExecStart=/home/harvey/ibc/gatewaystart.sh -inline
+Environment=DISPLAY=:99
+ExecStart=%h/ibc/gatewaystart.sh -inline
 Restart=always
 RestartSec=60
 
