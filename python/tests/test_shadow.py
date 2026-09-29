@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from harness.panel import Panel
 from harness.view import HistoryView
-from shadow.job import check_staleness, decision_row
+from shadow.job import check_staleness, dates_to_log, decision_row
 from shadow.log import append_decision, load_decisions, logged_keys
 
 
@@ -65,3 +65,31 @@ class TestDecisionRow:
         strategy = _StubStrategy()
         decision_row("stub", strategy, view, "2026-07-31T21:30:00+00:00")
         assert strategy.fitted_at == panel.n_days - 1
+
+
+DATES = ["2026-09-24", "2026-09-25", "2026-09-28", "2026-09-29"]
+TODAY = date(2026, 9, 29)
+
+
+class TestCatchUp:
+
+    def test_a_withheld_session_is_owed_to_contenders_on_record(self) -> None:
+        logged = {("2026-09-24", "a"), ("2026-09-25", "a")}
+        assert dates_to_log(DATES, logged, ["a"], TODAY) == [
+            ("2026-09-28", ["a"]),
+            ("2026-09-29", ["a"]),
+        ]
+
+    def test_a_new_contender_starts_at_the_latest_date_only(self) -> None:
+        logged = {("2026-09-25", "a")}
+        owed = dates_to_log(DATES, logged, ["a", "new"], TODAY)
+        assert owed == [("2026-09-28", ["a"]), ("2026-09-29", ["a", "new"])]
+
+    def test_sessions_beyond_the_staleness_window_stay_missing(self) -> None:
+        dates = ["2026-09-18", "2026-09-21", "2026-09-29"]
+        logged = {("2026-09-18", "a")}
+        assert dates_to_log(dates, logged, ["a"], TODAY) == [("2026-09-29", ["a"])]
+
+    def test_nothing_is_owed_once_logged(self) -> None:
+        logged = {(d, "a") for d in DATES}
+        assert dates_to_log(DATES, logged, ["a"], TODAY) == []

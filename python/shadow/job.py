@@ -2,7 +2,10 @@
 
 Every run refreshes the store, points each contender at the latest close
 through the same lookahead-proof HistoryView the backtests use, and appends
-the target weights it would hold tomorrow. Behavior-match evaluation
+the target weights it would hold tomorrow. Upstream's daily chart omits the
+just-closed session when a run starts after 00:00 UTC, so a run also logs any
+earlier session inside the staleness window that a contender already on
+record missed; `fetched_at` shows the lateness. Behavior-match evaluation
 criteria must be pre-registered separately BEFORE evaluation begins —
 this module only accumulates the evidence.
 """
@@ -55,6 +58,29 @@ def check_staleness(decision_date: str, today: date) -> None:
         )
 
 
+def dates_to_log(
+    dates: list[str], logged: set[tuple[str, str]], names: list[str], today: date
+) -> list[tuple[str, list[str]]]:
+    """(date, contenders) still owed, oldest first. The latest date is owed to
+    every contender; an earlier in-window date only to a contender whose record
+    began before it, so a new contender never gains a backfilled history."""
+    first: dict[str, str] = {}
+    for d, name in sorted(logged):
+        first.setdefault(name, d)
+    latest = dates[-1]
+    window = [d for d in dates if (today - date.fromisoformat(d)).days <= MAX_STALENESS_DAYS]
+    owed = []
+    for d in window:
+        due = [
+            n
+            for n in names
+            if (d, n) not in logged and (d == latest or (n in first and first[n] < d))
+        ]
+        if due:
+            owed.append((d, due))
+    return owed
+
+
 def decision_row(
     name: str, strategy: object, view: HistoryView, fetched_at: str
 ) -> dict:
@@ -81,19 +107,22 @@ def run_decision(
     if fetch:
         refresh(base_url, store_dir)
     panel: Panel = build_panel(store_dir, RACE_SYMBOLS)
-    t = panel.n_days - 1
-    decision_date = panel.dates[t]
-    check_staleness(decision_date, datetime.now(UTC).date())
+    today = datetime.now(UTC).date()
+    decision_date = panel.dates[-1]
+    check_staleness(decision_date, today)
     fetched_at = datetime.now(UTC).isoformat(timespec="seconds")
     already = logged_keys(log_path)
-    written, skipped = [], []
-    for name, strategy in build_contenders(panel, store_dir).items():
-        if (decision_date, name) in already:
-            skipped.append(name)
-            continue
-        row = decision_row(name, strategy, HistoryView(panel, t), fetched_at)
-        append_decision(log_path, row)
-        written.append(row)
+    names = list(build_contenders(panel, store_dir))
+    written = []
+    for date_, due in dates_to_log(panel.dates, already, names, today):
+        t = panel.dates.index(date_)
+        for name, strategy in build_contenders(panel, store_dir).items():
+            if name not in due:
+                continue
+            row = decision_row(name, strategy, HistoryView(panel, t), fetched_at)
+            append_decision(log_path, row)
+            written.append(row)
+    skipped = [n for n in names if (decision_date, n) in already]
     return {
         "decision_date": decision_date,
         "written": written,

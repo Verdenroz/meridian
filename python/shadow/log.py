@@ -1,7 +1,8 @@
 """Append-only decisions log: the paper-trading record.
 
 Rows are point-in-time evidence — what each contender would have held,
-written the day it was decided, keyed by `fetched_at` for when we could
+written the day it was decided (or, when upstream withheld that session,
+within the job's staleness window), keyed by `fetched_at` for when we could
 have known. Unlike everything else under data/, this is NOT rebuildable:
 recomputing a past decision later would use today's revised data and
 today's code. Never mutate or regenerate rows; the file is git-tracked.

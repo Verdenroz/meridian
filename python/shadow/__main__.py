@@ -26,7 +26,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     for row in report["written"]:
         weights = ", ".join(f"{s}={w:.3f}" for s, w in sorted(row["weights"].items()))
         print(
-            f"  {row['strategy']:<16} {weights or 'all cash'}  "
+            f"  {row['decision_date']} {row['strategy']:<16} {weights or 'all cash'}  "
             f"cash={row['cash_weight']:.3f}  {row['meta']}"
         )
     if report["skipped"]:
