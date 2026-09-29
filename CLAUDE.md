@@ -401,7 +401,9 @@ uv run python -m execution watchdog     # CI cron watchdog.yml: exit 1 + alert i
 uv run python -m execution verify-broker      # --port 4002 paper (default), 4001 live
 
 # Monthly re-race of the held gates (CI cron, 1st of month; verdicts append to
-# git-tracked data/races/reraces.jsonl — one row per (month, race), idempotent)
+# git-tracked data/races/reraces.jsonl — one row per (month, race), idempotent).
+# 2026-08/09 rows priced pre-2026 cash at zero (CI refresh bug, fixed 2026-09-29):
+# not comparable to registered verdicts; 2026-10 is the first full-basis CI row
 uv run python -m rerace run               # fetch, re-run eightk_race + credit_race, log
 uv run python -m rerace status            # verdict history
 
