@@ -109,7 +109,9 @@ uv run python -m feeds_archive status     # archive freshness
 uv run python -m bars_archive fetch       # archive every completed session upstream holds
 uv run python -m bars_archive status      # sessions per interval, symbol gaps
 
-# Day-trade challenger (pre-registered 2026-09-29; OPEN — regime-filtered SPY
+# Day-trade challenger (pre-registered 2026-09-29; PAUSED same day by the research
+# freeze — cron removed, run by hand only. Nothing is lost while paused: replay journals
+# every archived session not yet replayed, so resuming catches up; regime-filtered SPY
 # VWAP-stretch reversion, one round trip/session, local sim only, never touches
 # the null book. Forward clock from 2026-09-30; CI cron (daytrade-replay.yml)
 # replays each archived session post-close into git-tracked, append-only
@@ -428,6 +430,15 @@ an 80%-coverage gate; do test point-in-time logic and dedupe/storage invariants,
 silently poison data.
 
 ## Hypothesis framework (pre-registered races & studies)
+
+**Research freeze (2026-09-29).** No new races or studies. ~30 races and 40+ challengers
+have all been judged on the same 1998–2026 span, so it is effectively in-sample for the
+programme: the leader's bootstrap z ≈ 1.35 sits well below the ≈ 2.6 expected of the best
+of ~30 null trials, and every new registration dilutes the rest further. What continues:
+the monthly re-race of already-held gates, the shadow log, the paper book, the data
+archives, and the one prospective test (`stress_test`, pending sign-off). Lifting the
+freeze needs Harvey's explicit decision and a genuinely new *kind* of data (e.g. a
+point-in-time universe), never another market series on the same span.
 
 Every hypothesis gets a small dedicated package under `python/` whose module docstring
 *is* the frozen pre-registration, racing challengers against the untouched null in the

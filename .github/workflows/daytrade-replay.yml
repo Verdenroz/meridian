@@ -1,9 +1,8 @@
 name: Day-trade forward replay
 
+# Paused by the 2026-09-29 research freeze; restore the schedule to resume.
+# Replay catches up every archived session, so a pause loses no evidence.
 on:
-  schedule:
-    # After archive-bars (21:40) has committed the session's 1m bars.
-    - cron: "15 22 * * 1-5"
   workflow_dispatch:
 
 permissions:
