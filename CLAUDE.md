@@ -109,6 +109,15 @@ uv run python -m feeds_archive status     # archive freshness
 uv run python -m bars_archive fetch       # archive every completed session upstream holds
 uv run python -m bars_archive status      # sessions per interval, symbol gaps
 
+# Day-trade challenger (pre-registered 2026-09-29; OPEN — regime-filtered SPY
+# VWAP-stretch reversion, one round trip/session, local sim only, never touches
+# the null book. Forward clock from 2026-09-30; CI cron (daytrade-replay.yml)
+# replays each archived session post-close into git-tracked, append-only
+# data/execution/daytrade/journal.jsonl. Gate at 500 OOS trades; status is
+# descriptive only — never retune the frozen GATE)
+uv run python -m daytrade replay          # journal archived sessions not yet replayed
+uv run python -m daytrade status          # trade count vs gate, mean net bps vs control
+
 # Historical market/macro data (ETF core + VIX + treasury curve)
 uv run python -m market_data fetch        # fetch, cross-check, store
 uv run python -m market_data verify       # re-run adjClose cross-check
