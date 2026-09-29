@@ -1,6 +1,6 @@
 """Invariant tests for the shadow job: log idempotency, staleness, rows."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
@@ -93,3 +93,34 @@ class TestCatchUp:
     def test_nothing_is_owed_once_logged(self) -> None:
         logged = {(d, "a") for d in DATES}
         assert dates_to_log(DATES, logged, ["a"], TODAY) == []
+
+
+class TestRefresh:
+    def _stub(self, monkeypatch: pytest.MonkeyPatch, calls: list[int]) -> None:
+        def yields(_url: str, year: int) -> list[dict]:
+            calls.append(year)
+            return [{"date": f"06/30/{year}", "y3M": 1.0}]
+
+        monkeypatch.setattr("shadow.job.fetch_symbol", lambda *_: None)
+        monkeypatch.setattr("shadow.job.fetch_fred_series", lambda *_: [])
+        monkeypatch.setattr("shadow.job.fetch_treasury_yields", yields)
+
+    def test_a_fresh_store_gets_every_treasury_year(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from market_data.macro import TREASURY_FIRST_YEAR
+        from market_data.store import read_snapshot
+        from shadow.job import refresh
+
+        calls: list[int] = []
+        self._stub(monkeypatch, calls)
+        refresh("http://x", tmp_path)
+        doc = read_snapshot(tmp_path, "macro", "treasury_yields")
+        assert doc is not None
+        rows = doc["data"]["rows"]
+        this_year = datetime.now(UTC).year
+        assert {int(r["date"][:4]) for r in rows} == set(range(TREASURY_FIRST_YEAR, this_year + 1))
+
+        calls.clear()
+        refresh("http://x", tmp_path)
+        assert calls == [datetime.now(UTC).year]
