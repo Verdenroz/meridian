@@ -106,7 +106,6 @@ def cmd_watchdog(args: argparse.Namespace) -> int:
     findings = (
         shadow_findings(args.log_path, session, strategies)
         + paper_findings(PaperStore(args.paper_dir), decided)
-        + paper_findings(PaperStore(DEFAULT_IBKR_DIR), decided)
         + archive_findings(Path("."), datetime.now(UTC).date())
     )
     print(f"last session {session}: {'ok' if not findings else 'MISSED'}")

@@ -389,12 +389,10 @@ uv run python -m shadow status            # log summary
 # hold. Fills carry commissions (Tiered model locally, the broker's report on
 # IBKR); the journal reports slippage and commission bps separately.
 # MERIDIAN_ALERT_WEBHOOK (same contract as the Rust bus) receives every cycle/rejection.
-# The IBKR cycle runs on the appliance (deploy/meridian-paper-cycle.timer, 09:35 NY,
-# with IB Gateway kept logged in by deploy/meridian-gateway.service on the
-# meridian-xvfb virtual display); CI cannot reach the gateway, so paper-trade.yml
-# stays held. The appliance must be an always-on box: on the laptop the cycle ran
-# 4 of ~19 sessions in Sept 2026. Install/refresh with deploy/install-appliance.sh
-# (checks prerequisites first, enables linger). Alerts: ntfy topic in the
+# The IBKR clock is RETIRED (2026-10-18): the gateway was uninstalled from the
+# laptop after 3 cycles in 7 weeks (last fill 2026-09-17), and the watchdog no
+# longer checks ibkr/. Its journal stays as historical record; the deploy/
+# gateway + paper-cycle units are unused until an always-on box exists. Alerts: ntfy topic in the
 # MERIDIAN_ALERT_WEBHOOK GitHub secret and ~/.config/meridian/alert.env (0600);
 # every appliance unit alerts on failure via meridian-alert@.service
 uv run python -m execution init --cash 10000  # open the local paper account
