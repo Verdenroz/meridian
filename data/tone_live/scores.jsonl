@@ -37242,3 +37242,346 @@
 {"date": "2026-10-25", "fetched_at": "2026-10-25T23:19:21+00:00", "id": "c13d7b5999909ef65b786b82e0d2e4db", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.338787}
 {"date": "2026-10-25", "fetched_at": "2026-10-25T23:19:21+00:00", "id": "cfd5061d0a56d38f0067148174f3af43", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.033732}
 {"date": "2026-10-25", "fetched_at": "2026-10-25T23:19:21+00:00", "id": "e9260937fe2bc3778fc5d25abd2850d2", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.563885}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "10a6da185a755388f741dc81409eaeca", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.873472}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "18636e7afc6088aeeaf8a7d42c688d27", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.208738}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "2440775fd371902a4325040035abdad7", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.183556}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "3decd9dcff715af123a81abc8a44c53f", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.78933}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "456f68dc42f4f589f16c2c4a0a5027d7", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.003112}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "569a7460fdcc9ceaa287ad8ff821f936", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.903677}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "7073804262a3206f3e95a784a9fc3394", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.925834}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "7088a7d211db1db5d706ecac7a319048", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.909378}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "778793d56f868b4dfbf9bfce14368e8e", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.660324}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "8643c26de5d5589f71cfbdd5b8b1328c", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.95184}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "8d6da8de5427a6bfb0d8d7a2a7be1a15", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.206398}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "8de360143370b21c2355cf9f8f2e5d77", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.006274}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "91007b0eb66b8dc68141023092fbc6f3", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.594614}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "92de7202bc6423f34b99b4561a54c506", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.796898}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "a2e726fe21398779bbeca939e653003f", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.221384}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "a477b33350332839cbc5e8bfd997d634", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.718905}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "b92c610cc38f59696d98bba2a0bb896f", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.05574}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "bda6db736edc0e03463436e532d606ba", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.09305}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "bf38968e40b581436bbb9f2cb81af1fb", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.214308}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "c193c0282ede4de98c4fab8f942d2ce9", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.905916}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "c6a467b751be1a134f7d8fdf67cdffd5", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.826364}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "c8b46dec3d47be2abaee2bcc7b75ed79", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.030016}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "cbb6b4a6fcf586b1d088b30845e10f7d", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.016776}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "cd6145478c51a0e5102331c97fb9902d", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 0.02184}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "d53d3b9976c1556a19309a1df3a42411", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.626864}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "d828e498a489e6ee0cf65e0a51a111db", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.910983}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "ded939fc450a4b03034f03d9949142c9", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.930663}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "def077bf7160841bf1e9b65c18525f5e", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.791639}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "e52515f01916fc189612bb687d0f9fce", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.845491}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T01:17:56+00:00", "id": "fc3c876ac66a488f9f4146b4b4df3a1a", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.022943}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "0079ffa74c70cd2ef766ec2b406e33f0", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.181085}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "08cc3ab88c8d3d200f8df095f8d5467c", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.04875}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "136f2034b700d720a265e815e819a31c", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.069912}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "17672aae1cecb260b11f8920cfdf5b6a", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.01922}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "1ca40684bcfcbd97613461b9fea9b84b", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.105808}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "2a21ddfde0dcde8e6024b4d237f2d4c3", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.028593}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "2f5ff794a82d198c3a7017fbc031e9d3", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.935602}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "312516245adfab263865929440afd4ec", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.014324}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "3fb85e008832e4452b1c377451bfde33", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.582521}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "42a37e35469049b187b66eece0a0dba7", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.848004}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "4b7d61595efbb99d40896d4b76c5b7e8", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.020702}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "51131130d01c0d868c33622284543ef1", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.913595}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "55dbcf2f12d4332a2c42f2dae0c30f5d", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.549962}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "5d2ed84726a9c38789395672b74635a8", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.003634}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "600161f867d9400cb2887ec72be0052c", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.914615}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "648bfc61a9cbaa154305ca1032c7f4b6", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.047758}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "73258e1e99b2e7d7977f775529e941e3", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.043341}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "74bc732ea88f6f27b9d84046989e215b", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.141213}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "74ea893e2934be1dab5733b75802fd08", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.323622}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "7d1327bf8c865b87f3bff4c4a93fe1b2", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.937106}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "7f2225728ab16b2648882501357c2ba0", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.916627}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "840cbf35066b229833d7cd3ba3daf22b", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.864533}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "89e321685c1c7718466b8046e0901e25", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.032669}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "902449091821d3308425663f45e41992", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.767284}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "92f470747e7f48168bca0da62c08b5bf", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.231375}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "97a8c5a501a0b43aa3956a7c8760e8d8", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.176824}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "9c7982b3fc79f975f5e906e6cc52fea6", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.086189}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "a4670d52ef5f853bb6d7c062712d8427", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.881112}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "a6288664bec577bbb2f0c78f81a07912", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.138673}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "b5dd7e0c0709af9fbc3e7a4b780cb9cc", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.047253}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "b606eb5de137ddf59b01ce4d760ce9a1", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.415414}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "b75b41fde35fdc6f2f9124b6e964fe45", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.123537}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "bb0b973e65312ea4ad078c8acd665990", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.033732}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "be83e0f072688669a79d9028156c6d9c", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.864292}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "c1c0d96d6ed2af8e8786924d1e7646af", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.251573}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "c211dfca298a36b3d41c6f163de8c8dc", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.033768}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "c7339b7fc47a726efcbc060163802502", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.876665}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "d3b4527da8dd82caf784d315646fcc1c", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.547523}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "d50ba04dc19e455cefd4074e56463ce1", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.646334}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "d81194c6406df87d13b5252bd73916a4", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.882061}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "d9adbe81b90465edeab881a229646d74", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.228489}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "dbd8735f0b54dd91a7ed90ee5a56a0f2", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.198022}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "e902da7508f2f880fe29762747812619", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.944531}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "ecea172b2a21621083e12375af9b4ec9", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.564649}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "ed7f20efaa3c2fd05dba01f6c90ad7da", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.41185}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "ee78e65a120e7117fbebf83e77a5c7a4", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.933214}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "ee95b0f0b8ecd33e3a494b780d0ea007", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.107341}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "ef5dbc96f99dab5024284e240bc0bdc2", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.944699}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "fac4a7aa0f23e1fdff7c4e5a28d5ad4f", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.832679}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T06:20:40+00:00", "id": "fee23a57fb83e05bb4f806a00332f837", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.49696}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "023f10608b6ddc2bdb811f7bd756fd74", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.791064}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "02c5f1aee30fbc7e05aa91f53a432f23", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.603047}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "06631bc5baa0009ed2bf6aa5482704c8", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.894082}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "06f5bd0337c2d35b9f4df856ae181003", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.680878}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "087ea800081ae5489e48bfa426066877", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.88076}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "135c2f2ecb2f3c73dc0a696741885181", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.00452}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "1758758d8cba34ead05849a2a0c0c6ad", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.033914}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "17eb6118d9a9d3768456245fed0f661e", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 0.911607}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "18b610f7571962b46a27fce08969a87d", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.801789}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "1d92011d5c2b1d83daafa9be27abe8a7", "model": "ProsusAI/finbert", "source": "Financial Times Lex", "tone": 0.043945}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "1f8a0198c6e173b9fa92220b4108697d", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.003503}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "20013fab9276bbfd4cff2dbd9c0904ce", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.344127}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "215623d7b05c1ccdbe1961a33ad275c4", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.547216}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "24ae00eb61da951b9ccce7188f56d4e9", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.840049}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "277ff2a88d3bf8071d0b1e933e7c0e83", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.038491}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "27b64e52d700b5dc5f9aafea9e845e1d", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.239125}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "28d017a067dfb2da81ffb31196a755c4", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.034603}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "2ba5fc0d9fc9c98843875020d1399506", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.037054}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "34b4a73048560f0fa237bb25d6a349f5", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.008411}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "3609270355f9cc6f2714be43a71843e0", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.021691}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "36ae3353cbc1ba4826c4cc4bdd0ede0b", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.066395}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "37a00aad6b8a7a941ce87a716a3f38bf", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.931913}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "37df35d2f192bd515160a70480b72dd4", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.545666}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "3a83ef7a04d8231cc497ab66b5b96c4f", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.856768}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "3c6729014ea225fbbde0ee947ca131ac", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.060291}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "3ca6500fdfa7f9208a6c0e10bb30512a", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.737699}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "3f25941226b33667eec0a7d02ac6b1aa", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.145988}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "426524af41db4f32907a6a237615feda", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.50133}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "44545668062b5671238cb5e057b8e074", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.932303}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "46eee0a2f451c07151a626c479e6c54c", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.835136}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "507c218859edae7072cc95e5cf489312", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.025218}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "54e72df007904c3ce35223a448e98da5", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.004493}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "5a62d78735c7eb7b65565e4ebb46c6b7", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.039367}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "5c16a403cb0bbd399a5fd81c22cecbf5", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.847161}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "614fa81b7d4c87ba1376f7e139845704", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.111977}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "6301db8c9a5c404698ca5eaa90962b6b", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.954921}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "67049c23ed521ad34fcca65f2a0aa330", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.379}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "6a1c299935cd7c83204d0fe0dd093ecd", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.010615}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "6b9b187041ce341e926d893cd65731d7", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.925024}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "6fd20477c6d42bf3b7a30f4be5c70d90", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.33125}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "76163b659582567faf4df1f595f4567a", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.518125}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "77f73ec9a30d181980b7b9d6931e7a97", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.077775}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "7c183c6354340b8b0de51c32d87257e4", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.017923}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "814425b4a4724f6e6e0be99714a0f5e0", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.004779}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "82875216cf7e5905111dc0f2e3d71e11", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.721702}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "8348e5b0dc2420a3496dbf38cde45893", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.961665}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "86dd43749515ad390fff58505439e901", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.758416}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "86e0216ee37caa8ba2329f4a5a9f5a22", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.847106}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "89100c5e310aa203054e197be82894a3", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.888578}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "8a28fc0857acb060a41024940e5dfde6", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.215741}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "8bfd69e490c376e2e976b9dedd7c3777", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.015807}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "907710d8cb8dec6e70b1c7b5f7bae8a1", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.104268}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "93bc8f2222ce6754f3db5d96d5e35ddd", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.103226}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "98ffe89ddd14865cd87824183b112e70", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.934579}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "9b87e2c011fdd2a8300dcebe00fae0e3", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.342578}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "9d4a88ffa48118ca103f7d46f197de07", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.50035}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "9ef6413bd42df98bd730df64522072df", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.913231}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "a0b7a9146f0909f775ab2d59ae9217ae", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.004848}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "a0bc436ab121f94f690d941025fa2f40", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.946437}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "a1917fb6c97cd199123f0ee68947395e", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.166556}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "a3363660027e446a47f225475e877642", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.935904}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "ac288766b298f9678f47453fb48b054d", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.254102}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "aebe2790ec1582b13f0b6f06e673b973", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.839365}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "b0c0553ca57a61ac5833e492b0ddb469", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.690473}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "b3897f6adde6fb67fe3f0ca024436487", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.118582}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "b4c0e89255bb8d6d789b449b5b21b990", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.042061}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "b828764159199312fd17c95e0ccf192c", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.015657}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "b883b8446f24591b1ba4ff81799efa9b", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.00406}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "b932a9cea1d8499de1cde2f01a7838fc", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 0.790112}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "b98078aa101de9fbb0302061afb9840d", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.095098}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "c2f7a786081100f9e74a78d92f68b97a", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.105151}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "c52ec76f90be24bff43fb1619a9cc710", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.540259}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "c5c880c1683cee835f256263a5d886c2", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.883508}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "c5d43e39871bb84b4f24c0000f77f922", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.388679}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "c64589994db9bcba12a66e1b39633f5b", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.04049}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "cb3f78ffded57ceec6ad35d0b6b6d4c2", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.033732}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "ce4c5c8ce9bdb81e981351168d528adf", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 0.058557}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "d391ef157e7dc78a8cb6e5bd3fb1bed7", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.052503}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "d88f1fcc90403fd23b8ca72e3719b58d", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.341504}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "e17f59ffb219ecafd58d086e4bc48ed9", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.141192}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "e869bba23813490468e1108b3b3fed18", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.735819}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "e89086d22cccbdc7980f766de0657349", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.07053}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "ec20474183ba5f78632d7426c2b195fb", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 0.489616}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "ef833c060bcc148365fd234ba15a7f4d", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.032244}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "f02473c352d248efedc08cc953bcb1eb", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.933489}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "f1bc453bf46625a469e500ce98006bbe", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.842401}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "f97c4961eae66c08228073e6c7687536", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.95575}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T13:22:04+00:00", "id": "fc9f3b53b5a4ed86bd1d66343d41f17e", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.955371}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "02e3af06ebc9d02fde40ecd55c78bfb4", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.872926}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "07f39cc655151d720c26871f97a0a4e9", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.770709}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "0a33adec5bfb1bd6e24720f86361c2fe", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.82619}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "0e32faa1a1486c161307d44a56667cc3", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.599092}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "0e5a12eac3049dcd428d5b9e0d0943d6", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.931258}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "0faa84a6329e6a3afea0e72ae65734ae", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.071589}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "13d6f028c3be465f8192eeff7cfc0354", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.070843}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "148ffe4324d7db512467aafd1e4dc223", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.929271}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "1cc8c4975d16aecdbb5587e3bfe7de8a", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.590957}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "22b97a62699c36ddd30671419cf965ad", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.390158}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "26cd2e38f85413d9e32103f03f9897f9", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.533908}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "28f5914dacd362d52263762ab3909b02", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 0.346025}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "2a76665b136dbe7056ae7960d8ca5c01", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.061957}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "2b7e3d3f2fa827e638fd92abf43addf9", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 0.729825}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "2e39c41f9140cd7ae3aa99081e5bf1f3", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.645643}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "30df80bf5e87f581718aafafc1fccbd5", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.434117}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "3aed179ac23a016740182aa1dada7849", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.794227}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "3ec1c9611a058d95665f9686e5ba3212", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 3.9e-05}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "4198e24548fa0599e5405c6d03bc4b9a", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.007828}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "426e60d04e7ba1dc44a709d105bc0073", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.080956}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "445085518c0a0f688295aae0c54181b6", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.927804}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "458c9ce24ae668af12d95ec8e71a3324", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.884843}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "47ad4e5da3e0c8479863d382104efc28", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.034051}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "4813ea9c64eab2f973f3d5788b5ec3a5", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.524705}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "4a9a85b0613717c2c6a636eb792ba1ca", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.462268}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "4b023bf24f8e1698946204da3a676550", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.517863}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "4b92290a4637688a6105ea763344df3d", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.058591}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "4bde44f43b3f13529f69e55fd22ca0a8", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.307031}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "50490e6d5bdc65eb7a4fc8b0a360475a", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.031255}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "522736183adb7ebee14770b2700472cb", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.826726}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "52ed686f7af21321b5ecd7a44dcf19a4", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.011787}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "5527725605493200ff1a39820e6680d3", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.10981}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "5958686a298f5d3df96b707c95f7ee4d", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.063178}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "5fa4f8f04902d537442b3fa2e78f8146", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.923588}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "62bd19baef3ff01cba48c5690d7e37f3", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.706599}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "6456b918a543febf050790f8e57c5a8c", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.923615}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "685df5e0be23e234bf8e7d059bb1ba99", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.056952}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "6a6892421de3068a51b37eddb6d2c457", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.576429}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "6b88dc3c67a27d5ce5db956180c82922", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.338272}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "6bb16efb2283bde0c297a033b7054be0", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.822909}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "6eff7604230eb27a49c6ba8b9552b684", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.017779}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "6fd6a0625e3a5aa66520a2a8356f6aa9", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.864133}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "707ea7709a2e89adac026939a7ea6788", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.784918}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "7608f8c57f94f93ab86a94deb217aa41", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.043073}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "765d7ce5120324c991a72ac71dc2f299", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.866746}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "7f1ab31522489a996938170bcd7c730a", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.130438}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "811a98d377b1d268b182b5127a1144ba", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.022779}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "81b711ede7d1237dba1549ea2b718fcc", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.851015}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "897db8337a64e2b487c470c63321f2b6", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.346308}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "8a0c57399ccf4f026eeb2bf5275e7390", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 0.877024}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "8aa016d1cfb8d3fe0476e2138baa24fa", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.880095}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "8e3966375b62b15354d39774aa985f0e", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.217404}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "8ea8adff4fc82be5cf0d54e886c5a9b1", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.860064}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "8f73604769f6bdc0b7ff9e41e53920b8", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.022928}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "8ffc244b81f04cd3b8f39a69622a0dd2", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.048745}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "9403a3c21a879428324d35bdd647489d", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.579296}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "9587b47b102b1a000665480a20f2ae71", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.017321}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "978dfb97c6f50bed0754b93aac0d3ff7", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.731323}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "980f35993dde2643dc6848da955f183a", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.550767}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "9ac42f1b6e42fe186e004591f336a0bc", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.019513}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "9bf590ad93ef65921e5522fccc5d4cec", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.937494}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "9d1eab12cb6296743573d73f48e49b87", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.930418}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "a1c0adc6b921f02ba124459001af9b38", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.832679}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "a25577ec10f0eb005d881bc0282a7863", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.699031}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "a908f396b7604144e43254cc8d8e675d", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.01512}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "a91765a3b47fc99b6a7305efce4eb9bc", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.044033}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "a96e2cb0e7453ce4ae5053845091d003", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.004776}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "aa427574b5f75f703aa77e764e9b5bd5", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.25639}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "aac732834a2f9f40c9a5e3448fadc509", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.029195}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "b0f0309d9bd573414b8702e2db841ae8", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.134362}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "b459c939f51b31e01e52ecec8ed2dc92", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.616365}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "b4f5877bad3fa2c6ca9a1c6784fc2713", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.050898}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "b518d8aec97870c3bdc55938fce6af8e", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.050898}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "b6b70cacd8211a8323142894fc45f128", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.3868}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "b91f0782a788813d56dd908f8513aa5c", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": 0.038582}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "bb4ef2272a66d88bdb0bdc36915bc0f2", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": -0.025403}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "c23b0287de4b3e844dc6c2c6f9ac7c0b", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.350389}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "c2e32b38ba18ee4a4f7da69714ad9a45", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.524113}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "c777f870b9f5de346e8e744cb302e6c9", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.049482}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "c7add7ad575e6eb26e00fabf5d3d1fe5", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.927656}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "c99df97abf7f914e3bb5121af9d3b257", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.897814}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "c9a6af03d2f4a9b8c601d54da61a0b4a", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.101666}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "caa1bdeaab9dba628ad511c39892b6a9", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.05803}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "cc74517bd34c63857eeb01f9b8f44b75", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.061608}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "ce80a90bb485ad75ce588116a3af8e31", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.24151}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "d01fa524cea82c3c478cd2c1e1b1e500", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.033732}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "d0bf9e7bbd6e2a7ebb02bf7137f5d2a6", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.955199}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "d759fe782b35567ba389cc42c5b00088", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.192214}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "db44e56c06d1016697a23a9530ec55b9", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.416405}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "de548c95eafc0124cc313eba1e33767a", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.048622}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "e6c07608e3e44fe2e17e672c7948dbdc", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.072678}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "e90a44e8f400871e1bfe8547b62192c0", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.200761}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "e937bd495aae027caf2cfbe1c2aec7de", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.157413}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "e9b20c82d469c3b4ec61cb7e5f4f0d65", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.015261}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "ed26099064b0d7fe817b95ac9fdfd3c6", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.906147}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "f02a521192fd546ea80370cdac2cc35a", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.754386}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "f09aeea9687f641743baf9abfa60390b", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.819825}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "f155ea21115e0712fe2afd46b6fbd153", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.942531}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "f9b657cac6d2436fae92c409b837d5a0", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": -0.015475}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "fb5caba3ff6346ac9ad0a208c0cf68bc", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.638858}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "fc7e1134ea65a2341d58a913dc999db7", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.102615}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T19:26:37+00:00", "id": "fd5fcc4347d3a2ffa95f148a3ce81592", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.020583}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "015cf6b2e656082510e5150fadd3c975", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.068399}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "046621528c826431c2f1060f3761c537", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.908563}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "094cfd0c89e4a8fe634b4db63f7c959a", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.336689}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "0d275dde2f093b9c97e8d6e4adeb9252", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.631734}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "10bbabefd61426c85814813d0cfb4ef9", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.82589}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "152583e9dd3fcd47a3c6b5cd84b42e9e", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.95561}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "15f3cdce11a3991fcff695c2e88d1d67", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": 0.127129}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "1d3247774136072da1687e0160e63203", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.009558}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "2123fb2d04008fc4c79b0bacd330e92a", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.880095}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "254651ca19640d68fa56408ccf141307", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.044317}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "27aff759ed5ffdbfb2af44666251249e", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.922417}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "27eaa81a755ca7f2df2eeb7ecd63a7b9", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.869245}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "2ccacebfb915c0ecc3419beb80e44a55", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.052195}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "2d6c10b791d3f06a71111fd9f7b6cc0e", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.800046}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "39350c48ea5b9b714ad813c701ba06dc", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.063818}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "3bc38e95cde15b8c753dc6a18b59bf0b", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.016013}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "3daa85691d9498b5f9903dd4195de926", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.035493}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "4023ebab2eb5bad56f2330e94cfaef6f", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.014339}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "43fa1e639aa810ee9489fc0188ef2fd9", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.297778}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "444b790960c16fd2ce67fb7aa0179c38", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.018277}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "459ecede388486da7880c4d2853645ca", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.363027}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "4890b7a77533d950a57f03d770227967", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.037393}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "51719b4218c0f71c25db24698d17c5d7", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.899971}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "519869d79e089fcb1ff390500afa20b7", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.015229}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "55682cd0a693bf7dd9797bd97c6b1783", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.333997}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "5718fbd696b5a806d9d9f09a59f5bb3e", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.769724}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "596358481fe22f4670863b6818473b40", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.602205}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "5bc627cbe6ca4f2919137f0ce391dfa4", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.113491}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "5e8477a3cb4b4f4c89cf8a3b2b407de2", "model": "ProsusAI/finbert", "source": "Fortune", "tone": 0.856344}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "62ced549b20f254bbee407a9c682eb95", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.869272}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "63dd07a59a17d6ea7dc09dffb614de36", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.212914}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "650eaae071bc9ad04aaaa6c1c2630a7d", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.93377}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "66e1b5c65ed88b04503b9257733709c6", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.782417}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "6748a8ab495858661f39ae10d5820d33", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": 0.028828}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "69563183ccda2c0ba2e7d74ec18f70f6", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.929964}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "6b03a673422a9c218e8238ffd38ede95", "model": "ProsusAI/finbert", "source": "Financial Times", "tone": -0.936862}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "6c1521f5e332ecfd690ce1a65c9b789e", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.128617}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "6edb477d8c5002c5170b7032ee25c595", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.067128}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "70864a057a255e949b525fb79c96572e", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.908078}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "709eae598cc72a49823b3a1e859a486a", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.937589}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "74699f090163f5f8db9cff34a3e4c4b7", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": 0.064077}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "7e93000be67fc8f140e5a560136a828c", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.795779}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "7fa7db1cef51777c7eecc29470ca7ec3", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.847031}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "85995bd92bce03bf70818420a2473d7a", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.035954}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "89b627df7f1ee3edb4d615c8355702bd", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.832773}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "90a36545270a4eb1d315aa017cb42f4a", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": -0.701609}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "94154786586b327e579d605addda9a95", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.307421}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "94997c3f2e4748aa05f567ec2aff8f73", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.220014}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "97a52442d4dd85096217e90ff51d51cf", "model": "ProsusAI/finbert", "source": "OilPrice.com", "tone": -0.052679}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "99d3b7e398b43c4a18a03bf368fb1016", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.934467}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "9dc2e00a577b97cb606fff4288af3c3f", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.713953}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "a3cf4caa3d9274acb12a3b85ff241750", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.01635}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "a57e9be822a83ef3f37a3af741e028b0", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.848003}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "a697d81fe7081cac89a63afc401645bf", "model": "ProsusAI/finbert", "source": "CNBC", "tone": -0.285362}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "a83b4e96a08e16943b87e08e95fbfedf", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.55257}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "ab83177f945e428c0431a362ac9364fc", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": -0.896815}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "b56e7a95d25b34249dfcd79fa463ee67", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": 0.191098}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "b9efa89b6bf055e5b9fcd21868c1940c", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.183829}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "bbfc2c9aae92f135f5c1ea59e481614f", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.21113}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "c19a8ba85851a2d381eeebd5d5313017", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.009558}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "c2992864649d8a4e1fec11b44cf3e80d", "model": "ProsusAI/finbert", "source": "Nikkei Asia", "tone": -0.610568}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "c3fd058c4e24e33bd38395db42a2888b", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.126747}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "ccdfe4f797a6aea8edfe463926958a66", "model": "ProsusAI/finbert", "source": "Business Wire", "tone": -0.730176}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "d5bff0111b57f5c498065f031fdcb02b", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": -0.039095}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "d77df62e6abce34dd858b879832e88ff", "model": "ProsusAI/finbert", "source": "Fortune", "tone": -0.022034}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "d8b341120e8e7ccea92a16402e18b94e", "model": "ProsusAI/finbert", "source": "Bloomberg", "tone": 0.160512}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "dee2907472849df8b6d0743789da4eed", "model": "ProsusAI/finbert", "source": "MarketWatch", "tone": -0.291127}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "e04af6a4f43d4c5163c45ec2bd369f4e", "model": "ProsusAI/finbert", "source": "Investing.com", "tone": 0.017073}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "e1c9e3b302c7666ff954f231c533df33", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.168716}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "f0205c9f6f0e5a190174de21ed0cc11e", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.04158}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "f1b6fc529b41989fe8bf7b58a6ec656d", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.877721}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "f7ce50a1d86ea5d5aac3b1e010f54e6e", "model": "ProsusAI/finbert", "source": "Financial Post", "tone": 0.531898}
+{"date": "2026-10-26", "fetched_at": "2026-10-26T23:13:17+00:00", "id": "fa4bc2f7f1037d56077b117e0d2b1e5a", "model": "ProsusAI/finbert", "source": "CNBC", "tone": 0.061549}
